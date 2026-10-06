@@ -184,7 +184,9 @@ button:disabled { opacity: .45; cursor: default; }
 #prox b { display: block; font-size: 30px; line-height: 1; }
 @media (max-width: 820px) { #prox { left: auto; right: 18px; top: 18px; text-align: right; } }
 /* minimap (multiplayer) */
-#minimap { position: fixed; left: 18px; bottom: 44px; width: 180px; height: 180px; border-radius: 50%; opacity: .85; pointer-events: none; }
+#minimap { position: fixed; left: 18px; bottom: 40px; width: 190px; height: 190px; border-radius: 16px; pointer-events: none;
+  background: rgba(14, 18, 26, .5); border: 1px solid rgba(255,255,255,.14); box-shadow: 0 8px 24px rgba(0,0,0,.25); backdrop-filter: blur(2px); }
+#minimap.big { background: rgba(14, 18, 26, .7); }
 
 /* ---------- Multiplayer (menu) ---------- */
 .panel { position: relative; }

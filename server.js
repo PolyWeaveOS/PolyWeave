@@ -20,7 +20,7 @@ const ROOT = __dirname;
 const MAX_PLAYERS = 12;
 const PUBLIC_ROOMS = [['highway-1', 'Highway 1'], ['highway-2', 'Highway 2'], ['highway-3', 'Highway 3']];
 const SIM_DT = 0.1;                 // shared traffic: 10 steps (and snapshots) per second
-const SCORED_DENSITY = 0.65;        // traffic on scored (leaderboard) servers, same as scored singleplayer
+const SCORED_DENSITY = 0.6;         // traffic on scored (leaderboard) servers, same as scored singleplayer
 const MIN_RUN = 100;                // smallest drive that goes on a leaderboard
 
 // ---------------------------------------------------------------- static files
@@ -50,7 +50,7 @@ function serveStatic(req, res) {
 
 // ---------------------------------------------------------------- rooms
 const rooms = new Map();   // id -> room
-// scored rooms (public ones + hosted "scored" servers) use 65% traffic and feed the multiplayer leaderboard
+// scored rooms (public ones + hosted "scored" servers) use 60% traffic and feed the multiplayer leaderboard
 const makeRoom = (id, name, pub, code, scored = true, density = SCORED_DENSITY) =>
   ({ id, name, pub, code, scored, density: scored ? SCORED_DENSITY : density, players: new Map(), emptySince: Date.now(), bests: new Map(), traffic: null });
 for (const [id, name] of PUBLIC_ROOMS) rooms.set(id, makeRoom(id, name, true, ''));
@@ -176,6 +176,13 @@ wss.on('connection', ws => {
       if (c && Number.isFinite(m.s) && Number.isFinite(m.d) && Number.isFinite(m.ry)) room.traffic.crash(c, m.s, num(m.d, -30, 30), num(m.ry, -7, 7));
       return;
     }
+    if (m.t === 'recover' || m.t === 'gone') {           // a wreck got going again / disappeared
+      const room = p.room; if (!room || !room.traffic) return;
+      const c = room.traffic.byId.get(m.id); if (!c) return;
+      if (m.t === 'gone') room.traffic.gone(c);
+      else if (Number.isFinite(m.s) && Number.isInteger(m.lane) && m.lane >= 0 && m.lane < 4) room.traffic.recover(c, m.s, m.lane, num(m.v, 0, 40));
+      return;
+    }
     if (m.name !== undefined) p.name = cleanName(m.name);
     if (m.color !== undefined) p.color = cleanColor(m.color);
     if (m.ext && typeof m.ext === 'object') p.ext = { front: num(m.ext.front, 1, 4), rear: num(m.ext.rear, -4, -1), hw: num(m.ext.hw, 0.6, 1.3) };
@@ -230,4 +237,5 @@ setInterval(() => {
   for (const [id, r] of rooms) if (!r.pub && !r.players.size && now - r.emptySince > 5 * 60 * 1000) rooms.delete(id);
 }, 20000);
 
-server.listen(PORT, () => console.log(`PolyWeave server on http://localhost:${PORT}/`));
+// HOST: on AWS the server only listens to Caddy on the same machine (127.0.0.1); Caddy faces the internet
+server.listen(PORT, process.env.HOST || undefined, () => console.log(`PolyWeave server on http://localhost:${PORT}/`));

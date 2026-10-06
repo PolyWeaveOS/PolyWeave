@@ -3,18 +3,20 @@
 //  Leaderboards: the top 100 drives for each mode ('sp' singleplayer, 'mp' multiplayer).
 //  Permanent storage = an Upstash Redis database (free tier) when the server has the environment
 //  variables UPSTASH_REDIS_REST_URL and UPSTASH_REDIS_REST_TOKEN (Render: Environment tab).
-//  Without them it keeps a local file, which a free Render server loses whenever it restarts.
+//  Without them it keeps a local file: permanent on a server with its own disk (AWS Lightsail: the setup
+//  script sets LB_PERSIST=1), but a free Render server loses it whenever it restarts.
 // =====================================================================
 const fs = require('fs');
 const path = require('path');
 
 const RURL = process.env.UPSTASH_REDIS_REST_URL, RTOKEN = process.env.UPSTASH_REDIS_REST_TOKEN;
-const persistent = !!(RURL && RTOKEN);
+const useRedis = !!(RURL && RTOKEN);
+const persistent = useRedis || process.env.LB_PERSIST === '1';
 const FILE = path.join(__dirname, 'leaderboard.json');
 const TOP = 100, MODES = ['sp', 'mp'];
 
 let local = { sp: [], mp: [] };
-if (!persistent) {
+if (!useRedis) {
   try { const j = JSON.parse(fs.readFileSync(FILE, 'utf8')); for (const m of MODES) if (Array.isArray(j[m])) local[m] = j[m]; } catch (e) { /* no file yet */ }
 }
 let saveT = null;
@@ -33,7 +35,7 @@ async function top(mode) {
   const c = cache[mode];
   if (c && Date.now() - c.t < 5000) return c.list;
   let list;
-  if (persistent) {
+  if (useRedis) {
     const res = await redis(['ZREVRANGE', 'lb:' + mode, 0, TOP - 1]);
     list = (res || []).map(m => { try { return JSON.parse(m); } catch (e) { return null; } }).filter(Boolean);
   } else list = local[mode].slice(0, TOP);
@@ -45,7 +47,7 @@ async function top(mode) {
 async function add(mode, name, score, extra = {}) {
   if (!MODES.includes(mode)) return null;
   const entry = Object.assign({ id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7), name, score: Math.round(score), t: Date.now() }, extra);
-  if (persistent) {
+  if (useRedis) {
     await redis(['ZADD', 'lb:' + mode, entry.score, JSON.stringify(entry)]);
     await redis(['ZREMRANGEBYRANK', 'lb:' + mode, 0, -(TOP + 1)]);       // keep only the top 100
   } else {

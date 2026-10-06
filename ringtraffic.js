@@ -22,7 +22,7 @@ class RingTraffic extends Traffic {
   // ---- neighbours (lanes sorted by s; the lap wraps around)
   buildLanes() {
     for (const L of this.lanes) L.length = 0;
-    const add = o => { for (const l of Traffic.lanesOf(o.d, o.hw)) this.lanes[l].push(o); };
+    const add = o => { for (const l of Traffic.lanesOf(o.d, Traffic.widthOf(o))) this.lanes[l].push(o); };
     for (const c of this.cars) add(c);
     for (const p of this.players) add(p);
     for (const L of this.lanes) L.sort((a, b) => a.s - b.s);
@@ -73,7 +73,8 @@ class RingTraffic extends Traffic {
     const xs = [];
     for (const c of this.cars) if (Math.abs(c.d - ROAD.lane(l)) < 2.6) { const o = this.w(c.s - a); if (o < len) xs.push(o); }
     xs.sort((p, q) => p - q);
-    const pts = [0, ...xs, len], av = this.players.map(p => this.wd(p.s, a));
+    // (only players actually on the highway need the clear space; one in the parking lot doesn't)
+    const pts = [0, ...xs, len], av = this.players.filter(p => Math.abs(p.d) < ROAD.edgeR + 1).map(p => this.wd(p.s, a));
     let best = null, bl = 0;
     for (let i = 0; i < pts.length - 1; i++) {
       let lo = pts[i], hi = pts[i + 1];
@@ -87,11 +88,11 @@ class RingTraffic extends Traffic {
     const N = this.target(density), shares = [0.26, 0.26, 0.25, 0.23], len = b - a;
     if (len < 25) return;
     const closed = [0, 1, 2, 3].map(l => !!this.closedLaneAhead(l, a - 20, len + 40));
+    const laneK = Traffic.zoneShares(this, a, b);           // (thinner before roadworks, like single player)
     for (let l = 0; l < ROAD.LANES; l++) {
       if (closed[l]) continue;
       const spacing = (WIN_AHEAD + WIN_BACK) / Math.max(N * shares[l], 1);
-      let want = len / spacing * RUN_DENSITY;
-      if ((l === 1 && closed[0]) || (l === 2 && closed[3])) want *= 1.1;
+      const want = len / spacing * RUN_DENSITY * laneK[l];
       const lc = ROAD.lane(l);
       const cs = this.cars.filter(c => !c.crashed && Math.abs(c.d - lc) < 1.2 && this.w(c.s - a) < len);
       let guard = 0;
@@ -134,7 +135,7 @@ class RingTraffic extends Traffic {
       const c = this.cars[i];
       let keep = false;
       for (const p of this.players) { const o = this.wd(c.s, p.s); if (o > -WIN_BACK && o < WIN_AHEAD) { keep = true; break; } }
-      if (keep && c.crashed && c.crashT > 40 && !this.seen(c.s)) keep = false;
+      if (keep && c.crashed && c.crashT > 25) keep = false;   // (a wreck nobody got going again, e.g. its player left)
       if (!keep) this.remove(i);
     }
     // a player just arrived: fill their whole window, except what other players can already see
@@ -159,6 +160,14 @@ class RingTraffic extends Traffic {
     if (!c.crashed) { c.crashed = true; c.crashT = 0; c.ind = 0; c.tgt = c.lane; c.forced = false; c.pending = undefined; }
     c.s = this.w(s); c.d = d; c.relYaw = ry; c.v = 0;
   }
+  // the player who hit it got it going again: back in `lane`, driving on at speed v
+  recover(c, s, lane, v) {
+    if (!c.crashed) return;
+    c.crashed = false; c.crashT = 0; c.s = this.w(s); c.lane = c.tgt = lane; c.d = ROAD.lane(lane);
+    c.v = v; c.acc = 0; c.latV = 0; c.relYaw = 0; c.ind = 0; c.forced = false; c.blocked = false; c.pending = undefined;
+    c.cool = U.rand(3, 6); c.check = 1;
+  }
+  gone(c) { const i = this.cars.indexOf(c); if (i >= 0) this.remove(i); }
 
   // one simulation step for the room
   step(dt, density) {
