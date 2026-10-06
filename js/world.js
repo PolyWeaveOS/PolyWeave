@@ -288,20 +288,23 @@ class World {
         far.geom(this.G.ico1, this.xf(q[0], -h2 * 0.2, q[2], 0, rnd() * 3, r2, h2, r2 * 0.9), col === WC.gmtn ? WC.gmtn2 : WC.gmtn, rnd, 0.09);
       }
     }
-    // distant mountains
+    // distant hills: big and green like the nearer ones (no grey / snowy peaks)
     if (rnd() < 0.35) {
       const side = rnd() < 0.5 ? -1 : 1, rad = 180 + rnd() * 200, hh = 120 + rnd() * 160;
       const d = side * (650 + rnd() * 400), m = s0 + rnd() * this.CH;
-      const p = P(m, d, 0);
-      if (!this.blocked(m, d, rad * 1.2, p)) far.geom(this.G.ico1, this.xf(p[0], -hh * 0.15, p[2], 0, rnd() * 3, rad, hh, rad * 0.8), WC.mtn, rnd, 0.1,
-        v => (v.y > 0.8 ? WC.snow : null));
+      const p = P(m, d, 0), col = [WC.gmtn, WC.gmtn2, WC.gmtn3][Math.floor(rnd() * 3)];
+      if (!this.blocked(m, d, rad * 1.2, p)) far.geom(this.G.ico1, this.xf(p[0], -hh * 0.15, p[2], 0, rnd() * 3, rad, hh, rad * 0.8), col, rnd, 0.1);
     }
     const grp = new THREE.Group();
     const rm = new THREE.Mesh(road.build(), this.roadMat); rm.receiveShadow = true;
     const sm = new THREE.Mesh(sc.build(), this.mat); sm.castShadow = true; sm.receiveShadow = true;
     grp.add(rm, sm);
     if (far.p.length) {
-      const fm = new THREE.Mesh(far.build(), Object.assign(this.mat.clone(), { transparent: true, opacity: 0 }));
+      // Far hills skip the distance fog (it washed them out to near-white); instead they get a light,
+      // fixed blend toward the sky colour so they still read as far away but stay clearly green.
+      const hz = { r: 0.66, g: 0.81, b: 0.9 };
+      for (let i = 0; i < far.c.length; i += 3) { far.c[i] += (hz.r - far.c[i]) * 0.22; far.c[i + 1] += (hz.g - far.c[i + 1]) * 0.22; far.c[i + 2] += (hz.b - far.c[i + 2]) * 0.22; }
+      const fm = new THREE.Mesh(far.build(), Object.assign(this.mat.clone(), { transparent: true, opacity: 0, fog: false }));
       fm.castShadow = true; fm.receiveShadow = true;
       grp.add(fm); grp.userData.far = fm;
     }

@@ -42,7 +42,7 @@ const M4 = {
   keyReturn: 7.0,   // return rate to centre when released
   keyFilter: 40,    // light smoothing so it stays smooth, not jerky
   ratio: 14.5,    // steering ratio (wheel deg : road-wheel deg)
-  brakeGrip: 1.16, // braking grip multiplier on top of the tyre grip (stronger, shorter stops)
+  brakeGrip: 1.23, // braking grip multiplier on top of the tyre grip (stronger, shorter stops)
 };
 
 function engineTorque(rpm) {
@@ -158,8 +158,8 @@ class PlayerCar {
 
     // ---- brakes (ABS clamps each axle to its grip) ----
     const sgnU = this.u >= 0 ? 1 : -1;
-    const bF = brake * 1.9 * m * g; // big M Compound brakes; ABS caps each axle at its grip below
-    const bk = M4.brakeGrip;         // extra braking grip (arcade-strong stops, ~1.6 g)
+    const bF = brake * 2.0 * m * g; // big M Compound brakes; ABS caps each axle at its grip below
+    const bk = M4.brakeGrip;         // extra braking grip (arcade-strong stops, ~1.65 g)
     let Fxf = -sgnU * Math.min(bF * 0.64, muF * 0.96 * bk);
     let Fxr = -sgnU * Math.min(bF * 0.36, muR * 0.96 * bk);
     this.brakeOn = brake > 0.05;

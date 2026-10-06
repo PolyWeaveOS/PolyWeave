@@ -61,8 +61,8 @@ function recordRun(p, room) {
   const pts = p.runPeak || 0; p.runPeak = 0;
   if (!room || !room.scored || pts < MIN_RUN) return;
   if (!p.account || !p.account.name) return;              // leaderboards are for signed-in drivers only
-  LB.add('mp', p.account.name, pts, { uid: p.account.id, server: room.pub ? room.name : 'Private' })
-    .then(rank => { if (rank) send(p.ws, { t: 'rank', rank }); })
+  LB.add('mp', p.account.name, pts, { uid: p.account.id, dur: p.runDur || 0, server: room.pub ? room.name : 'Private' })
+    .then(r => { if (r.rank) send(p.ws, { t: 'rank', rank: r.rank }); })
     .catch(e => console.log('leaderboard error:', e.message));
 }
 
@@ -81,7 +81,7 @@ function cleanState(st) {
   if (!st || typeof st !== 'object' || !Number.isFinite(st.s) || !Number.isFinite(st.d)) return null;
   return {
     t: num(st.t, 0, 1e9), s: num(st.s, -1e9, 1e9), d: num(st.d, -200, 200), ry: num(st.ry, -7, 7), v: num(st.v, -100, 150), steer: num(st.steer, -1, 1),
-    brake: !!st.brake, kmh: Math.round(num(st.kmh, 0, 600)), score: Math.round(num(st.score, 0, 1e12)),
+    brake: !!st.brake, kmh: Math.round(num(st.kmh, 0, 600)), score: Math.round(num(st.score, 0, 1e12)), rt: Math.round(num(st.rt, 0, 1e6)),
   };
 }
 
@@ -159,7 +159,7 @@ const server = http.createServer((req, res) => {
   if (route === '/api/leaderboard') {
     const mode = url.searchParams.get('mode') === 'mp' ? 'mp' : 'sp';
     LB.top(mode).then(list => json(200, { mode, persistent: LB.persistent, accounts: Accounts.enabled(),
-      list: list.filter(e => e.uid).map(e => ({ name: Accounts.nameOf(e.uid) || e.name, score: e.score, t: e.t, server: e.server })) }))
+      list: list.filter(e => e.uid).map(e => ({ name: Accounts.nameOf(e.uid) || e.name, score: e.score, t: e.t, dur: e.dur || 0, server: e.server })) }))
       .catch(() => json(500, { error: 'leaderboard unavailable' }));
     return;
   }
@@ -171,7 +171,7 @@ const server = http.createServer((req, res) => {
       if (tooFast('score:' + u.id, 5000)) { json(429, { error: 'too fast' }); return; }   // one drive per 5 s per player
       const sc = num(m.score, 0, 5e7);
       if (!(sc >= MIN_RUN)) { json(200, { rank: null }); return; }
-      LB.add('sp', u.name, sc, { uid: u.id }).then(rank => json(200, { rank })).catch(() => json(500, { error: 'leaderboard unavailable' }));
+      LB.add('sp', u.name, sc, { uid: u.id, dur: Math.round(num(m.dur, 0, 1e6)) }).then(r => json(200, r)).catch(() => json(500, { error: 'leaderboard unavailable' }));
     });
     return;
   }
@@ -197,7 +197,7 @@ wss.on('connection', ws => {
       p.st = st;
       if (st.score > p.best) { p.best = st.score; room.bests.set(p.name, p.best); }
       // streak tracking for the leaderboard: the score only goes back to 0 when a streak ends
-      if (st.score > (p.runPeak || 0)) p.runPeak = st.score;
+      if (st.score > (p.runPeak || 0)) { p.runPeak = st.score; p.runDur = st.rt; }
       else if (st.score === 0 && p.runPeak) recordRun(p, room);
       st.best = p.best;
       broadcast(room, { t: 'st', id: p.id, st }, p);
@@ -250,7 +250,11 @@ setInterval(() => {
     for (const p of room.players.values()) {
       if (!p.st) continue;
       const a = p.agent || (p.agent = { isPlayer: true, filled: false });
-      Object.assign(a, { raw: p.st.s, s: T.w(p.st.s), d: p.st.d, v: p.st.v, front: p.ext.front, rear: p.ext.rear, hw: p.ext.hw });
+      const ns = T.w(p.st.s);
+      // jumped somewhere (back to the parking lot, restart...): fill the traffic around the new spot right
+      // away, like when joining, instead of waiting for cars to drive in from the edges
+      if (a.filled && a.s !== undefined && Math.abs(T.wd(ns, a.s)) > 250) a.filled = false;
+      Object.assign(a, { raw: p.st.s, s: ns, d: p.st.d, v: p.st.v, front: p.ext.front, rear: p.ext.rear, hw: p.ext.hw });
       agents.push(a);
     }
     T.players = agents;

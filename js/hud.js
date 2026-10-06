@@ -18,7 +18,7 @@ class Score {
   add(pts) {
     const v = pts * this.mult * (this.prox || 1);     // prox: multiplayer proximity bonus (driving close to another player)
     if (!Number.isFinite(v)) return 0;          // never let a bad value poison the score
-    if (this.score < 1) { this.bestBefore = this.best; this.peakMult = 1; }   // a new streak starts
+    if (this.score < 1) { this.bestBefore = this.best; this.peakMult = 1; this.runTime = 0; }   // a new streak starts
     this.score += v; this.pot += v;
     this.peakMult = Math.max(this.peakMult || 1, this.mult);
     this.saveBest();
@@ -42,6 +42,7 @@ class Score {
     if (this.timer <= 0) this.timer = 1;
   }
   update(dt) {
+    if (this.score >= 1) this.runTime = (this.runTime || 0) + dt;   // how long this streak has lasted (shown on the leaderboard)
     if (this.pot > 0) {
       this.timer -= dt / this.COMBO_TIME;
       if (this.timer <= 0) this.endCombo();
@@ -65,7 +66,7 @@ class Score {
   endStreak() {
     if (this.score < 1) return;
     this.hud.showResult(this.score, this.peakMult || this.mult, this.score > (this.bestBefore ?? 0) + 0.5);
-    if (this.onStreakEnd) this.onStreakEnd(Math.round(this.score), this.peakMult || this.mult);   // (scored runs -> leaderboard)
+    if (this.onStreakEnd) this.onStreakEnd(Math.round(this.score), this.peakMult || this.mult, Math.round(this.runTime || 0));   // (scored runs -> leaderboard)
   }
   crash() {
     const had = this.score > 0 || this.pot > 1;
