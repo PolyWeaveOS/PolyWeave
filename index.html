@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PolyWeave</title>
+<link rel="stylesheet" href="style.css">
+<!-- installable as an app (Chrome / Edge: "Install PolyWeave") -->
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#161b24">
+<link rel="icon" href="assets/icon-192.png">
+<link rel="apple-touch-icon" href="assets/icon-192.png">
+</head>
+<body>
+<div id="app"></div>
+
+<div id="hud" class="hidden">
+  <div id="scoreBox">
+    <div id="scoreVal">0</div>
+    <div id="best">BEST 0</div>
+    <div id="potRow"><span id="potVal">+0</span><span id="mult">×1.0</span></div>
+    <div id="bar"><div id="barFill"></div></div>
+    <div id="msgs"></div>
+    <div id="result"><div class="rLab">STREAK ENDED</div><div id="rVal">0</div><div id="rSub"></div></div>
+    <div id="warn">SHOULDER −0</div>
+  </div>
+
+  <div id="speedo">
+    <div id="gearBox"><div id="gear">N</div><div id="gearMode">AUTO</div></div>
+    <div id="spdWrap"><div id="spdVal">0</div><div id="unit">KM/H</div></div>
+    <div id="rpmBar"><div id="rpmFill"></div></div>
+  </div>
+
+  <div id="mpHud" class="hidden"><div id="mpHudCode"></div><div id="mpHudList"></div></div>
+
+  <div id="tags"><span id="tagLA"></span><span id="tagTC"></span><span id="tagPad"></span></div>
+  <div id="hint">C camera · T style · R restart · [ ] traffic · Esc settings</div>
+</div>
+
+<div id="menu" class="overlay">
+  <div class="panel">
+    <button id="installBtn" class="hidden" title="Install PolyWeave as an app on this computer">INSTALL APP</button>
+    <h1>POLY<span>WEAVE</span></h1>
+    <p class="sub">Endless highway. Weave through traffic, chain near misses, don't crash.</p>
+    <div class="grid">
+      <section>
+        <h2>Gameplay</h2>
+        <label>Traffic density <b id="densV"></b><input type="range" id="dens" min="0" max="100"></label>
+        <label>Lane assist <b id="laV"></b><input type="range" id="la" min="0" max="100"></label>
+        <label>Wheel sensitivity <b id="sensV"></b><input type="range" id="sens" min="30" max="200"></label>
+        <label>Volume <b id="volV"></b><input type="range" id="vol" min="0" max="100"></label>        <label class="chk"><input type="checkbox" id="tc"> Traction control</label>
+        <label class="chk"><input type="checkbox" id="manual"> Manual gearbox (Q / E or paddles)</label>
+        <h2>Paint</h2>
+        <div id="swatches"></div>
+        <label class="row">Custom colour <input type="color" id="paint"></label>
+      </section>
+      <section>
+        <h2>Steering wheel / controller</h2>
+        <div id="padStatus">No wheel detected. Turn the wheel or press a pedal.</div>
+        <div id="axes"></div>
+        <div class="btns">
+          <button data-cal="steer">Calibrate steering</button>
+          <button data-cal="throttle">Calibrate throttle</button>
+          <button data-cal="brake">Calibrate brake</button>
+          <button data-cal="cam">Camera button</button>
+          <button id="calReset">G923 defaults</button>
+        </div>
+        <div id="calMsg"></div>
+        <h2>Controls</h2>
+        <div class="keys">
+          <div><kbd>W</kbd> throttle</div><div><kbd>S</kbd> brake / reverse</div>
+          <div><kbd>A</kbd><kbd>D</kbd> steer</div><div><kbd>Space</kbd> handbrake</div>
+          <div><kbd>C</kbd> 1st / 3rd person</div><div><kbd>R</kbd> reset car</div>
+          <div><kbd>Q</kbd><kbd>E</kbd> shift down / up</div><div><kbd>Esc</kbd> this menu</div>
+          <div><kbd>T</kbd> style: normal / toon / realistic</div><div><kbd>[</kbd><kbd>]</kbd> traffic density</div>
+        </div>
+      </section>
+    </div>
+    <section id="mp">
+      <h2>Multiplayer <span id="mpOnline"></span></h2>
+      <div class="grid mpGrid">
+        <div>
+          <div class="mpHead">Servers <button id="mpRefresh" title="Refresh">↻</button></div>
+          <div id="mpServers"><div class="mpEmpty">Loading servers…</div></div>
+        </div>
+        <div>
+          <label class="mpField">Your name <input type="text" id="mpName" maxlength="16" placeholder="Driver" spellcheck="false" autocomplete="off"></label>
+          <div class="mpHead">Private server</div>
+          <div class="mpRow">
+            <button id="mpHost">HOST PRIVATE SERVER</button>
+            <span class="mpOr">or</span>
+            <input type="text" id="mpCode" maxlength="7" placeholder="K7P-2QX" spellcheck="false" autocomplete="off">
+            <button id="mpJoin">JOIN</button>
+          </div>
+        </div>
+      </div>
+      <div id="mpLive" class="hidden">
+        <div class="mpCodeBox"><span id="mpWhere"></span> <span id="mpCodeWrap">· code <b id="mpCodeShow"></b> <button id="mpCopy">COPY</button></span> <button id="mpLeave">LEAVE</button></div>
+        <div id="mpList"></div>
+      </div>
+      <div id="mpStatus"></div>
+    </section>
+    <button id="play" class="big">DRIVE</button>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"></script>
+<script>
+  // Load game scripts in order with a cache-buster so the browser always runs the latest code.
+  const v = Date.now();
+  // To use the M4 converted from the real model instead of the hand-built one, add
+  // 'assets/m4_lowpoly' before 'js/models' in this list.
+  // Traffic vehicles: one file each in js/vehicles/ (a missing file is simply skipped).
+  // Remove names from this list to take a vehicle out of traffic; with none loaded the old traffic returns.
+  const VEHICLES = ['camry', 'civic', 'model3', 'golf', 'mini', 'mustang', 'p911', 'prius', 'charger', 'gtr',
+    'rav4', 'wrangler', 'tahoe', 'f150', 'transit', 'odyssey', 'vwbus', 'boxtruck', 'cascadia'];
+  const files = ['js/core', 'js/zones', 'js/models', 'js/lowpoly', 'js/toykit', ...VEHICLES.map(k => 'js/vehicles/' + k), 'js/world', 'js/physics', 'js/traffic', 'js/input', 'js/hud', 'js/net', 'js/main'];
+  for (const f of files) {
+    const s = document.createElement('script');
+    s.src = `${f}.js?v=${v}`; s.async = false;
+    document.body.appendChild(s);
+  }
+  // app install support (only works when the game is opened from its website)
+  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
