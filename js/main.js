@@ -4,7 +4,8 @@
 // =====================================================================
 
 // ---------- settings ----------
-const DEFAULTS = { density: 0.55, assist: 0, sens: 1.0, vol: 0.6, tc: true, manual: false, color: '#a6b0b8' };
+const DEFAULTS = { density: 0.55, assist: 0, sens: 1.0, vol: 0.6, tc: true, manual: false, color: '#a6b0b8', mpDensity: 0.55, minimap: true };
+const SCORED_DENSITY = 0.65;              // scored (leaderboard) runs always use this much traffic
 const Settings = Object.assign({}, DEFAULTS);
 try { Object.assign(Settings, JSON.parse(localStorage.getItem('tw_settings2') || '{}')); } catch (e) { /* ignore */ }
 const saveSettings = () => { try { localStorage.setItem('tw_settings2', JSON.stringify(Settings)); } catch (e) { /* ignore */ } };
@@ -107,16 +108,19 @@ let lastShoulder = -9, shoulderLost = 0;
 const camS = { off: new THREE.Vector3(0, 1.8, 6), yaw: 0, fov: 62, look: new THREE.Vector3(), orbit: 0 };
 const proxy = { s: 0, d: 0, v: 0, front: M4_EXT.front, rear: M4_EXT.rear, hw: M4_EXT.hw, isPlayer: true, crashed: false };
 const _hp = [];
+// what's being played: 'menu' (title screen), 'sp' (singleplayer) or 'mp' (on a server); scored = counts for the leaderboard
+const game = { mode: 'menu', scored: false, density: SCORED_DENSITY };
 
 function startPosition() {
   car.place(40, ROAD.lane(2), 100 / 3.6);
-  car.tc = Settings.tc; car.manual = Settings.manual;
-  camS.yaw = car.yaw;
+  car.tc = Settings.tc; car.manual = Settings.manual; car.hitT = 0;
+  camS.yaw = car.yaw; camS.shift = 0;
+  steerCtl.key = 0; steerCtl.k1 = 0; steerCtl.wheelF = 0;
   traffic.clear();
-  const p = ROAD.project(car.x, car.z); car.s = p.s; car.d = p.d;
+  const p = ROAD.project(car.x, car.z); car.s = p.s; car.d = p.d; ROAD.hintS = car.s;
   Object.assign(proxy, { s: car.s, d: car.d, v: car.u });
   world.fillAll(car.s);
-  traffic.maintain(proxy, Settings.density);
+  traffic.maintain(proxy, game.density);
 }
 startPosition();
 
@@ -125,12 +129,11 @@ function resetCar() {
   const p = ROAD.project(car.x, car.z);
   car.place(p.s, ROAD.lane(2), 100 / 3.6);
   car.tc = Settings.tc; car.manual = Settings.manual; car.hitT = 0;
-  car.s = p.s; car.d = ROAD.lane(2);
+  car.s = p.s; car.d = ROAD.lane(2); ROAD.hintS = car.s;
   steerCtl.key = 0; steerCtl.k1 = 0; steerCtl.wheelF = 0;
   camS.yaw = car.yaw; camS.shift = 0;
-  traffic.clear();
   Object.assign(proxy, { s: car.s, d: car.d, v: car.u });
-  traffic.maintain(proxy, Settings.density);
+  if (!traffic.remote) { traffic.clear(); traffic.maintain(proxy, game.density); }   // (online the traffic is shared)
   score.reset();
   lastCrash = -9;
 }
@@ -138,9 +141,16 @@ function resetCar() {
 let zoneHit = false, lastGoodS = 40;
 // guard-rail contact for the player (rigid wall, per physics substep)
 // Walls the car can hit at road position s: the two guard rails, plus the barrier line of any
-// construction zone (only while the car is on the open side of it).
+// construction zone (only while the car is on the open side of it). On the loop circuit the right
+// rail opens where the on-ramp joins, and the lot / ramp has its own fence (the rail beside the lot
+// is solid from both sides).
 function wallsAt(s, carD) {
-  const w = [{ sg: 1, d: ROAD.edgeR + 0.35 }, { sg: -1, d: ROAD.edgeL - 0.35 }];
+  const w = [{ sg: -1, d: ROAD.edgeL - 0.35 }];
+  // lotSide: the car is in the parking lot / ramp area (incl. just behind the lot's far fence, where the
+  // end fence holds it) - the rail beside the lot then pushes it back INTO the lot, never onto the road
+  const eR = ROAD.edgeR + 0.35, outer = ROAD.lotOuter(s), lotSide = carD > eR - 0.6 && nearLot(s, carD);
+  if (!ROAD.railOpen(1, s)) w.push(lotSide ? { sg: -1, d: eR + 0.25 } : { sg: 1, d: eR });
+  if (outer !== null && (lotSide || ROAD.railOpen(1, s))) w.push({ sg: 1, d: outer });
   for (const z of ZONES.near(s, s)) {
     if (ZONES.frac(z, s) <= 0) continue;
     const b = ZONES.wallD(z, s), sg = z.side === 0 ? -1 : 1;  // solid wall sits behind the cones
@@ -157,7 +167,8 @@ function railCollide(h) {
   // Anti-stuck: when the car is close to a wall and pointing INTO it, swing it back parallel
   // to the road (works even when stopped, where steering can't turn the car). It never
   // acts when you're pointing away from the wall, so it doesn't fight you driving off.
-  for (const wl of wallsAt(pre.s, pre.d)) {
+  const lotArea = nearLot(pre.s, pre.d);
+  for (const wl of lotArea ? [] : wallsAt(pre.s, pre.d)) {   // (not in the parking lot: you park / turn around there)
     const sg = wl.sg;
     const dist = sg > 0 ? wl.d - pre.d : pre.d - wl.d;
     if (dist > 2.6) continue;
@@ -168,9 +179,9 @@ function railCollide(h) {
       car.yaw = U.dampAngle(car.yaw, along, 3.5, h);
     }
   }
-  // hard safety net: the car's centre can never get past the rail line
+  // hard safety net: the car's centre can never get past the rail line (except into the start area)
   const lim = 0.75;
-  if (pre.d > ROAD.edgeR + 0.35 - lim || pre.d < ROAD.edgeL - 0.35 + lim) {
+  if ((pre.d > ROAD.edgeR + 0.35 - lim && !lotArea) || pre.d < ROAD.edgeL - 0.35 + lim) {
     const dd = U.clamp(pre.d, ROAD.edgeL - 0.35 + lim, ROAD.edgeR + 0.35 - lim);
     const p = ROAD.pos(pre.s, dd); car.x = p.x; car.z = p.z;
   }
@@ -178,15 +189,21 @@ function railCollide(h) {
   let worst = null;
   for (const q of pts) {
     const pr = ROAD.project(q[0], q[1]);
+    const ry = ROAD.yaw(pr.s);
     for (const wl of wallsAt(pr.s, pre.d)) {
       const pen = wl.sg > 0 ? pr.d - wl.d : wl.d - pr.d;
       if (wl.zone && pen > 1.4) continue;          // corner is deep past the barrier line (beyond its ends)
-      if (pen > 0 && (!worst || pen > worst.pen)) worst = { q, pen, sg: wl.sg, ry: ROAD.yaw(pr.s), zone: !!wl.zone };
+      if (pen > 0 && (!worst || pen > worst.pen)) worst = { q, pen, nx: wl.sg * Math.cos(ry), nz: wl.sg * Math.sin(ry), zone: !!wl.zone };
+    }
+    // loop: the fence across the far end of the parking lot
+    if (lotArea && pr.d > ROAD.edgeR + 0.35) {
+      const pen = LOOP.LOT_S0 - ROAD.lotS(pr.s);
+      if (pen > 0 && pen < 8 && (!worst || pen > worst.pen)) worst = { q, pen, nx: -Math.sin(ry), nz: Math.cos(ry), zone: false };
     }
   }
   if (!worst) return 0;
   const b = car.toBody();
-  const nx = worst.sg * Math.cos(worst.ry), nz = worst.sg * Math.sin(worst.ry);
+  const nx = worst.nx, nz = worst.nz;
   const vn = resolveImpulse(b, { x: worst.q[0], z: worst.q[1], vx: 0, vz: 0, w: 0, im: 0, ii: 0 },
     { nx, nz, depth: worst.pen + 0.03, px: worst.q[0], pz: worst.q[1] }, 0.12, 0.12);
   car.fromBody(b);
@@ -197,22 +214,46 @@ function railCollide(h) {
   return vn;
 }
 
-// Jump the player to any road position (used when joining a friend's server): rebases the
-// floating origin there, then rebuilds traffic and scenery around the new spot.
-function moveTo(s, d, speed) {
-  const sh = Math.floor((s - ROAD.origin) / 3000) * 3000;
-  if (sh) { ROAD.origin += sh; zoneProps.shift(sh); for (const c of world.clouds.children) c.position.z += sh; }
-  car.place(s, d, speed);
+// ---------- servers: the loop circuit with a parking lot to start from ----------
+// Park in space `slot` of the lot, nose toward the exit (everyone in a room gets their own space).
+function spawnInLot(slot) {
+  const sp = ROAD.lotSpace(slot);
+  car.place(sp.s, sp.d, 0);
   car.tc = Settings.tc; car.manual = Settings.manual; car.hitT = 0;
-  const p = ROAD.project(car.x, car.z); car.s = p.s; car.d = p.d; lastGoodS = p.s;
+  car.s = sp.s; car.d = sp.d; ROAD.hintS = sp.s; lastGoodS = sp.s;
   steerCtl.key = 0; steerCtl.k1 = 0; steerCtl.wheelF = 0;
   camS.yaw = car.yaw; camS.shift = 0;
-  traffic.clear();
   world.fillAll(car.s);
-  Object.assign(proxy, { s: car.s, d: car.d, v: car.u });
-  traffic.maintain(proxy, Settings.density);
+  Object.assign(proxy, { s: car.s, d: car.d, v: 0 });
   score.reset();
   lastCrash = -9;
+}
+// joined a server: switch to the loop circuit + shared traffic, start in the lot
+function enterServer(slot) {
+  ROAD.setLoop(true); ZONES.setLoop(ROAD.loop.L);
+  world.reset(); zoneProps.reset();
+  traffic.clear(); traffic.remote = true;
+  spawnInLot(slot);
+}
+// left / lost the server: back to the endless single-player highway
+function exitServer() {
+  ROAD.setLoop(false); ZONES.setLoop(0);
+  world.reset(); zoneProps.reset();
+  traffic.remote = false; traffic.clear();
+  startPosition();
+  score.reset();
+}
+// in (or right at the edge of) the parking lot / on-ramp area beside the road
+function nearLot(s, d) {
+  if (!ROAD.loop || d < ROAD.edgeR - 0.5) return false;
+  const ls = ROAD.lotS(s);
+  return ls > LOOP.LOT_S0 - 8 && ls < LOOP.RAIL_OPEN1 + 2 && d < ROAD.edgeR + LOOP.LOT_D1 + 8;
+}
+// the on-ramp's acceleration lane and the lot don't count as the shoulder
+function inStartArea(s, d) {
+  if (!ROAD.loop || d < 2 * ROAD.LW) return false;
+  const ls = ROAD.lotS(s);
+  return ls > LOOP.LOT_S0 - 5 && ls < LOOP.RAIL_OPEN1 + 5;
 }
 
 function crashEvent(strength) {
@@ -277,25 +318,42 @@ function updateCamera(dt) {
   camera.fov = camS.fov; camera.updateProjectionMatrix();
 }
 
-// ---------- menu wiring ----------
+// ---------- menus ----------
+// Screens: title (main menu) -> singleplayer / multiplayer / leaderboard / settings; pause while driving.
 const menu = document.getElementById('menu');
+const $id = id => document.getElementById(id);
+let screen = 'scrTitle', settingsFrom = 'scrTitle';
+function show(id) {
+  if (id === 'scrSettings' && screen !== 'scrSettings') settingsFrom = screen;
+  screen = id;
+  for (const s of menu.querySelectorAll('.screen')) s.classList.toggle('hidden', s.id !== id);
+  if (id === 'scrMP') Net.refreshList();
+  if (id === 'scrLB') loadLeaderboard();
+  if (id === 'scrSettings') renderKeys();
+  if (id === 'scrPause') updatePause();
+}
+document.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => show(b.dataset.go)));
+$id('setBack').onclick = () => show(settingsFrom);
+
 const bindRange = (id, key, toVal, fmt) => {
-  const el = document.getElementById(id), lab = document.getElementById(id + 'V');
-  el.value = Math.round(key === 'sens' ? Settings[key] * 100 : Settings[key] * 100);
+  const el = $id(id), lab = $id(id + 'V');
+  el.value = Math.round(Settings[key] * 100);
   const upd = () => { Settings[key] = toVal(+el.value); lab.textContent = fmt(+el.value); saveSettings(); };
   el.addEventListener('input', upd); upd();
 };
-bindRange('dens', 'density', v => v / 100, v => v + '%');
+bindRange('fdDens', 'density', v => v / 100, v => v + '%');        // singleplayer free drive traffic
+bindRange('mpDens', 'mpDensity', v => v / 100, v => v + '%');      // free drive server traffic
 bindRange('la', 'assist', v => v / 100, v => (v === 0 ? 'Off' : v + '%'));
 bindRange('sens', 'sens', v => v / 100, v => (v / 100).toFixed(2) + '×');
 bindRange('vol', 'vol', v => v / 100, v => v + '%');
-const tcEl = document.getElementById('tc'), manEl = document.getElementById('manual');
-tcEl.checked = Settings.tc; manEl.checked = Settings.manual;
+const tcEl = $id('tc'), manEl = $id('manual'), mmEl = $id('minimapOn');
+tcEl.checked = Settings.tc; manEl.checked = Settings.manual; mmEl.checked = Settings.minimap;
 tcEl.addEventListener('change', () => { Settings.tc = car.tc = tcEl.checked; saveSettings(); });
 manEl.addEventListener('change', () => { Settings.manual = car.manual = manEl.checked; saveSettings(); });
+mmEl.addEventListener('change', () => { Settings.minimap = mmEl.checked; saveSettings(); });
 const PAINTS = [['Brooklyn Grey', '#a6b0b8'], ['Isle of Man Green', '#0e5a44'], ['São Paulo Yellow', '#f0c419'], ['Toronto Red', '#b1121c'],
   ['Portimão Blue', '#1d5cc0'], ['Black Sapphire', '#14161a'], ['Alpine White', '#eef0ee'], ['Fire Orange', '#e0561c'], ['Dravit Grey', '#6b6e68'], ['Tanzanite Blue', '#1d2a4b']];
-const swBox = document.getElementById('swatches'), picker = document.getElementById('paint');
+const swBox = $id('swatches'), picker = $id('paint');
 const markSw = () => { for (const el of swBox.children) el.classList.toggle('sel', el.dataset.c === Settings.color); picker.value = Settings.color; };
 for (const [n, c] of PAINTS) {
   const el = document.createElement('div'); el.className = 'sw'; el.title = n; el.dataset.c = c; el.style.background = c;
@@ -304,18 +362,103 @@ for (const [n, c] of PAINTS) {
 }
 picker.addEventListener('input', () => { setPaint(picker.value); markSw(); });
 markSw();
-const calMsg = document.getElementById('calMsg');
+const calMsg = $id('calMsg');
 document.querySelectorAll('[data-cal]').forEach(b => b.addEventListener('click', () => Input.startCal(b.dataset.cal, t => (calMsg.textContent = t))));
-document.getElementById('calReset').onclick = () => { Input.resetCal(); calMsg.textContent = 'Reset to Logitech G923 / G29 defaults.'; };
+$id('calReset').onclick = () => { Input.resetCal(); calMsg.textContent = 'Reset to Logitech G923 / G29 defaults.'; };
+// keyboard controls: click an action, then press its new key
+function renderKeys() {
+  const box = $id('keyBinds'); box.innerHTML = '';
+  for (const a in KEY_NAMES) {
+    const lab = document.createElement('span'); lab.textContent = KEY_NAMES[a];
+    const b = document.createElement('button'); b.textContent = Input.binds[a].map(keyLabel).join(' / ');
+    b.onclick = () => {
+      b.classList.add('wait'); b.textContent = 'Press a key…';
+      $id('keyMsg').textContent = 'Press the new key for ' + KEY_NAMES[a].toLowerCase() + ' (Esc cancels).';
+      Input.capture = { action: a, done: ok => { renderKeys(); $id('keyMsg').textContent = ok ? 'Saved.' : 'Cancelled.'; } };
+    };
+    box.append(lab, b);
+  }
+}
+$id('keysReset').onclick = () => { Input.resetBinds(); renderKeys(); $id('keyMsg').textContent = 'Back to the default keys.'; };
+
+// driver name (used on servers and leaderboards), shown on the singleplayer + multiplayer screens
+const nameIns = [...document.querySelectorAll('.nameIn')];
+for (const el of nameIns) {
+  el.value = Settings.mpName || '';
+  el.addEventListener('input', () => { Settings.mpName = el.value.trim(); for (const o of nameIns) if (o !== el) o.value = el.value; saveSettings(); });
+}
+const myName = () => ((Settings.mpName || '').trim() || 'Driver').slice(0, 16);
+
+// ---------- singleplayer ----------
+$id('spScored').onclick = () => startSingle(true);
+$id('spFree').onclick = () => startSingle(false);
+function startSingle(scored) {
+  score.reset();                                       // (ends anything left over first)
+  game.mode = 'sp'; game.scored = scored; game.density = scored ? SCORED_DENSITY : Settings.density;
+  startPosition(); score.reset();
+  closeMenu();
+  hud.message(scored ? 'SCORED RUN' : 'FREE DRIVE');
+}
+// scored singleplayer streaks go to the leaderboard (multiplayer runs are recorded by the server itself)
+score.onStreakEnd = (pts, peak) => { if (game.mode === 'sp' && game.scored && pts >= 100) submitScore(pts, peak); };
+async function submitScore(pts, peak) {
+  const base = await Net.findBase(); if (!base) return;
+  try {
+    const r = await fetch(base + '/api/score', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'sp', name: myName(), score: pts, peak }) });
+    const j = await r.json();
+    if (j && j.rank) hud.message(`LEADERBOARD #${j.rank}`);
+  } catch (e) { /* offline: no leaderboard */ }
+}
+function quitToTitle() {
+  if (game.mode === 'mp') { quitting = true; Net.leave(); quitting = false; }   // (onLeft puts the endless road back)
+  else score.reset();
+  game.mode = 'menu'; game.scored = false; game.density = SCORED_DENSITY;
+  startPosition(); score.reset();
+  show('scrTitle');
+}
+$id('pQuit').onclick = quitToTitle;
+$id('pResume').onclick = () => closeMenu();
+let quitting = false;
+
+// ---------- leaderboard ----------
+let lbTab = 'sp';
+document.querySelectorAll('[data-lb]').forEach(b => b.addEventListener('click', () => {
+  lbTab = b.dataset.lb;
+  document.querySelectorAll('[data-lb]').forEach(o => o.classList.toggle('sel', o === b));
+  loadLeaderboard();
+}));
+async function loadLeaderboard() {
+  const mode = lbTab, list = $id('lbList'), note = $id('lbNote');
+  note.textContent = 'Loading…'; list.innerHTML = '';
+  const base = await Net.findBase();
+  if (!base) { note.textContent = 'Leaderboards live on the online server: open the game from its website link.'; return; }
+  let j;
+  try { j = await (await fetch(base + '/api/leaderboard?mode=' + mode, { cache: 'no-store' })).json(); }
+  catch (e) { note.textContent = 'Could not load the leaderboard. Check your internet connection.'; return; }
+  if (mode !== lbTab) return;
+  note.textContent = (mode === 'sp' ? 'Top 100 scored singleplayer drives (65% traffic).' : 'Top 100 drives on public and scored servers.')
+    + (j.persistent ? '' : ' (Not saved permanently yet: they reset when the server restarts.)');
+  const ago = t => { const m = (Date.now() - t) / 60000; return m < 60 ? Math.max(1, Math.round(m)) + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' d ago'; };
+  const head = document.createElement('div'); head.className = 'lbRow head';
+  head.innerHTML = '<span>#</span><span>DRIVER</span><span style="text-align:right">SCORE</span><span style="text-align:right">WHEN</span>';
+  list.appendChild(head);
+  (j.list || []).forEach((e, i) => {
+    const row = document.createElement('div');
+    row.className = 'lbRow' + (i < 3 ? ' top' + (i + 1) : '') + (e.name === myName() ? ' me' : '');
+    for (const [cls, txt] of [['rk', i + 1], ['nm', e.name], ['sc', U.fmt(e.score)], ['dt', ago(e.t)]]) {
+      const s = document.createElement('span'); s.className = cls; s.textContent = txt; row.appendChild(s);
+    }
+    list.appendChild(row);
+  });
+  if (!(j.list || []).length) note.textContent += ' No drives yet: be the first!';
+}
 
 // ---------- multiplayer (dedicated server: public servers + private rooms with codes) ----------
 Net.init(scene);
-const mpEl = id => document.getElementById(id);
-const mpName = mpEl('mpName'), mpCode = mpEl('mpCode');
-mpName.value = Settings.mpName || '';
-mpName.addEventListener('input', () => { Settings.mpName = mpName.value.trim(); saveSettings(); });
-const myName = () => (mpName.value.trim() || 'Driver').slice(0, 16);
-mpEl('mpHost').onclick = () => Net.host(myName(), Settings.color);
+const mpEl = $id;
+const mpCode = mpEl('mpCode');
+mpEl('mpHostScored').onclick = () => Net.host(myName(), Settings.color, { scored: true });
+mpEl('mpHostFree').onclick = () => Net.host(myName(), Settings.color, { scored: false, density: Settings.mpDensity });
 mpEl('mpJoin').onclick = () => Net.joinCode(mpCode.value, myName(), Settings.color);
 mpCode.addEventListener('keydown', e => { if (e.key === 'Enter') Net.joinCode(mpCode.value, myName(), Settings.color); });
 mpEl('mpRefresh').onclick = () => Net.refreshList();
@@ -336,8 +479,7 @@ Net.onList = j => {
   }
   if (!j.servers.length) box.innerHTML = '<div class="mpEmpty">No public servers.</div>';
 };
-Net.refreshList();
-setInterval(() => { if (menuOpen && !document.hidden) Net.refreshList(); }, 6000);
+setInterval(() => { if (menuOpen && screen === 'scrMP' && !document.hidden) Net.refreshList(); }, 6000);
 // "Install app" button (Chrome / Edge offer it when the game is opened from its website)
 let installEvt = null;
 addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; mpEl('installBtn').classList.remove('hidden'); });
@@ -351,54 +493,139 @@ mpEl('mpCopy').onclick = () => {
   const done = () => Net.status('Code copied. Paste it to your friends.', 'ok');
   if (navigator.clipboard) navigator.clipboard.writeText(Net.code).then(done, () => {}); else done();
 };
-mpEl('mpLeave').onclick = () => Net.leave();
-Net.onStatus = (msg, kind) => { const el = mpEl('mpStatus'); el.textContent = msg; el.className = kind; };
+Net.onStatus = (msg, kind) => { for (const id of ['mpStatus', 'mpStatus2']) { const el = mpEl(id); el.textContent = msg; el.className = kind; } };
 Net.onRoster = () => {
   const on = Net.active(), r = Net.room;
   mpEl('mpLive').classList.toggle('hidden', !on);
+  mpEl('mpLot').classList.toggle('hidden', !on);
   mpEl('mpHud').classList.toggle('hidden', !on);
-  mpEl('mpWhere').textContent = r ? (r.pub ? 'Playing on ' + r.name : 'Your private server') : '';
+  mpEl('mpWhere').textContent = r ? (r.pub ? r.name : 'Private server') : '';
   mpEl('mpCodeWrap').classList.toggle('hidden', !(r && r.code));
   mpEl('mpCodeShow').textContent = Net.code;
-  mpEl('mpHudCode').textContent = r ? (r.pub ? r.name.toUpperCase() : 'PRIVATE · ' + r.code) : '';
+  mpEl('mpHudCode').textContent = r ? (r.pub ? r.name.toUpperCase() : 'PRIVATE · ' + r.code) + (r.scored ? ' · SCORED' : ' · FREE DRIVE') : '';
   const list = mpEl('mpList'); list.innerHTML = '';
-  for (const p of Net.roster(0, 0)) {
+  for (const p of Net.roster(0)) {
     const sp = document.createElement('span'); sp.style.setProperty('--c', p.color); sp.textContent = p.name + (p.you ? ' (you)' : '');
     list.appendChild(sp);
   }
 };
-// joined a server: start right behind the player who's there, one lane over, at their speed
-Net.onJoined = (at, room) => {
-  if (at) {
-    const hl = ROAD.nearestLane(at.d), lane = hl < ROAD.LANES - 1 ? hl + 1 : hl - 1;
-    moveTo(at.s - 25, ROAD.lane(lane), Math.max(at.v || 0, 60 / 3.6));
-  }
+// joined a server: loop circuit + shared traffic, starting in your own space in the parking lot
+Net.ext = { front: M4_EXT.front, rear: M4_EXT.rear, hw: M4_EXT.hw };
+Net.refS = () => car.s;
+Net.onTraffic = m => traffic.applySnapshot(m);
+traffic.onReport = c => Net.reportCrash(c);
+Net.onJoined = (room, slot) => {
+  Net.slot = slot;
+  score.reset();
+  game.mode = 'mp'; game.scored = !!room.scored; game.density = room.density;
+  enterServer(slot);
+  closeMenu();
   hud.message(room.pub ? 'JOINED ' + room.name.toUpperCase() : 'PRIVATE SERVER ' + room.code);
-  Net.refreshList();
 };
+// left the server (or lost it): endless road again, back to the menu
+Net.onRank = r => hud.message(`LEADERBOARD #${r}`);
+Net.onLeft = () => {
+  exitServer();
+  game.mode = 'menu'; game.scored = false; game.density = SCORED_DENSITY;
+  if (!quitting) openMenu('scrMP');
+};
+mpEl('mpLot').onclick = () => { if (Net.active()) { spawnInLot(Net.slot || 0); closeMenu(); hud.message('PARKING LOT'); } };
 let mpHudT = 0;
-function updateMpHud(dt, kmh) {
+// in-game player list: name, current score (grey), best score on this server (gold)
+function updateMpHud(dt) {
   if (!Net.active() || (mpHudT -= dt) > 0) return;
   mpHudT = 0.25;
-  const rows = Net.roster(score.score, kmh).sort((a, b) => b.score - a.score);
+  const rows = Net.roster(score.score).sort((a, b) => b.best - a.best || b.score - a.score);
   mpEl('mpHudList').innerHTML = rows.map(r => `<div class="r${r.you ? ' you' : ''}" style="--c:${r.color}"><span class="n"></span>` +
-    `<span class="k">${r.wait ? '…' : Math.round(r.kmh)}</span><span class="s">${U.fmt(r.score)}</span></div>`).join('');
+    `<span class="k">${r.wait ? '…' : U.fmt(r.score)}</span><span class="s">${U.fmt(r.best)}</span></div>`).join('');
   [...mpEl('mpHudList').querySelectorAll('.n')].forEach((el, i) => (el.textContent = rows[i].name)); // names as text, never HTML
 }
-// my state as friends receive it (road coordinates)
+// my state as friends receive it (road coordinates + my clock, for smooth interpolation on their side)
 function netState() {
-  return { s: +car.s.toFixed(2), d: +car.d.toFixed(3), ry: +(proxy.ry || 0).toFixed(4), v: +proxy.v.toFixed(2), steer: +car.steer.toFixed(3),
-    brake: !!(car.brakeOn && car.gear >= 0), kmh: Math.round(Math.abs(car.u) * 3.6), score: Math.round(score.score) };
+  return { t: +(performance.now() / 1000).toFixed(3), s: +car.s.toFixed(2), d: +car.d.toFixed(3), ry: +(proxy.ry || 0).toFixed(4), v: +proxy.v.toFixed(2),
+    steer: +car.steer.toFixed(3), brake: !!(car.brakeOn && car.gear >= 0), kmh: Math.round(Math.abs(car.u) * 3.6), score: Math.round(score.score) };
 }
 
-function openMenu() { menuOpen = true; menu.classList.remove('hidden'); document.getElementById('hud').classList.add('hidden'); sound.suspend(true); camS.orbit = 0; }
+// ---------- proximity multiplier (multiplayer): drive close to another player for up to x10 ----------
+// gap between the two cars' outlines (m): ~10 ft (3 m) = x2, ~1 ft (0.3 m) = x10, nothing beyond 9 m
+const PROX_CURVE = mcurve([[0.3, 10], [0.6, 7], [1, 5], [2, 3], [3.05, 2], [5, 1.5], [7, 1.25], [9, 1.1]]);
+const _po = { s: 0, d: 0, relYaw: 0, front: M4_EXT.front, rear: M4_EXT.rear, hw: M4_EXT.hw };
+function proximity(kmh) {
+  if (game.mode !== 'mp' || kmh < 60) return 1;
+  let g = Infinity;
+  for (const p of Net.players.values()) {
+    const n = p.now; if (!n || Math.abs(n.s - car.s) > 25) continue;
+    Object.assign(_po, { s: n.s, d: n.d, relYaw: n.ry || 0 });
+    g = Math.min(g, traffic.outlineGap(proxy, _po));
+  }
+  return g <= 9 ? PROX_CURVE(Math.max(0.3, g)) : 1;
+}
+
+// ---------- minimap (multiplayer): you in the middle pointing up, the road and the other players around ----------
+const mm = $id('minimap'), mmc = mm.getContext('2d');
+let mmT = 0;
+function drawMinimap(dt) {
+  const on = game.mode === 'mp' && Settings.minimap && !menuOpen;
+  if (mm.classList.contains('hidden') === on) mm.classList.toggle('hidden', !on);
+  if (!on || (mmT -= dt) > 0) return;
+  mmT = 0.08;
+  const W = mm.width, R = W / 2, range = 800, k = R / range, yaw = car.visYaw, sy = Math.sin(yaw), cy = Math.cos(yaw);
+  const map = (x, z) => { const dx = x - car.x, dz = z - car.z; return [R + (dx * cy + dz * sy) * k, R - (dx * sy - dz * cy) * k]; };
+  const g = mmc;
+  g.clearRect(0, 0, W, W);
+  g.save();
+  g.beginPath(); g.arc(R, R, R - 1, 0, Math.PI * 2); g.fillStyle = 'rgba(14,18,26,0.55)'; g.fill(); g.clip();
+  // parking lot
+  const lot = [[LOOP.LOT_S0, LOOP.LOT_D0], [LOOP.LOT_S1, LOOP.LOT_D0], [LOOP.LOT_S1, LOOP.LOT_D1], [LOOP.LOT_S0, LOOP.LOT_D1]];
+  const lap = ROAD.near(0, car.s);
+  if (Math.abs(car.s - lap) < 1500) {
+    g.beginPath();
+    lot.forEach(([s, d], i) => { const p = ROAD.pos(lap + s, ROAD.edgeR + d), q = map(p.x, p.z); i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]); });
+    g.closePath(); g.fillStyle = 'rgba(160,170,185,0.45)'; g.fill();
+  }
+  // road
+  g.beginPath();
+  for (let s = car.s - range * 1.6, i = 0; s <= car.s + range * 1.6; s += 12, i++) { const p = ROAD.pos(s, 0), q = map(p.x, p.z); i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]); }
+  g.lineWidth = Math.max(4, 16 * k); g.strokeStyle = 'rgba(205,212,222,0.75)'; g.lineJoin = 'round'; g.stroke();
+  // other players (clamped to the edge when far away)
+  for (const p of Net.players.values()) {
+    const n = p.now; if (!n) continue;
+    const pos = ROAD.pos(n.s, n.d); let [x, y] = map(pos.x, pos.z);
+    const dx = x - R, dy = y - R, dist = Math.hypot(dx, dy), far = dist > R - 8;
+    if (far) { x = R + dx / dist * (R - 8); y = R + dy / dist * (R - 8); }
+    g.beginPath(); g.arc(x, y, far ? 4 : 5.5, 0, Math.PI * 2); g.fillStyle = p.color; g.fill();
+    g.lineWidth = 1.5; g.strokeStyle = '#fff'; g.stroke();
+  }
+  g.restore();
+  // me: yellow arrow in the middle
+  g.beginPath(); g.moveTo(R, R - 9); g.lineTo(R + 6, R + 6); g.lineTo(R, R + 3); g.lineTo(R - 6, R + 6); g.closePath();
+  g.fillStyle = '#ffd84a'; g.fill(); g.lineWidth = 1.5; g.strokeStyle = '#1a1f28'; g.stroke();
+}
+
+// what's on the pause screen
+function updatePause() {
+  const r = Net.room;
+  $id('pauseMode').textContent = game.mode === 'mp'
+    ? `${r && r.pub ? r.name : 'Private server'} · ${game.scored ? 'Scored' : 'Free drive'} · ${Math.round(game.density * 100)}% traffic`
+    : game.scored ? 'Singleplayer · Scored · 65% traffic' : `Singleplayer · Free drive · ${Math.round(game.density * 100)}% traffic`;
+}
+function hintText() {
+  const k = a => keyLabel(Input.binds[a][0]);
+  return `${k('camera')} camera · ${k('style')} style · ${k('reset')} restart` + (game.mode === 'sp' && !game.scored ? ' · [ ] traffic' : '') + ' · Esc menu';
+}
+
+function openMenu(id = 'scrPause') {
+  menuOpen = true; menu.classList.remove('hidden'); show(id);
+  document.getElementById('hud').classList.add('hidden'); sound.suspend(true); camS.orbit = 0;
+}
 function closeMenu() {
   menuOpen = false; menu.classList.add('hidden'); document.getElementById('hud').classList.remove('hidden');
+  $id('hint').textContent = hintText();
+  hud.trafficLabel = game.mode === 'mp' ? (game.scored ? 'SCORED SERVER' : `SHARED TRAFFIC ${Math.round(game.density * 100)}%`)
+    : game.scored ? 'SCORED · 65% TRAFFIC' : `FREE DRIVE · ${Math.round(game.density * 100)}%`;
   sound.init(); sound.suspend(false);
-  document.getElementById('play').textContent = 'RESUME';
   started = true; last = performance.now();
 }
-document.getElementById('play').onclick = closeMenu;
 
 function updatePadPanel() {
   const p = Input.pad, st = document.getElementById('padStatus'), ax = document.getElementById('axes');
@@ -556,11 +783,16 @@ function renderFrame() {
 const SUB = 1 / 240;
 function frame(now) {
   requestAnimationFrame(frame);
-  const dt = Math.min((now - last) / 1000, 0.05); last = now;
+  const dt = U.clamp((now - last) / 1000, 0, 0.05); last = Math.max(last, now);
   const ctl = Input.update(now, dt);
 
   if (menuOpen) {
-    if (Input.hit('Enter')) closeMenu();
+    // Esc: pause -> back to driving; settings -> where you came from; other screens -> main menu
+    if (Input.hit('Escape')) {
+      if (screen === 'scrPause') closeMenu();
+      else if (screen === 'scrSettings') show(settingsFrom);
+      else if (screen !== 'scrTitle') show(game.mode === 'menu' ? 'scrTitle' : 'scrPause');
+    } else if (Input.hit('Enter') && screen === 'scrPause') closeMenu();
     updatePadPanel();
     updatePlayerVisual(0);
     updateCamera(dt);
@@ -568,26 +800,30 @@ function frame(now) {
     sunLight.target.position.set(car.x, 0, car.z);
     world.update(car.s, camera);
     Net.tick(dt, netState());
+    if (traffic.remote) traffic.update(dt, proxy, game.density);   // (shared traffic keeps moving behind the menu)
+    drawMinimap(dt);
     Input.endFrame();
     renderFrame();
     return;
   }
-  if (Input.hit('Escape') || Input.hit('KeyP')) { openMenu(); Input.endFrame(); return; }
+  if (Input.hit('Escape') || Input.hit('KeyP')) { openMenu('scrPause'); Input.endFrame(); return; }
   time += dt;
-  if (Input.hit('KeyC') || ctl.camBtn) camMode ^= 1;
-  if (Input.hit('KeyT')) setFx((FX.mode + 1) % 3);   // normal -> toon -> realistic -> normal
-  if (Input.hit('KeyR') || ctl.reset) resetCar();
-  if (Input.hit('BracketLeft') || Input.hit('BracketRight')) { // [ ] adjust traffic density live
-    Settings.density = U.clamp(Math.round(Settings.density * 10 + (Input.hit('BracketRight') ? 1 : -1)) / 10, 0, 1);
-    const el = document.getElementById('dens'); el.value = Math.round(Settings.density * 100); el.dispatchEvent(new Event('input'));
+  if (Input.tap('camera') || ctl.camBtn) camMode ^= 1;
+  if (Input.tap('style')) setFx((FX.mode + 1) % 3);   // normal -> toon -> realistic -> normal
+  if (Input.tap('reset') || ctl.reset) resetCar();
+  if (game.mode === 'sp' && !game.scored && (Input.hit('BracketLeft') || Input.hit('BracketRight'))) { // [ ] traffic (free drive only)
+    game.density = U.clamp(Math.round(game.density * 10 + (Input.hit('BracketRight') ? 1 : -1)) / 10, 0, 1);
+    const el = $id('fdDens'); el.value = Math.round(game.density * 100); el.dispatchEvent(new Event('input'));
+    hud.trafficLabel = `FREE DRIVE · ${Math.round(game.density * 100)}%`;
   }
   if (Input.hit('KeyM')) { car.manual = Settings.manual = !car.manual; manEl.checked = car.manual; saveSettings(); }
-  if (Input.hit('KeyE') || ctl.up) { if (!car.manual) { car.manual = Settings.manual = true; manEl.checked = true; } car.shift(1); }
-  if (Input.hit('KeyQ') || ctl.down) { if (!car.manual) { car.manual = Settings.manual = true; manEl.checked = true; } car.shift(-1); }
+  if (Input.tap('shiftUp') || ctl.up) { if (!car.manual) { car.manual = Settings.manual = true; manEl.checked = true; } car.shift(1); }
+  if (Input.tap('shiftDown') || ctl.down) { if (!car.manual) { car.manual = Settings.manual = true; manEl.checked = true; } car.shift(-1); }
 
   // ---- physics (fixed-size substeps that exactly cover the frame) ----
   const n = Math.max(1, Math.ceil(dt / SUB)), h = dt / n;
   let wallHit = 0;
+  ROAD.hintS = car.s;      // (loop circuit: road lookups pick the lap you're on)
   for (let i = 0; i < n; i++) {
     steerCtl.update(h, car, ctl, Settings);
     car.step(h, ctl);
@@ -606,7 +842,7 @@ function frame(now) {
 
   // ---- traffic, collisions, scoring ----
   Net.tick(dt, netState());
-  traffic.update(dt, proxy, Settings.density, Net.agents(M4_EXT));
+  traffic.update(dt, proxy, game.density);
   const impact = traffic.collide(car, trafficHull);
   // friends: light bumps just push you around, a hard hit (> ~11 km/h difference) costs your streak
   const bump = Net.collide(car, trafficHull);
@@ -620,8 +856,13 @@ function frame(now) {
   if (wallHit > 3.5 || zoneHit) crashEvent(wallHit);
   zoneHit = false;
   const kmh = Math.abs(car.u) * 3.6;
+  // multiplayer: driving close to another player multiplies the points you earn
+  score.prox = proximity(kmh);
+  const pe = $id('prox');
+  if (pe.classList.contains('on') !== score.prox > 1) pe.classList.toggle('on', score.prox > 1);
+  if (score.prox > 1) hud.set('prox', pe.firstElementChild, '×' + score.prox.toFixed(1));
   // Shoulder: car centre past the outer edge lines -> no points, and lose 10% of points per second
-  const onShoulder = Math.abs(car.d) > 2 * ROAD.LW + 0.25 && Math.abs(car.u) > 2;
+  const onShoulder = Math.abs(car.d) > 2 * ROAD.LW + 0.25 && Math.abs(car.u) > 2 && !inStartArea(car.s, car.d);
   const misses = traffic.nearMisses(proxy, kmh); // always run so pass tracking stays correct
   if (!onShoulder) {
     for (const nm of misses) if (time - lastCrash > 1.5) score.nearMiss(nm.gap, kmh);
@@ -635,10 +876,11 @@ function frame(now) {
   score.update(dt);
 
   // ---- floating origin: keep coordinates small for precision ----
-  if (car.z < -3000) {
+  // (the loop circuit stays within a few km of the centre, so it never needs this)
+  if (!ROAD.loop && car.z < -3000) {
     const sh = 3000;
     ROAD.origin += sh; car.z += sh;
-    for (const c of traffic.cars) if (c.crashed) { c.body.z += sh; c.z += sh; }
+    for (const c of traffic.cars) if (c.crashed && c.body) { c.body.z += sh; c.z += sh; }
     for (const c of world.clouds.children) c.position.z += sh;
     zoneProps.shift(sh);
   }
@@ -650,7 +892,8 @@ function frame(now) {
   sunLight.target.position.set(car.x, 0, car.z);
 
   hud.update(dt, car, score, steerCtl, Settings);
-  updateMpHud(dt, kmh);
+  updateMpHud(dt);
+  drawMinimap(dt);
   sound.update(car, ctl.throttle, Settings.vol);
   Input.endFrame();
   renderFrame();

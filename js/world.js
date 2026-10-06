@@ -81,9 +81,9 @@ class World {
         this.chunks.delete(k); c.userData.t0 = performance.now() / 1000;
         const f = c.userData.far; if (f) { f.material.transparent = true; f.material.needsUpdate = true; }
         this.dying.set(k + '_' + c.id, c); c.userData.k = k;
-      } else c.position.z = -(k * this.CH - ROAD.origin);
+      } else c.position.z = this.zbase(k);
     }
-    for (const c of this.dying.values()) c.position.z = -(c.userData.k * this.CH - ROAD.origin);
+    for (const c of this.dying.values()) c.position.z = this.zbase(c.userData.k);
     this.ground.position.set(cam.position.x, -0.03, cam.position.z);
     // clouds drift around camera; one that drifts too far is moved and fades back in (no popping)
     for (const c of this.clouds.children) {
@@ -124,8 +124,28 @@ class World {
   // (start of a run: everything appears at once, no fade)
   fillAll(ps) { const ci = Math.floor(ps / this.CH); for (let k = ci - 2; k <= ci + 11; k++) if (!this.chunks.has(k)) { const c = this.build(k); c.userData.t0 = -1e9; this.chunks.set(k, c); } }
 
+  // where a chunk's geometry is anchored: endless road = along z (floating origin); loop = world origin
+  zbase(k) { return ROAD.loop ? 0 : -(k * this.CH - ROAD.origin); }
+  // chunk index within the lap (loop: scenery repeats every lap)
+  lapK(k) { if (!ROAD.loop) return k; const n = ROAD.loop.L / this.CH; return ((k % n) + n) % n; }
+  // loop only: keep scenery off the parking lot / ramp and off other parts of the circuit
+  blocked(s, d, r, p) {
+    if (!ROAD.loop) return false;
+    const ls = ROAD.lotS(s);
+    if (d > 0 && ls > LOOP.LOT_S0 - r - 15 && ls < LOOP.RAIL_OPEN1 + r + 10 && d < ROAD.edgeR + LOOP.LOT_D1 + r + 12) return true;
+    return !ROAD.clearOfLoop(p[0], p[2], r, s);
+  }
+
+  // drop everything (switching between the endless road and the loop circuit)
+  reset() {
+    for (const c of [...this.chunks.values(), ...this.dying.values()]) { this.scene.remove(c); c.traverse(x => { if (x.geometry) x.geometry.dispose(); }); }
+    this.chunks.clear(); this.dying.clear(); this._lakes = null;
+    if (this.lot) { this.scene.remove(this.lot); this.lot.traverse(x => x.geometry && x.geometry.dispose()); this.lot = null; }
+    if (ROAD.loop) { this.lot = this.buildLot(); this.scene.add(this.lot); }
+  }
+
   build(k) {
-    const s0 = k * this.CH, zb = -(s0 - ROAD.origin), rnd = U.rng(k * 7919 + 13);
+    const s0 = k * this.CH, zb = this.zbase(k), kk = this.lapK(k), rnd = U.rng(kk * 7919 + 13);
     const LW = ROAD.LW, eL = ROAD.edgeL, eR = ROAD.edgeR;
     const P = (s, d, y) => { const p = ROAD.pos(s, d); return [p.x, y, p.z - zb]; };
     const road = new CGB(), sc = new CGB();
@@ -142,9 +162,13 @@ class World {
     strip(road, -2 * LW - 0.05, 2 * LW + 0.05, 0.03, 0.03, WC.asphalt);
     strip(road, 2 * LW + 0.05, eR + 0.6, 0.03, 0.02, WC.shoulder);
     strip(road, eR + 0.6, eR + 2.4, 0.02, 0.0, WC.gravel);
-    // edge lines
+    // edge lines (loop: the right one is dashed along the on-ramp's acceleration lane)
     strip(road, -2 * LW - 0.25, -2 * LW - 0.07, 0.045, 0.045, WC.yline);
-    strip(road, 2 * LW + 0.07, 2 * LW + 0.25, 0.045, 0.045, WC.line);
+    for (let j = 0; j < n; j++) {
+      const a = s0 + j * this.STEP, b = a + this.STEP, ls = ROAD.lotS(a);
+      if (ls > LOOP.ACC0 - 40 && ls < LOOP.ACC1 + 40 && ((ls % 12) + 12) % 12 >= 5) continue;
+      road.quad(P(a, 2 * LW + 0.07, 0.045), P(b, 2 * LW + 0.07, 0.045), P(b, 2 * LW + 0.25, 0.045), P(a, 2 * LW + 0.25, 0.045), WC.line);
+    }
     // dashed lane lines: 4 m dash, 10 m gap
     for (let i = -1; i <= 1; i++) {
       const d = i * LW;
@@ -159,11 +183,13 @@ class World {
       const din = dr - side * 0.0, dout = dr + side * 0.18;
       for (let j = 0; j < n; j++) {
         const a = s0 + j * this.STEP, b = a + this.STEP;
+        if (ROAD.railOpen(side, a + this.STEP / 2)) continue;          // (loop: gap where the on-ramp joins)
         sc.quad(P(a, din, 0.48), P(b, din, 0.48), P(b, din, 0.82), P(a, din, 0.82), WC.rail);
         sc.quad(P(a, din, 0.82), P(b, din, 0.82), P(b, dout, 0.84), P(a, dout, 0.84), WC.rail);
         sc.quad(P(a, din, 0.48), P(b, din, 0.48), P(b, dout, 0.46), P(a, dout, 0.46), WC.post);
       }
       for (let m = Math.ceil(s0 / 4) * 4; m < s0 + this.CH; m += 4) {
+        if (ROAD.railOpen(side, m)) continue;
         const p = P(m, dr + side * 0.25, 0.4);
         sc.geom(this.G.box, this.xf(p[0], 0.4, p[2], 0, -ROAD.yaw(m), 0.12, 0.8, 0.14), WC.post);
       }
@@ -177,7 +203,7 @@ class World {
       sc.geom(this.G.box, this.xf(q[0] + (q[0] - p[0]) * 0.2, 9.82, q[2], 0, yaw, 0.9, 0.12, 0.35), WC.signW);
     }
     // overhead sign gantry
-    if (k % 9 === 4) {
+    if (kk % 9 === 4) {
       const m = s0 + 60, yaw = -ROAD.yaw(m);
       const a = P(m, eL - 1.0, 0), b = P(m, eR + 1.0, 0);
       for (const q of [a, b]) sc.geom(this.G.box, this.xf(q[0], 3.6, q[2], 0, yaw, 0.35, 7.2, 0.35), WC.pole);
@@ -204,7 +230,7 @@ class World {
       const d = side * (edge + off);
       const m = s0 + rnd() * this.CH, p = P(m, d, 0), sz = 0.8 + rnd() * 0.9;
       const kind = rnd();
-      if (this.inLake(m, d, 4)) continue;
+      if (this.inLake(m, d, 4) || this.blocked(m, d, 4, p)) continue;
       const sc = off > 90 ? far : near; // far-out scenery fades in/out with the hills
       if (kind < 0.45) { // pine
         sc.geom(this.G.cyl5, this.xf(p[0], 1.0 * sz, p[2], 0, 0, 0.22 * sz, 2.0 * sz, 0.22 * sz), WC.trunk, rnd);
@@ -224,7 +250,7 @@ class World {
     for (let i = 0; i < rocks; i++) {
       const side = rnd() < 0.5 ? -1 : 1, edge = side < 0 ? -eL : eR;
       const off = 3 + Math.pow(rnd(), 1.3) * 160, d = side * (edge + off), m = s0 + rnd() * this.CH;
-      if (this.inLake(m, d, 3)) continue;
+      if (this.inLake(m, d, 3) || this.blocked(m, d, 5, P(m, d, 0))) continue;
       const big = rnd() < 0.15, n = big ? 1 : 1 + Math.floor(rnd() * 2), sc = off > 90 ? far : near;
       for (let j = 0; j < n; j++) {
         const p = P(m + (rnd() - 0.5) * 4, d + side * (rnd() - 0.3) * 3, 0);
@@ -239,7 +265,7 @@ class World {
       const rad = 50 + rnd() * 110, hh = 18 + rnd() * 50;
       const d = side * (edge + 40 + rad + rnd() * 250);
       const m = s0 + rnd() * this.CH, p = P(m, d, 0);
-      if (!this.inLake(m, d, rad)) far.geom(this.G.ico1, this.xf(p[0], -hh * 0.25, p[2], 0, rnd() * 3, rad, hh, rad * (0.7 + rnd() * 0.6)), rnd() < 0.5 ? WC.hill : WC.hill2, rnd, 0.08);
+      if (!this.inLake(m, d, rad) && !this.blocked(m, d, rad, p)) far.geom(this.G.ico1, this.xf(p[0], -hh * 0.25, p[2], 0, rnd() * 3, rad, hh, rad * (0.7 + rnd() * 0.6)), rnd() < 0.5 ? WC.hill : WC.hill2, rnd, 0.08);
     }
     // big grassy mountains in the background (sometimes a smaller shoulder peak beside them)
     if (rnd() < 0.75) {
@@ -247,8 +273,8 @@ class World {
       const d = side * ((side < 0 ? -eL : eR) + 300 + rad * 0.5 + rnd() * 420);
       const m = s0 + rnd() * this.CH, p = P(m, d, 0);
       const col = [WC.gmtn, WC.gmtn2, WC.gmtn3][Math.floor(rnd() * 3)];
-      far.geom(this.G.ico1, this.xf(p[0], -hh * 0.18, p[2], 0, rnd() * 3, rad, hh, rad * (0.7 + rnd() * 0.5)), col, rnd, 0.09);
-      if (rnd() < 0.5) {
+      if (!this.blocked(m, d, rad * 1.3, p)) far.geom(this.G.ico1, this.xf(p[0], -hh * 0.18, p[2], 0, rnd() * 3, rad, hh, rad * (0.7 + rnd() * 0.5)), col, rnd, 0.09);
+      if (rnd() < 0.5 && !this.blocked(m, d, rad * 1.6, p)) {
         const q = P(m + (rnd() - 0.5) * rad * 1.6, d + side * rad * 0.3, 0), r2 = rad * (0.45 + rnd() * 0.3), h2 = hh * (0.45 + rnd() * 0.35);
         far.geom(this.G.ico1, this.xf(q[0], -h2 * 0.2, q[2], 0, rnd() * 3, r2, h2, r2 * 0.9), col === WC.gmtn ? WC.gmtn2 : WC.gmtn, rnd, 0.09);
       }
@@ -256,9 +282,9 @@ class World {
     // distant mountains
     if (rnd() < 0.35) {
       const side = rnd() < 0.5 ? -1 : 1, rad = 180 + rnd() * 200, hh = 120 + rnd() * 160;
-      const d = side * (650 + rnd() * 400);
-      const p = P(s0 + rnd() * this.CH, d, 0);
-      far.geom(this.G.ico1, this.xf(p[0], -hh * 0.15, p[2], 0, rnd() * 3, rad, hh, rad * 0.8), WC.mtn, rnd, 0.1,
+      const d = side * (650 + rnd() * 400), m = s0 + rnd() * this.CH;
+      const p = P(m, d, 0);
+      if (!this.blocked(m, d, rad * 1.2, p)) far.geom(this.G.ico1, this.xf(p[0], -hh * 0.15, p[2], 0, rnd() * 3, rad, hh, rad * 0.8), WC.mtn, rnd, 0.1,
         v => (v.y > 0.8 ? WC.snow : null));
     }
     const grp = new THREE.Group();
@@ -273,6 +299,85 @@ class World {
     grp.userData.t0 = performance.now() / 1000;
     grp.position.z = zb;
     this.scene.add(grp);
+    return grp;
+  }
+
+  // ---- loop circuit start area: parking lot (spawn spaces) -> on-ramp -> acceleration lane ----
+  // Everything is laid out in road coordinates (see LOOP in core.js) so it follows the road's curve.
+  buildLot() {
+    const P = (s, d, y) => { const p = ROAD.pos(s, d); return [p.x, y, p.z]; };
+    const D = LOOP, eR = ROAD.edgeR, G = this.G, gb = new CGB(), lines = new CGB();
+    const lotCol = COL(0x50555e), curb = COL(0xc9c7bf);
+    const area = (gbx, s0, s1, dA, dB, y, col, step = 5) => {   // dA / dB may be functions of s
+      const fA = typeof dA === 'function' ? dA : () => dA, fB = typeof dB === 'function' ? dB : () => dB;
+      for (let a = s0; a < s1 - 1e-6; a += step) {
+        const b = Math.min(a + step, s1);
+        gbx.quad(P(a, fA(a), y), P(b, fA(b), y), P(b, fB(b), y), P(a, fB(a), y), col);
+      }
+    };
+    // lot surface + kerbs
+    area(gb, D.LOT_S0, D.LOT_S1, eR + D.LOT_D0, eR + D.LOT_D1, 0.035, lotCol);
+    area(gb, D.LOT_S0, D.LOT_S1, eR + D.LOT_D0 - 0.4, eR + D.LOT_D0, 0.1, curb);
+    area(gb, D.LOT_S0, D.LOT_S1, eR + D.LOT_D1, eR + D.LOT_D1 + 0.4, 0.1, curb);
+    // parking spaces: white lines between spaces + the back line of each row
+    for (const nose of D.ROWS) {
+      const back = nose - D.SPACE_L;
+      for (let c = 0; c <= D.SPACES; c++) {
+        const d = eR + D.SPACE_D0 + D.SPACE_W * c;
+        area(lines, back, nose, d - 0.06, d + 0.06, 0.05, WC.line, D.SPACE_L);
+      }
+      area(lines, back - 0.12, back, eR + D.SPACE_D0, eR + D.SPACE_D0 + D.SPACE_W * D.SPACES, 0.05, WC.line, 0.12);
+    }
+    // on-ramp: from the lot's front edge, curving down onto the shoulder (= acceleration lane)
+    const rA = s => ROAD.rampD(s) - 3.6, rB = s => ROAD.rampD(s) + 3.6;
+    area(gb, D.LOT_S1, D.ACC0 + 10, rA, rB, 0.04, WC.asphalt, 2);
+    area(lines, D.LOT_S1, D.ACC0 - 25, s => rA(s) + 0.25, s => rA(s) + 0.4, 0.055, WC.line, 2);
+    area(lines, D.LOT_S1, D.ACC0, s => rB(s) - 0.4, s => rB(s) - 0.25, 0.055, WC.line, 2);
+    // fence along the outside of the lot + ramp (same steel rail as the highway), and the lot's far end
+    const rail = (pts) => {
+      for (let i = 0; i < pts.length - 1; i++) {
+        const [a, b] = [pts[i], pts[i + 1]];
+        const pa = P(a[0], a[1], 0), pb = P(b[0], b[1], 0);
+        const dx = pb[0] - pa[0], dz = pb[2] - pa[2], len = Math.hypot(dx, dz); if (len < 0.01) continue;
+        const yaw = Math.atan2(dx, dz), mx = (pa[0] + pb[0]) / 2, mz = (pa[2] + pb[2]) / 2;
+        gb.geom(G.box, this.xf(mx, 0.66, mz, 0, yaw, 0.08, 0.34, len + 0.02), WC.rail);
+      }
+      for (let i = 0; i < pts.length; i += 2) { const p = P(pts[i][0], pts[i][1], 0); gb.geom(G.box, this.xf(p[0], 0.4, p[2], 0, 0, 0.13, 0.8, 0.13), WC.post); }
+    };
+    const outer = [];
+    for (let s = D.LOT_S0; s <= D.RAIL_OPEN1; s += 2) outer.push([s, ROAD.lotOuter(s) + 0.1]);
+    rail(outer);
+    const endPts = []; for (let d = eR + 0.35; d <= eR + D.LOT_D1 + 1.1; d += 2) endPts.push([D.LOT_S0 - 0.3, d]);
+    rail(endPts);
+    // garage / clubhouse at the back of the lot
+    { const sm = D.LOT_S0 + 20, dm = eR + 45, p = P(sm, dm, 0), yaw = -ROAD.yaw(sm);
+      gb.geom(G.box, this.xf(p[0], 2.6, p[2], 0, yaw, 22, 5.2, 26), COL(0xe9e6de));                 // walls
+      gb.geom(G.box, this.xf(p[0], 5.45, p[2], 0, yaw, 23, 0.5, 27), COL(0x2f3440));                 // roof
+      const f = P(sm + 13.05, dm, 0);                                                                // front (faces the spaces)
+      for (const k of [-1, 0, 1]) { const q = P(sm + 13.05, dm + k * 7, 0); gb.geom(G.box, this.xf(q[0], 1.7, q[2], 0, yaw, 5.4, 3.4, 0.12), COL(0x3a404c)); }
+      gb.geom(G.box, this.xf(f[0], 4.5, f[2], 0, yaw, 20, 0.7, 0.14), WC.yellow);                  // yellow stripe
+      const sg = P(sm, dm - 8, 0); gb.geom(G.box, this.xf(sg[0], 7.2, sg[2], 0, yaw, 0.4, 3, 14), COL(0x161b24));   // roof sign, facing the road
+      const sy = P(sm, dm - 8.25, 0); gb.geom(G.box, this.xf(sy[0], 7.2, sy[2], 0, yaw, 0.1, 0.55, 12.6), WC.yellow);
+    }
+    // light poles around the lot
+    for (const [s, d] of [[-150, eR + 12], [-150, eR + 58], [-222, eR + 12], [-222, eR + 58], [-268, eR + 12]]) {
+      const p = P(s, d, 0), yaw = -ROAD.yaw(s);
+      gb.geom(G.cyl5, this.xf(p[0], 4.5, p[2], 0, yaw, 0.14, 9, 0.14), WC.pole);
+      gb.geom(G.box, this.xf(p[0], 9, p[2], 0, yaw, 1.6, 0.2, 0.5), WC.pole);
+    }
+    // green "to highway" sign at the lot exit
+    { const s = D.LOT_S1 + 6, p = P(s, ROAD.rampD(s) + 5.5, 0), yaw = -ROAD.yaw(s);
+      gb.geom(G.box, this.xf(p[0], 1.4, p[2], 0, yaw, 0.12, 2.8, 0.12), WC.pole);
+      gb.geom(G.box, this.xf(p[0], 3.1, p[2], 0, yaw, 2.6, 1.3, 0.1), WC.sign);
+      const q = P(s - 0.08, ROAD.rampD(s) + 5.5, 0), tip = P(s - 0.08, ROAD.rampD(s) + 5.5 - 0.55, 0);   // arrow pointing toward the highway
+      gb.geom(G.box, this.xf(q[0], 3.1, q[2], 0, yaw, 1.4, 0.18, 0.04), WC.signW);
+      gb.geom(G.box, this.xf(tip[0], 3.22, tip[2], 0, yaw, 0.6, 0.18, 0.04, -0.75), WC.signW);
+      gb.geom(G.box, this.xf(tip[0], 2.98, tip[2], 0, yaw, 0.6, 0.18, 0.04, 0.75), WC.signW);
+    }
+    const grp = new THREE.Group();
+    const m = new THREE.Mesh(gb.build(), this.mat); m.castShadow = true; m.receiveShadow = true;
+    const l = new THREE.Mesh(lines.build(), this.roadMat); l.receiveShadow = true;
+    grp.add(m, l);
     return grp;
   }
 
@@ -366,12 +471,19 @@ class World {
   lake(i) {
     this._lakes = this._lakes || new Map();
     if (!this._lakes.has(i)) {
-      const r = U.rng(i * 3571 + 9);
+      // loop: lakes repeat every lap (the same 18 slots), never by the parking lot
+      const NL = ROAD.loop ? ROAD.loop.L / 700 : 0, j = NL ? ((i % NL) + NL) % NL : i, lap = NL ? Math.floor(i / NL) : 0;
+      const r = U.rng(j * 3571 + 9);
       let L = null;
-      if (i > 0 && r() < 0.5) {
+      if ((NL || i > 0) && r() < 0.5) {
         const side = r() < 0.5 ? -1 : 1, Rs = 45 + r() * 55, Rd = 24 + r() * 32;
         const edge = side < 0 ? -ROAD.edgeL : ROAD.edgeR;
-        L = { s: i * 700 + 150 + r() * 400, d: side * (edge + 40 + Rd + r() * 60), Rs, Rd, side, ph: r() * 6, ph2: r() * 6 };
+        L = { s: j * 700 + 150 + r() * 400, d: side * (edge + 40 + Rd + r() * 60), Rs, Rd, side, ph: r() * 6, ph2: r() * 6 };
+        if (NL) {
+          const p = ROAD.pos(L.s, L.d);
+          if (this.blocked(L.s, L.d, L.Rs * 1.3, [p.x, 0, p.z])) L = null;
+          else L.s += lap * ROAD.loop.L;
+        }
       }
       this._lakes.set(i, L);
     }
@@ -485,6 +597,8 @@ class ZoneProps {
       }
     }
   }
+
+  reset() { for (const e of this.zones.values()) for (const it of e.items) this.scene.remove(it.mesh); this.zones.clear(); }
 
   // floating-origin shift
   shift(sh) { for (const e of this.zones.values()) for (const it of e.items) if (it.loose) it.z += sh; }

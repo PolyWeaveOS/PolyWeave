@@ -2,23 +2,24 @@
 // =====================================================================
 //  Multiplayer client (talks to the dedicated server in server.js over a WebSocket)
 //  - Public servers (always on, shown in the server list) and private servers with room codes.
+//  - Servers drive on the loop circuit with ONE shared traffic (simulated by the server).
 //  - Positions are sent in road coordinates (s = distance along the road, d = lateral), so each
-//    player's floating world origin doesn't matter. ~15 updates/s, smoothed by interpolation.
-//  - Each player keeps their own traffic; friends' cars are fed into it as obstacles, so your traffic
-//    brakes for / avoids them. Player cars can bump each other.
+//    player's floating world origin doesn't matter. 20 updates/s, each stamped with the sender's
+//    clock: friends are drawn a little in the past on THEIR timeline, so uneven internet delivery
+//    doesn't make them stutter. Player cars can bump each other.
 // =====================================================================
 // Where the server lives when the game is NOT opened from it (e.g. played locally with the .bat):
 // the online address, e.g. 'https://polyweave.onrender.com'. Opened from the server itself,
 // the game always uses that same server.
 const NET_ONLINE = '';
-const NET_RATE = 1 / 15;                    // state updates per second
-const NET_DELAY = 0.12;                     // friends are drawn 120 ms in the past (smooth interpolation)
+const NET_RATE = 1 / 20;                    // state updates per second
 
 const Net = {
   ws: null, base: null, myId: '', room: null,   // room: { id, name, pub, code }
   players: new Map(),                           // id -> { name, color, buf: [], g, vis, now, x, z, yaw }
-  scene: null, onStatus: null, onJoined: null, onRoster: null, onList: null, sendT: 0,
-  me: { name: 'Driver', color: '#a6b0b8' }, _a: [], _b: [], pending: null,
+  scene: null, onStatus: null, onJoined: null, onLeft: null, onRoster: null, onList: null, onTraffic: null, sendT: 0,
+  me: { name: 'Driver', color: '#a6b0b8' }, _a: [], _b: [], pending: null, myBest: 0,
+  ext: null, refS: () => 0,                     // set by main.js: my car's size, my road position
 
   init(scene) { this.scene = scene; },
   active() { return !!this.room; },
@@ -73,7 +74,7 @@ const Net = {
       ws.onclose = () => {
         if (this.ws !== ws) return;
         this.ws = null;
-        if (this.room) { this.clearRoom(); this.status('Disconnected from the server. Join again to keep playing together.', 'err'); }
+        if (this.room) { this.left(); this.status('Disconnected from the server. Join again to keep playing together.', 'err'); }
       };
       this.ws = ws;
       return ws;
@@ -92,45 +93,53 @@ const Net = {
   },
 
   // public server from the list / private server by code / new private server
-  joinServer(id, name, color) { return this.request({ t: 'join', room: id, name, color }, 'Joining…'); },
+  joinServer(id, name, color) { return this.request({ t: 'join', room: id, name, color, ext: this.ext }, 'Joining…'); },
   joinCode(code, name, color) {
     const c = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (c.length !== 6) { this.status('Enter the 6-character code, e.g. K7P-2QX', 'err'); return; }
-    return this.request({ t: 'join', code: c, name, color }, 'Joining ' + c.slice(0, 3) + '-' + c.slice(3) + '…');
+    return this.request({ t: 'join', code: c, name, color, ext: this.ext }, 'Joining ' + c.slice(0, 3) + '-' + c.slice(3) + '…');
   },
-  host(name, color) { return this.request({ t: 'create', name, color }, 'Creating your private server…'); },
+  // opts.scored: leaderboard server (65% traffic); otherwise free drive with opts.density traffic
+  host(name, color, opts = {}) {
+    return this.request({ t: 'create', name, color, ext: this.ext, scored: !!opts.scored, density: opts.density }, 'Creating your private server…');
+  },
   leave() {
     if (!this.room) return;
     this.send({ t: 'leave' });
-    this.clearRoom();
+    this.left();
     this.status('Left the server.');
     this.refreshList();
   },
+  left() { const was = !!this.room; this.clearRoom(); if (was && this.onLeft) this.onLeft(); },
   clearRoom() {
     for (const p of this.players.values()) this.removeVis(p);
     this.players.clear();
     this.room = null;
     this.changed();
   },
+  // a traffic car I crashed into: tell the server where it ends up (everyone sees the wreck there)
+  reportCrash(c) { this.send({ t: 'crash', id: c.id, s: +c.s.toFixed(2), d: +c.d.toFixed(2), ry: +U.wrap(c.yaw - ROAD.yaw(c.s)).toFixed(3) }); },
 
   onData(m) {
     if (!m || typeof m !== 'object') return;
-    if (m.t === 'hello') this.myId = m.id;
+    if (m.t === 'st') { const p = this.players.get(m.id); if (p) this.pushState(p, m.st); }
+    else if (m.t === 'traffic') { if (this.room && this.onTraffic) this.onTraffic(m); }
+    else if (m.t === 'hello') this.myId = m.id;
     else if (m.t === 'joined') {
       this.clearRoom();
       this.myId = m.id;
-      this.room = { id: m.room, name: m.name, pub: !!m.pub, code: m.code || '' };
+      this.room = { id: m.room, name: m.name, pub: !!m.pub, code: m.code || '', scored: !!m.scored, density: Number.isFinite(m.density) ? m.density : 0.65 };
+      this.myBest = m.best || 0;
       this.status(m.pub ? `Connected to ${m.name}` : `Connected to ${m.name} · code ${m.code}`, 'ok');
       this.changed();
-      if (this.onJoined) this.onJoined(m.at, this.room);
+      if (this.onJoined) this.onJoined(this.room, m.slot || 0);
     } else if (m.t === 'error') this.status(m.msg, 'err');
+    else if (m.t === 'rank') { if (this.onRank) this.onRank(m.rank); }
     else if (m.t === 'roster') {
       const keep = new Set();
       for (const r of m.list) { if (r.id === this.myId) continue; keep.add(r.id); this.player(r.id, r.name, r.color); }
       for (const [id, p] of this.players) if (!keep.has(id)) { this.removeVis(p); this.players.delete(id); }
       this.changed();
-    } else if (m.t === 'states') {
-      for (const e of m.list) { if (e.id === this.myId) continue; const p = this.players.get(e.id); if (p) this.pushState(p, e.st); }
     }
   },
 
@@ -143,10 +152,20 @@ const Net = {
     if (p.name !== name || p.color !== color || !p.g) { p.name = name; p.color = color; this.removeVis(p); this.makeVis(p); }
     return p;
   },
+  // Each update carries the sender's clock (t). The gap between their clock and ours is the network
+  // delay plus a fixed clock difference: the smallest gap seen is the fastest delivery, and anything
+  // above it is jitter. Friends are drawn just far enough in the past to cover that jitter.
   pushState(p, st) {
-    if (!st || !Number.isFinite(st.s) || !Number.isFinite(st.d)) return;
-    p.buf.push(Object.assign({ t: performance.now() / 1000 }, st));
-    if (p.buf.length > 12) p.buf.shift();
+    if (!st || !Number.isFinite(st.s) || !Number.isFinite(st.d) || !Number.isFinite(st.t)) return;
+    const now = performance.now() / 1000, off = now - st.t;
+    if (p.off === undefined || off < p.off) p.off = off; else p.off += 0.0004;      // (drifts up slowly to follow clock drift)
+    p.jit = (p.jit ?? 0.02) * 0.96 + Math.min(0.5, off - p.off) * 0.04;
+    p.lastRecv = now;
+    const e = Object.assign({}, st);
+    e.s = ROAD.near(st.s, this.refS());               // loop: same lap numbering as my own position
+    if (p.buf.length && e.t <= p.buf[p.buf.length - 1].t) return;   // out of order / duplicate
+    p.buf.push(e);
+    if (p.buf.length > 20) p.buf.shift();
     p.last = st;
   },
   makeVis(p) {
@@ -172,18 +191,21 @@ const Net = {
   },
   removeVis(p) { if (p.g) { this.scene.remove(p.g); p.g = null; p.vis = null; } },
 
-  // friend's state right now (drawn NET_DELAY in the past, interpolated between updates)
-  sample(p) {
+  // friend's state right now: a little in the past on THEIR clock, interpolated between updates
+  sample(p, dt) {
     const b = p.buf; if (!b.length) return null;
-    const t = performance.now() / 1000 - NET_DELAY;
-    if (t - b[b.length - 1].t > 3) return null;      // no news for 3 s (tab hidden / lagging): hide them
+    const now = performance.now() / 1000;
+    if (now - p.lastRecv > 3) return null;           // no news for 3 s (tab hidden / lagging): hide them
+    const want = U.clamp(0.065 + 2.5 * (p.jit || 0), 0.08, 0.3);   // one update interval + room for jitter
+    p.delay = p.delay === undefined ? want : U.damp(p.delay, want, 0.5, dt);
+    const t = now - p.off - p.delay;
     let i = b.length - 1;
     while (i > 0 && b[i - 1].t > t) i--;
     if (i === 0) return b[0];
     const a = b[i - 1], c = b[i];
     const k = U.clamp((t - a.t) / Math.max(c.t - a.t, 1e-3), 0, 2);   // (k > 1: briefly extrapolate a late update)
     const L = (x, y) => x + (y - x) * k;
-    return Object.assign({}, c, { s: L(a.s, c.s), d: L(a.d, c.d), ry: L(a.ry, c.ry), v: L(a.v, c.v), steer: L(a.steer, c.steer) });
+    return Object.assign({}, c, { s: L(a.s, c.s), d: L(a.d, c.d), ry: a.ry + U.wrap(c.ry - a.ry) * k, v: L(a.v, c.v), steer: L(a.steer, c.steer) });
   },
 
   // ---------------------------------------------------------------- per frame (called by main.js)
@@ -196,7 +218,7 @@ const Net = {
     }
     // move friends' cars
     for (const p of this.players.values()) {
-      const s = p.now = this.sample(p);
+      const s = p.now = this.sample(p, dt);
       if (!p.g) continue;
       if (!s) { p.g.visible = false; continue; }
       const pos = ROAD.pos(s.s, s.d), yaw = ROAD.yaw(s.s) + (s.ry || 0);
@@ -238,10 +260,11 @@ const Net = {
     return impact;
   },
 
-  // rows for the player lists
-  roster(myScore, myKmh) {
-    const rows = [{ name: this.me.name, you: true, kmh: myKmh, score: myScore, color: this.me.color }];
-    for (const p of this.players.values()) rows.push({ name: p.name, kmh: p.now ? p.now.kmh || 0 : 0, score: p.now ? p.now.score || 0 : 0, color: p.color, wait: !p.now });
+  // rows for the player lists: current score + best score on this server
+  roster(myScore) {
+    this.myBest = Math.max(this.myBest || 0, Math.round(myScore));
+    const rows = [{ name: this.me.name, you: true, score: myScore, best: this.myBest, color: this.me.color }];
+    for (const p of this.players.values()) rows.push({ name: p.name, score: p.last ? p.last.score || 0 : 0, best: p.last ? p.last.best || 0 : 0, color: p.color, wait: !p.last });
     return rows;
   },
 };

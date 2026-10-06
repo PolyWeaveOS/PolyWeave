@@ -13,17 +13,45 @@ const PAD_DEFAULTS = {
   cam: 3, up: 4, down: 5, reset: 2,
 };
 
+// keyboard actions -> keys (first key can be changed in Settings; arrows stay as a backup for driving)
+const KEY_DEFAULTS = {
+  throttle: ['KeyW', 'ArrowUp'], brake: ['KeyS', 'ArrowDown'], left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'],
+  handbrake: ['Space'], shiftUp: ['KeyE'], shiftDown: ['KeyQ'], camera: ['KeyC'], reset: ['KeyR'], style: ['KeyT'],
+};
+const KEY_NAMES = {
+  throttle: 'Throttle', brake: 'Brake / reverse', left: 'Steer left', right: 'Steer right', handbrake: 'Handbrake',
+  shiftUp: 'Shift up', shiftDown: 'Shift down', camera: 'Camera (1st / 3rd person)', reset: 'Reset car', style: 'Visual style',
+};
+const keyLabel = c => ({ Space: 'Space', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', ShiftLeft: 'L Shift', ShiftRight: 'R Shift',
+  ControlLeft: 'L Ctrl', ControlRight: 'R Ctrl', AltLeft: 'L Alt', AltRight: 'R Alt', Enter: 'Enter', Tab: 'Tab', Backspace: 'Backspace' }[c]
+  || c.replace(/^Key/, '').replace(/^Digit/, '').replace(/^Numpad/, 'Num ') );
+
 const Input = {
   keys: {}, pressed: {},
   pad: null, padKind: 'none', padId: '',
   cfg: JSON.parse(JSON.stringify(PAD_DEFAULTS)),
+  binds: JSON.parse(JSON.stringify(KEY_DEFAULTS)), capture: null,
   moved: {}, rest0: null, lastBtns: [], wheelUsed: false, lastWheelMove: -1e9,
   cal: null,
   out: { steer: 0, throttle: 0, brake: 0, handbrake: 0, source: 'keys' },
 
+  down(a) { for (const c of this.binds[a]) if (this.keys[c]) return true; return false; },
+  tap(a) { for (const c of this.binds[a]) if (this.pressed[c]) return true; return false; },
+  saveBinds() { try { localStorage.setItem('tw_keys', JSON.stringify(this.binds)); } catch (e) { /* ignore */ } },
+  resetBinds() { this.binds = JSON.parse(JSON.stringify(KEY_DEFAULTS)); this.saveBinds(); },
+
   init() {
     try { const c = JSON.parse(localStorage.getItem('tw_pad') || 'null'); if (c) this.cfg = Object.assign(this.cfg, c); } catch (e) { /* ignore */ }
+    try { const b = JSON.parse(localStorage.getItem('tw_keys') || 'null'); if (b) for (const a in KEY_DEFAULTS) if (Array.isArray(b[a]) && b[a].length) this.binds[a] = b[a]; } catch (e) { /* ignore */ }
     addEventListener('keydown', e => {
+      // waiting for a new key in Settings: that key becomes the action's main key (Esc cancels)
+      if (this.capture) {
+        e.preventDefault();
+        const { action, done } = this.capture; this.capture = null;
+        if (e.code !== 'Escape') { const b = this.binds[action]; b[0] = e.code; this.saveBinds(); }
+        if (done) done(e.code !== 'Escape');
+        return;
+      }
       // typing in a text box (multiplayer name / room code) never drives the car
       if (e.target && (e.target.tagName === 'INPUT' && e.target.type === 'text')) return;
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
@@ -62,13 +90,13 @@ const Input = {
   btnEdge(p, i) { return i >= 0 && p.buttons[i] && p.buttons[i].pressed && !this.lastBtns[i]; },
 
   update(now, dt) {
-    const k = this.keys, o = this.out;
-    const ks = (k.KeyD || k.ArrowRight ? 1 : 0) - (k.KeyA || k.ArrowLeft ? 1 : 0);
-    const kt = k.KeyW || k.ArrowUp ? 1 : 0, kb = k.KeyS || k.ArrowDown ? 1 : 0;
+    const o = this.out;
+    const ks = (this.down('right') ? 1 : 0) - (this.down('left') ? 1 : 0);
+    const kt = this.down('throttle') ? 1 : 0, kb = this.down('brake') ? 1 : 0;
     // keyboard pedals ramp so taps feel analog
     o.kt = U.clamp((o.kt || 0) + (kt ? 4.5 : -7) * dt, 0, 1);
     o.kb = U.clamp((o.kb || 0) + (kb ? 9 : -9) * dt, 0, 1); // brake bites in ~0.1 s
-    o.steer = ks; o.throttle = o.kt; o.brake = o.kb; o.handbrake = k.Space ? 1 : 0;
+    o.steer = ks; o.throttle = o.kt; o.brake = o.kb; o.handbrake = this.down('handbrake') ? 1 : 0;
     o.source = 'keys';
     o.camBtn = false; o.up = false; o.down = false; o.reset = false;
 

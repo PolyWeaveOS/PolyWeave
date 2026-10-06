@@ -16,7 +16,7 @@ class Score {
   // Points go straight onto the score (x current multiplier). "pot" just shows what the
   // current combo has earned; when the combo timer runs out the multiplier resets to x1.
   add(pts) {
-    const v = pts * this.mult;
+    const v = pts * this.mult * (this.prox || 1);     // prox: multiplayer proximity bonus (driving close to another player)
     if (!Number.isFinite(v)) return 0;          // never let a bad value poison the score
     if (this.score < 1) { this.bestBefore = this.best; this.peakMult = 1; }   // a new streak starts
     this.score += v; this.pot += v;
@@ -63,7 +63,9 @@ class Score {
   }
   // a streak ends (crash or restart): show what it was worth before the score goes back to 0
   endStreak() {
-    if (this.score >= 1) this.hud.showResult(this.score, this.peakMult || this.mult, this.score > (this.bestBefore ?? 0) + 0.5);
+    if (this.score < 1) return;
+    this.hud.showResult(this.score, this.peakMult || this.mult, this.score > (this.bestBefore ?? 0) + 0.5);
+    if (this.onStreakEnd) this.onStreakEnd(Math.round(this.score), this.peakMult || this.mult);   // (scored runs -> leaderboard)
   }
   crash() {
     const had = this.score > 0 || this.pot > 1;
@@ -143,7 +145,7 @@ class Hud {
     this.set('mode', e.mode, car.manual ? 'MANUAL' : 'AUTO');
     e.rpm.style.width = (U.clamp(car.rpm / M4.redline, 0, 1) * 100).toFixed(1) + '%';
     e.rpm.classList.toggle('limit', car.limiter);
-    this.set('la', e.la, `TRAFFIC ${Math.round(settings.density * 100)}%`);
+    this.set('la', e.la, this.trafficLabel || `TRAFFIC ${Math.round(settings.density * 100)}%`);
     this.set('tc', e.tc, (car.tc ? 'TC' : 'TC OFF') + (settings.assist > 0 ? ` · LANE ASSIST ${Math.round(settings.assist * 100)}%${steerCtl.assistActive > 0.05 ? ' ●' : ''}` : ''));
     this.set('pad', e.pad, Input.padKind === 'wheel' && Input.wheelUsed ? 'WHEEL' : Input.padKind === 'gamepad' ? 'PAD' : '');
   }

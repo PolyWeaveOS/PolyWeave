@@ -9,7 +9,29 @@ const ZONES = {
   CHANCE: 0.75,        // chance a slot has a zone
   cache: new Map(),
 
+  // Loop circuit (online servers): zones repeat every lap; one possible zone per 2100 m slot, none
+  // near the parking lot / on-ramp at the start of the lap
+  loopL: 0,
+  setLoop(L) { this.loopL = L || 0; this.SLOT = L ? 2100 : 2600; this.cache = new Map(); },
+  loopSlot(i) {
+    const NS = Math.round(this.loopL / this.SLOT), j = ((i % NS) + NS) % NS, lap = Math.floor(i / NS);
+    this._base = this._base || new Map();
+    if (!this._base.has(j)) {
+      const r = U.rng(j * 104729 + 991);
+      let z = null;
+      if (r() < 0.85) {
+        const side = r() < 0.5 ? 0 : 3;
+        const start = j * this.SLOT + 400 + r() * (this.SLOT - 1100), len = 220 + r() * 200;
+        if (start > 1000 && start + len + 40 < this.loopL - 900) z = { side, start, taper: 75, end: start + len, taperOut: 40 };
+      }
+      this._base.set(j, z);
+    }
+    const b = this._base.get(j);
+    return b && { ...b, start: b.start + lap * this.loopL, end: b.end + lap * this.loopL, seed: 1e6 + i };
+  },
+
   slot(i) {
+    if (!this.cache.has(i) && this.loopL) this.cache.set(i, this.loopSlot(i));
     if (!this.cache.has(i)) {
       const r = U.rng(i * 104729 + 77);
       let z = null;

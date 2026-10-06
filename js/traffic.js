@@ -95,8 +95,79 @@ class Traffic {
     this._pa = []; this._pb = [];
   }
 
-  clear() { for (const c of this.cars) this.scene.remove(c.vis.root); this.cars = []; this.initDone = false; }
-  remove(i) { this.scene.remove(this.cars[i].vis.root); this.cars.splice(i, 1); }
+  clear() { for (const c of this.cars) this.scene.remove(c.vis.root); this.cars = []; this.initDone = false; this.byId = new Map(); this.srvOff = undefined; }
+  remove(i) { const c = this.cars[i]; this.scene.remove(c.vis.root); this.cars.splice(i, 1); if (c.id !== undefined && this.byId) this.byId.delete(c.id); }
+
+  // ---------------------------------------------------------------- online: shared traffic
+  // On a server the traffic is simulated once by the server and everyone sees the same cars. This
+  // side only draws them: each snapshot (~10/s) gives every nearby car's road position; cars are
+  // drawn ~150 ms in the past, smoothly interpolated between snapshots. A car YOU hit is simulated
+  // here (the crash physics) and its resting place is reported back so everyone sees it.
+  applySnapshot(m) {
+    const now = performance.now() / 1000, off = now - m.ts;
+    this.srvOff = this.srvOff === undefined ? off : Math.min(off, this.srvOff + 0.0005);   // fastest delivery seen (drifts up slowly)
+    if (!this.byId) this.byId = new Map();
+    for (const [id, key, color] of m.add || []) {
+      if (this.byId.has(id)) continue;
+      const type = TTYPES.find(t => t.key === key) || TTYPES[0];
+      const vis = makeVehicle(type.key, paintMat(color), null, true);
+      vis.root.visible = false;
+      this.scene.add(vis.root);
+      const M = vis.M;
+      const c = { id, type, vis, front: M.front, rear: M.rear, hw: M.W, hull: M.hull, mass: type.mass, Iz: type.mass * ((M.front - M.rear) ** 2 + (2 * M.W) ** 2) / 12,
+        s: 0, d: 0, v: 0, acc: 0, relYaw: 0, lane: 0, tgt: 0, ind: 0, crashed: false, body: null, yaw: 0, crashT: 0, x: 0, z: 0,
+        nm: { active: false, done: false, min: 9 }, buf: [], remote: true };
+      this.byId.set(id, c); this.cars.push(c);
+    }
+    for (const id of m.rm || []) { const c = this.byId.get(id); if (c) c.goneAt = m.ts; }
+    for (const e of m.cars) {
+      const c = this.byId.get(e[0]); if (!c) continue;
+      c.goneAt = undefined;
+      c.buf.push({ t: m.ts, s: m.base + e[1] / 10, d: e[2] / 100, v: e[3] / 10, f: e[4], ry: e[5] / 1000 });
+      if (c.buf.length > 16) c.buf.shift();
+    }
+  }
+  sampleRemote(c, t) {
+    const b = c.buf; if (!b.length) return null;
+    let i = b.length - 1;
+    while (i > 0 && b[i - 1].t > t) i--;
+    if (i === 0) return b[0];
+    const a = b[i - 1], n = b[i], k = U.clamp((t - a.t) / Math.max(n.t - a.t, 1e-3), 0, 1.6);
+    return { s: a.s + (n.s - a.s) * k, d: a.d + (n.d - a.d) * k, v: a.v + (n.v - a.v) * k, ry: a.ry + U.wrap(n.ry - a.ry) * k, f: k < 0.5 ? a.f : n.f };
+  }
+  updateRemote(dt, P) {
+    const rt = performance.now() / 1000 - (this.srvOff || 0) - 0.15;
+    const blink = (this.time * 1.45 % 1) < 0.55;
+    for (let i = this.cars.length - 1; i >= 0; i--) {
+      const c = this.cars[i];
+      if (c.goneAt !== undefined && rt >= c.goneAt && !c.local) { this.remove(i); continue; }
+      if (c.local) {                                   // a car we hit: our crash physics, reported to everyone
+        this.updateCrashed(c, dt);
+        c.repT = (c.repT || 0) - dt;
+        if (c.repT <= 0 && c.crashT < 12 && this.onReport) { c.repT = 0.1; this.onReport(c); }
+        continue;
+      }
+      const st = this.sampleRemote(c, rt);
+      if (!st) continue;
+      const pd = c.d;
+      c.s = st.s; c.d = st.d; c.v = st.v; c.relYaw = st.ry;
+      c.crashed = !!(st.f & 8);
+      const p = ROAD.pos(c.s, c.d);
+      c.x = p.x; c.z = p.z; c.yaw = ROAD.yaw(c.s) + c.relYaw;
+      const vis = c.vis;
+      vis.root.visible = true;
+      vis.root.position.set(p.x, 0, p.z);
+      vis.root.rotation.y = -c.yaw;
+      const near = Math.abs(c.s - P.s) < 160;
+      if (vis.lodNear !== near) { vis.lodNear = near; for (const w of vis.wheels) w.pivot.visible = near; }
+      if (near) animateWheels(vis, c.v * dt, c.relYaw * 4);
+      const ind = c.crashed ? 0 : (st.f & 3) === 1 ? -1 : (st.f & 3) === 2 ? 1 : 0;
+      vis.brake.visible = near && (c.crashed || !!(st.f & 4));
+      vis.indL.visible = near && blink && (c.crashed || ind < 0);
+      vis.indR.visible = near && blink && (c.crashed || ind > 0);
+      c.lane = ROAD.nearestLane(c.d); c.tgt = c.lane; c.latV = (c.d - pd) / Math.max(dt, 1e-4);
+    }
+  }
 
   // ---------------------------------------------------------------- lanes / neighbours
   // an agent (car, crashed car or the player) is "in" every lane its body overlaps by more than 0.3 m
@@ -310,6 +381,7 @@ class Traffic {
   // P: player proxy {s,d,v,front,rear,hw,isPlayer}; others: friends' cars in multiplayer (same shape)
   update(dt, P, density, others) {
     this.time += dt;
+    if (this.remote) return this.updateRemote(dt, P);
     this.maintain(P, density, dt);
     this.buildLanes(P, others);
     const mergers = this.cars.filter(c => c.forced && c.ind && !c.changing && !c.crashed);
@@ -418,6 +490,7 @@ class Traffic {
 
   // ---------------------------------------------------------------- crashes
   crash(c) {
+    if (this.remote && !c.local) { c.crashed = false; c.local = true; c.crashT = 0; c.vis.root.visible = true; }   // we take over this car's crash
     if (c.crashed) return;
     c.crashed = true; c.ind = 0; c.tgt = c.lane; c.forced = false;
     const sy = Math.sin(c.yaw), cy = Math.cos(c.yaw);
@@ -456,7 +529,8 @@ class Traffic {
     const cd = ROAD.project(b.x, b.z).d;
     for (const q of pts) {
       const pr = ROAD.project(q[0], q[1]);
-      const walls = [{ sg: 1, d: ROAD.edgeR + 0.35 }, { sg: -1, d: ROAD.edgeL - 0.35 }];
+      const walls = [{ sg: -1, d: ROAD.edgeL - 0.35 }];
+      if (!ROAD.railOpen(1, pr.s) && (!ROAD.loop || cd < ROAD.edgeR + 0.35)) walls.push({ sg: 1, d: ROAD.edgeR + 0.35 });
       for (const z of ZONES.near(pr.s, pr.s)) {
         if (ZONES.frac(z, pr.s) <= 0) continue;
         const wd = ZONES.wallD(z, pr.s), sg = z.side === 0 ? -1 : 1;
@@ -495,6 +569,7 @@ class Traffic {
       SAT.toWorld(playerHull, pb.x, pb.z, player.visYaw, PA);
     }
     if (hit) player.fromBody(pb);
+    if (this.remote) return impact;            // (online the server owns the other cars)
     // crashed cars knocking into other traffic
     for (const a of this.cars) {
       if (!a.crashed) continue;
