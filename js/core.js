@@ -90,11 +90,13 @@ const LOOP = {
   L: 25200, STEP: 2,
   // lateral wiggles: [amplitude m, cycles per lap, phase] - close to the endless road's 1100 / 310 / 170 m periods
   WIG: [[80, 4, 0], [32, 13, 1.3], [10, 24, 0.4]],
-  // lot + ramp layout in road coordinates (s relative to the loop start, d = metres right of centre)
-  LOT_S0: -300, LOT_S1: -150, LOT_D0: 10, LOT_D1: 60,           // asphalt lot (d offsets beyond the right edge)
+  // start area layout in road coordinates (s relative to the loop start, d = metres right of the edge):
+  // highway -> deceleration lane -> off-ramp (entrance) -> concrete pad -> on-ramp (exit) -> acceleration lane -> highway
+  OFF0: -600, DEC1: -440, OFF_RAIL1: -380,                        // decel taper starts / off-ramp leaves the shoulder / rail closes again
+  LOT_S0: -250, LOT_S1: -170, LOT_D0: 10, LOT_D1: 50,           // the concrete pad
   RAIL_OPEN0: -60, RAIL_OPEN1: 170,                               // the right guard rail is open here (on-ramp merge)
   ACC0: 0, ACC1: 120,                                              // acceleration lane (the shoulder) before the taper
-  ROWS: [-200, -240], SPACES: 14, SPACE_W: 3, SPACE_L: 5.6, SPACE_D0: 14,   // parking rows (nose line s), spaces across
+  SPAWN_ROWS: [-198, -216], SPAWN_COLS: 6, SPAWN_D0: 16, SPAWN_DD: 5,   // 12 starting spots on the pad, noses toward the exit
 };
 Object.assign(ROAD, {
   loop: null, hintS: 0,
@@ -186,33 +188,58 @@ Object.assign(ROAD, {
   // ---- the start area (loop only): parking lot -> on-ramp -> acceleration lane -> highway ----
   // s offset from the nearest lap start (negative = before it)
   lotS(s) { if (!this.loop) return 1e9; const L = this.loop.L, w = this.wrapS(s); return w > L / 2 ? w - L : w; },
-  // centre line of the on-ramp (d), from the lot's front edge to the acceleration lane
+  // the acceleration / deceleration lane: one full lane width beside the right lane (centre d)
+  auxD() { return this.lane(3) + this.LW; },
+  // centre line of the on-ramp (d), from the pad's front edge into the acceleration lane
   rampD(ls) {
     const eR = this.edgeR, t = U.smooth(LOOP.LOT_S1, LOOP.ACC0, ls);
-    return eR + 18 + (eR - 1.5 - (eR + 18)) * t;
+    return eR + 18 + (this.auxD() - (eR + 18)) * t;
   },
-  // outer boundary (fence line) of the lot / ramp area at s, or null where there is none
+  // half-width of the on-ramp: wide where it leaves the pad, exactly one lane where it joins
+  rampHW(ls) { return this.LW / 2 + 1.75 * (1 - U.smooth(LOOP.LOT_S1, LOOP.ACC0, ls)); },
+  // centre line + half-width of the off-ramp, from the deceleration lane to the pad's back edge
+  offD(ls) {
+    const eR = this.edgeR, t = U.smooth(LOOP.DEC1, LOOP.LOT_S0, ls);
+    return this.auxD() + (eR + 18 - this.auxD()) * t;
+  },
+  offHW(ls) { return this.LW / 2 + 1.75 * U.smooth(LOOP.DEC1, LOOP.LOT_S0, ls); },
+  // outer edge (d) of the paved acceleration / deceleration lane at s, or null where there is none
+  auxOuter(s) {
+    const ls = this.lotS(s), D = LOOP, e = 2 * this.LW, full = e + this.LW;
+    if (ls >= D.OFF0 && ls < D.OFF0 + 60) return U.lerp(e, full, (ls - D.OFF0) / 60);
+    if (ls >= D.OFF0 + 60 && ls < D.DEC1) return full;       // (the off-ramp takes over exactly where it leaves...
+    if (ls >= D.ACC0 && ls < D.ACC1) return full;            //  ...and the on-ramp hands over exactly where it joins)
+    if (ls >= D.ACC1 && ls < D.RAIL_OPEN1) return U.lerp(full, e, (ls - D.ACC1) / (D.RAIL_OPEN1 - D.ACC1));
+    return null;
+  },
+  // outer boundary (fence line) of the start area at s, or null where there is none
   lotOuter(s) {
-    const ls = this.lotS(s), eR = this.edgeR;
-    if (ls < LOOP.LOT_S0 || ls > LOOP.RAIL_OPEN1) return null;
-    if (ls <= LOOP.LOT_S1) return eR + LOOP.LOT_D1 + 1;
-    if (ls <= LOOP.LOT_S1 + 12) return U.lerp(eR + LOOP.LOT_D1 + 1, this.rampD(LOOP.LOT_S1 + 12) + 4.5, (ls - LOOP.LOT_S1) / 12);
-    if (ls <= LOOP.ACC0) return Math.max(this.rampD(ls) + 4.5, eR + 3);
-    if (ls <= LOOP.ACC0 + 20) return U.lerp(eR + 3, eR + 1.6, (ls - LOOP.ACC0) / 20);
-    if (ls <= LOOP.ACC1) return eR + 1.6;
+    const ls = this.lotS(s), eR = this.edgeR, D = LOOP;
+    if (ls < D.OFF0 || ls > D.RAIL_OPEN1) return null;
+    if (ls <= D.OFF0 + 40) return U.lerp(eR + 0.35, eR + 1.6, (ls - D.OFF0) / 40);          // deceleration lane taper
+    if (ls <= D.DEC1) return eR + 1.6;
+    if (ls <= D.LOT_S0 - 12) return Math.max(this.offD(ls) + this.offHW(ls) + 0.9, eR + 1.6);   // off-ramp
+    if (ls <= D.LOT_S0) { const a = D.LOT_S0 - 12; return U.lerp(this.offD(a) + this.offHW(a) + 0.9, eR + D.LOT_D1 + 1, (ls - a) / 12); }
+    if (ls <= D.LOT_S1) return eR + D.LOT_D1 + 1;
+    const rOut = x => this.rampD(x) + this.rampHW(x) + 0.9;
+    if (ls <= LOOP.LOT_S1 + 12) return U.lerp(eR + LOOP.LOT_D1 + 1, rOut(LOOP.LOT_S1 + 12), (ls - LOOP.LOT_S1) / 12);   // on-ramp
+    if (ls <= LOOP.ACC1) return Math.max(rOut(ls), eR + 1.6);
     return U.lerp(eR + 1.6, eR + 0.35, (ls - LOOP.ACC1) / (LOOP.RAIL_OPEN1 - LOOP.ACC1));
   },
-  railOpen(side, s) { if (!this.loop || side < 0) return false; const ls = this.lotS(s); return ls > LOOP.RAIL_OPEN0 && ls < LOOP.RAIL_OPEN1; },
+  railOpen(side, s) {
+    if (!this.loop || side < 0) return false;
+    const ls = this.lotS(s);
+    return (ls > LOOP.OFF0 && ls < LOOP.OFF_RAIL1) || (ls > LOOP.RAIL_OPEN0 && ls < LOOP.RAIL_OPEN1);
+  },
   // inside the lot / ramp area (pad: extra margin)?
   inLot(s, d, pad = 0) {
     const o = this.lotOuter(s); if (o === null) return false;
     return d > this.edgeR - 0.2 - pad && d < o + pad;
   },
-  // world position + heading of parking space i (0 = front row, nearest the exit)
+  // starting spot i on the pad (0 = front row, nearest the exit)
   lotSpace(i) {
-    const row = Math.floor(i / LOOP.SPACES) % LOOP.ROWS.length, col = i % LOOP.SPACES;
-    const s = LOOP.ROWS[row] - LOOP.SPACE_L / 2, d = this.edgeR + LOOP.SPACE_D0 + LOOP.SPACE_W * (col + 0.5);
-    return { s, d };
+    const D = LOOP, row = Math.floor(i / D.SPAWN_COLS) % D.SPAWN_ROWS.length, col = i % D.SPAWN_COLS;
+    return { s: D.SPAWN_ROWS[row], d: this.edgeR + D.SPAWN_D0 + D.SPAWN_DD * col };
   },
   // is (x, z) clear of every OTHER part of the loop by at least r metres? (scenery placement)
   clearOfLoop(x, z, r, sOwn) {

@@ -65,6 +65,7 @@ class World {
       ico1: new THREE.IcosahedronGeometry(1, 1).toNonIndexed(),
       dode: new THREE.DodecahedronGeometry(1, 0).toNonIndexed(),
       cyl5: new THREE.CylinderGeometry(1, 1, 1, 5).toNonIndexed(),
+      disc: new THREE.CylinderGeometry(1, 1, 1, 24).rotateX(Math.PI / 2).toNonIndexed(),   // round sign face (axis along z)
     };
     this.clouds = this.makeClouds();
   }
@@ -132,7 +133,7 @@ class World {
   blocked(s, d, r, p) {
     if (!ROAD.loop) return false;
     const ls = ROAD.lotS(s);
-    if (d > 0 && ls > LOOP.LOT_S0 - r - 15 && ls < LOOP.RAIL_OPEN1 + r + 10 && d < ROAD.edgeR + LOOP.LOT_D1 + r + 12) return true;
+    if (d > 0 && ls > LOOP.OFF0 - r - 15 && ls < LOOP.RAIL_OPEN1 + r + 10 && d < ROAD.edgeR + LOOP.LOT_D1 + r + 12) return true;
     return !ROAD.clearOfLoop(p[0], p[2], r, s);
   }
 
@@ -162,11 +163,19 @@ class World {
     strip(road, -2 * LW - 0.05, 2 * LW + 0.05, 0.03, 0.03, WC.asphalt);
     strip(road, 2 * LW + 0.05, eR + 0.6, 0.03, 0.02, WC.shoulder);
     strip(road, eR + 0.6, eR + 2.4, 0.02, 0.0, WC.gravel);
+    // loop: the acceleration / deceleration lane beside the start area is paved like a real lane
+    if (ROAD.loop) for (let j = 0; j < n; j++) {
+      const a = s0 + j * this.STEP, b = a + this.STEP, oa = ROAD.auxOuter(a), ob = ROAD.auxOuter(b);
+      if (oa === null || ob === null) continue;
+      road.quad(P(a, 2 * LW + 0.2, 0.036), P(b, 2 * LW + 0.2, 0.036), P(b, ob, 0.036), P(a, oa, 0.036), WC.asphalt);
+      road.quad(P(a, oa - 0.2, 0.046), P(b, ob - 0.2, 0.046), P(b, ob - 0.05, 0.046), P(a, oa - 0.05, 0.046), WC.line);
+    }
     // edge lines (loop: the right one is dashed along the on-ramp's acceleration lane)
     strip(road, -2 * LW - 0.25, -2 * LW - 0.07, 0.045, 0.045, WC.yline);
     for (let j = 0; j < n; j++) {
       const a = s0 + j * this.STEP, b = a + this.STEP, ls = ROAD.lotS(a);
-      if (ls > LOOP.ACC0 - 40 && ls < LOOP.ACC1 + 40 && ((ls % 12) + 12) % 12 >= 5) continue;
+      const auxLane = (ls > LOOP.ACC0 - 15 && ls < LOOP.RAIL_OPEN1) || (ls > LOOP.OFF0 + 20 && ls < LOOP.DEC1 + 15);   // accel / decel lane
+      if (auxLane && ((ls % 12) + 12) % 12 >= 5) continue;
       road.quad(P(a, 2 * LW + 0.07, 0.045), P(b, 2 * LW + 0.07, 0.045), P(b, 2 * LW + 0.25, 0.045), P(a, 2 * LW + 0.25, 0.045), WC.line);
     }
     // dashed lane lines: 4 m dash, 10 m gap
@@ -302,12 +311,12 @@ class World {
     return grp;
   }
 
-  // ---- loop circuit start area: parking lot (spawn spaces) -> on-ramp -> acceleration lane ----
-  // Everything is laid out in road coordinates (see LOOP in core.js) so it follows the road's curve.
+  // ---- loop circuit start area (see LOOP in core.js): highway -> off-ramp (entrance) -> open concrete pad
+  //      (everyone starts here) -> on-ramp (exit) -> highway. Laid out in road coordinates so it follows the curve.
   buildLot() {
     const P = (s, d, y) => { const p = ROAD.pos(s, d); return [p.x, y, p.z]; };
     const D = LOOP, eR = ROAD.edgeR, G = this.G, gb = new CGB(), lines = new CGB();
-    const lotCol = COL(0x50555e), curb = COL(0xc9c7bf);
+    const curb = COL(0xd6d4cc);
     const area = (gbx, s0, s1, dA, dB, y, col, step = 5) => {   // dA / dB may be functions of s
       const fA = typeof dA === 'function' ? dA : () => dA, fB = typeof dB === 'function' ? dB : () => dB;
       for (let a = s0; a < s1 - 1e-6; a += step) {
@@ -315,25 +324,80 @@ class World {
         gbx.quad(P(a, fA(a), y), P(b, fA(b), y), P(b, fB(b), y), P(a, fB(a), y), col);
       }
     };
-    // lot surface + kerbs
-    area(gb, D.LOT_S0, D.LOT_S1, eR + D.LOT_D0, eR + D.LOT_D1, 0.035, lotCol);
-    area(gb, D.LOT_S0, D.LOT_S1, eR + D.LOT_D0 - 0.4, eR + D.LOT_D0, 0.1, curb);
-    area(gb, D.LOT_S0, D.LOT_S1, eR + D.LOT_D1, eR + D.LOT_D1 + 0.4, 0.1, curb);
-    // parking spaces: white lines between spaces + the back line of each row
-    for (const nose of D.ROWS) {
-      const back = nose - D.SPACE_L;
-      for (let c = 0; c <= D.SPACES; c++) {
-        const d = eR + D.SPACE_D0 + D.SPACE_W * c;
-        area(lines, back, nose, d - 0.06, d + 0.06, 0.05, WC.line, D.SPACE_L);
+    const kerbAcross = (s, d0, d1) => { const c = P(s, (d0 + d1) / 2, 0); gb.geom(G.box, this.xf(c[0], 0.07, c[2], 0, -ROAD.yaw(s), d1 - d0, 0.14, 0.4), curb); };
+    const arrow = (s, d) => {                 // white arrow painted on the ground, pointing with the traffic
+      const pt = (f, w) => P(s + f, d + w, 0.06);
+      lines.quad(pt(-1.8, -0.22), pt(0.3, -0.22), pt(0.3, 0.22), pt(-1.8, 0.22), WC.line);
+      lines.tri(pt(0.3, -0.8), pt(1.9, 0), pt(0.3, 0.8), WC.line);
+    };
+    // Double-sided sign: one face is a red "do not enter" disc with a white bar, the other a white board
+    // with a black arrow pointing straight on. The red face looks toward +s (drivers heading the wrong way
+    // see it), the arrow toward -s (drivers going the right way see it).
+    const sign = (s, d) => {
+      const yaw = -ROAD.yaw(s), p = P(s, d, 0), y = 2.55;
+      gb.geom(G.box, this.xf(p[0], 1.3, p[2], 0, yaw, 0.1, 2.6, 0.1), WC.pole);
+      gb.geom(G.box, this.xf(p[0], y, p[2], 0, yaw, 0.98, 0.98, 0.05), COL(0x3a3f48));            // backing plate
+      const red = P(s + 0.05, d, 0), bar = P(s + 0.075, d, 0);
+      gb.geom(G.disc, this.xf(red[0], y, red[2], 0, yaw, 0.46, 0.46, 0.02), COL(0xd0222b).multiplyScalar(1.25));
+      gb.geom(G.box, this.xf(bar[0], y, bar[2], 0, yaw, 0.6, 0.13, 0.02), WC.wwhite);
+      const wht = P(s - 0.05, d, 0), blk = P(s - 0.075, d, 0);
+      gb.geom(G.box, this.xf(wht[0], y, wht[2], 0, yaw, 0.88, 0.88, 0.02), WC.wwhite);
+      gb.geom(G.box, this.xf(blk[0], y - 0.08, blk[2], 0, yaw, 0.12, 0.48, 0.02), WC.black);   // arrow shaft
+      gb.geom(G.box, this.xf(blk[0] + Math.cos(yaw) * 0.08, y + 0.16, blk[2] - Math.sin(yaw) * 0.08, 0, yaw, 0.12, 0.34, 0.02, 0.8), WC.black);
+      gb.geom(G.box, this.xf(blk[0] - Math.cos(yaw) * 0.08, y + 0.16, blk[2] + Math.sin(yaw) * 0.08, 0, yaw, 0.12, 0.34, 0.02, -0.8), WC.black);
+    };
+
+    // the pad: plain asphalt (same as the road), a low kerb all round (open at the entrance and the exit)
+    const d0 = eR + D.LOT_D0, d1 = eR + D.LOT_D1;
+    area(gb, D.LOT_S0, D.LOT_S1, d0, d1, 0.035, WC.asphalt);
+    area(gb, D.LOT_S0, D.LOT_S1, d0 - 0.4, d0, 0.12, curb);
+    area(gb, D.LOT_S0, D.LOT_S1, d1, d1 + 0.4, 0.12, curb);
+    const inA = ROAD.offD(D.LOT_S0) - ROAD.offHW(D.LOT_S0), inB = ROAD.offD(D.LOT_S0) + ROAD.offHW(D.LOT_S0);
+    const outA = ROAD.rampD(D.LOT_S1) - ROAD.rampHW(D.LOT_S1), outB = ROAD.rampD(D.LOT_S1) + ROAD.rampHW(D.LOT_S1);
+    kerbAcross(D.LOT_S0, d0 - 0.4, inA); kerbAcross(D.LOT_S0, inB, d1 + 0.4);
+    kerbAcross(D.LOT_S1, d0 - 0.4, outA); kerbAcross(D.LOT_S1, outB, d1 + 0.4);
+
+    // The ramps narrow to exactly one lane where they meet the deceleration / acceleration lane, so their
+    // edges line up with it. Between a ramp and the highway's edge line there's a striped gore that ends
+    // in a point; the ramp's inner line stops there. Kerbs only near the pad.
+    const edge = 2 * ROAD.LW + 0.25;
+    // gore between a ramp and the highway: paved like the road, with long thin diagonal stripes that
+    // point along the traffic (like real merge markings), ending in the point where the two meet
+    const gore = (from, to, inner, dir) => {             // dir +1: gore widens with s (off-ramp), -1: narrows (on-ramp)
+      area(gb, from, to, edge - 0.05, s => Math.max(edge, inner(s) - 0.05), 0.034, WC.asphalt, 2);
+      for (let s = from; s < to; s += 9) {
+        const s2 = s + 12 * dir, d2 = inner(s2) - 0.25;     // each stripe leans with the traffic, ~12 m long
+        if (d2 < edge + 0.5 || (dir < 0 ? s2 < from - 12 : s2 > to + 12)) continue;
+        lines.quad(P(s, edge, 0.05), P(s + 0.35 * dir, edge, 0.05), P(s2 + 0.35 * dir, d2, 0.05), P(s2, d2, 0.05), WC.line);
       }
-      area(lines, back - 0.12, back, eR + D.SPACE_D0, eR + D.SPACE_D0 + D.SPACE_W * D.SPACES, 0.05, WC.line, 0.12);
+    };
+    // off-ramp (entrance): leaves the deceleration lane and curves onto the pad's back edge
+    const oA = s => ROAD.offD(s) - ROAD.offHW(s), oB = s => ROAD.offD(s) + ROAD.offHW(s);
+    let tipOff = D.DEC1; while (tipOff < D.LOT_S0 && oA(tipOff) < edge + 0.3) tipOff++;
+    area(gb, D.DEC1, D.LOT_S0, oA, oB, 0.04, WC.asphalt, 2);
+    area(lines, tipOff, D.LOT_S0, s => oA(s) + 0.05, s => oA(s) + 0.2, 0.055, WC.line, 2);
+    area(lines, D.DEC1, D.LOT_S0, s => oB(s) - 0.2, s => oB(s) - 0.05, 0.055, WC.line, 2);
+    gore(tipOff, tipOff + 70, oA, 1);
+    area(gb, D.LOT_S0 - 50, D.LOT_S0, s => oA(s) - 0.35, oA, 0.12, curb, 2);
+    area(gb, D.LOT_S0 - 50, D.LOT_S0, oB, s => oB(s) + 0.35, 0.12, curb, 2);
+    arrow(D.LOT_S0 - 20, ROAD.offD(D.LOT_S0 - 20));
+    // on-ramp (exit): from the pad's front edge down into the acceleration lane
+    const rA = s => ROAD.rampD(s) - ROAD.rampHW(s), rB = s => ROAD.rampD(s) + ROAD.rampHW(s);
+    let tipOn = D.ACC0; while (tipOn > D.LOT_S1 && rA(tipOn) < edge + 0.3) tipOn--;
+    area(gb, D.LOT_S1, D.ACC0, rA, rB, 0.04, WC.asphalt, 2);
+    area(lines, D.LOT_S1, tipOn, s => rA(s) + 0.05, s => rA(s) + 0.2, 0.055, WC.line, 2);
+    area(lines, D.LOT_S1, D.ACC0, s => rB(s) - 0.2, s => rB(s) - 0.05, 0.055, WC.line, 2);
+    gore(tipOn - 70, tipOn, rA, -1);
+    area(gb, D.LOT_S1, D.LOT_S1 + 50, s => rA(s) - 0.35, rA, 0.12, curb, 2);
+    area(gb, D.LOT_S1, D.LOT_S1 + 50, rB, s => rB(s) + 0.35, 0.12, curb, 2);
+    arrow(D.LOT_S1 + 12, ROAD.rampD(D.LOT_S1 + 12));
+    // signs either side of both openings
+    for (const k of [-1, 1]) {
+      sign(D.LOT_S0 + 1.5, ROAD.offD(D.LOT_S0) + k * 5.4);      // entrance: arrow toward arriving cars, "do not enter" toward the pad
+      sign(D.LOT_S1 - 1.5, ROAD.rampD(D.LOT_S1) + k * 5.4);     // exit: arrow toward the pad, "do not enter" toward the ramp
     }
-    // on-ramp: from the lot's front edge, curving down onto the shoulder (= acceleration lane)
-    const rA = s => ROAD.rampD(s) - 3.6, rB = s => ROAD.rampD(s) + 3.6;
-    area(gb, D.LOT_S1, D.ACC0 + 10, rA, rB, 0.04, WC.asphalt, 2);
-    area(lines, D.LOT_S1, D.ACC0 - 25, s => rA(s) + 0.25, s => rA(s) + 0.4, 0.055, WC.line, 2);
-    area(lines, D.LOT_S1, D.ACC0, s => rB(s) - 0.4, s => rB(s) - 0.25, 0.055, WC.line, 2);
-    // fence along the outside of the lot + ramp (same steel rail as the highway), and the lot's far end
+
+    // fence along the outside of the whole start area (same steel rail as the highway)
     const rail = (pts) => {
       for (let i = 0; i < pts.length - 1; i++) {
         const [a, b] = [pts[i], pts[i + 1]];
@@ -345,35 +409,9 @@ class World {
       for (let i = 0; i < pts.length; i += 2) { const p = P(pts[i][0], pts[i][1], 0); gb.geom(G.box, this.xf(p[0], 0.4, p[2], 0, 0, 0.13, 0.8, 0.13), WC.post); }
     };
     const outer = [];
-    for (let s = D.LOT_S0; s <= D.RAIL_OPEN1; s += 2) outer.push([s, ROAD.lotOuter(s) + 0.1]);
+    for (let s = D.OFF0; s <= D.RAIL_OPEN1; s += 2) outer.push([s, ROAD.lotOuter(s) + 0.1]);
     rail(outer);
-    const endPts = []; for (let d = eR + 0.35; d <= eR + D.LOT_D1 + 1.1; d += 2) endPts.push([D.LOT_S0 - 0.3, d]);
-    rail(endPts);
-    // garage / clubhouse at the back of the lot
-    { const sm = D.LOT_S0 + 20, dm = eR + 45, p = P(sm, dm, 0), yaw = -ROAD.yaw(sm);
-      gb.geom(G.box, this.xf(p[0], 2.6, p[2], 0, yaw, 22, 5.2, 26), COL(0xe9e6de));                 // walls
-      gb.geom(G.box, this.xf(p[0], 5.45, p[2], 0, yaw, 23, 0.5, 27), COL(0x2f3440));                 // roof
-      const f = P(sm + 13.05, dm, 0);                                                                // front (faces the spaces)
-      for (const k of [-1, 0, 1]) { const q = P(sm + 13.05, dm + k * 7, 0); gb.geom(G.box, this.xf(q[0], 1.7, q[2], 0, yaw, 5.4, 3.4, 0.12), COL(0x3a404c)); }
-      gb.geom(G.box, this.xf(f[0], 4.5, f[2], 0, yaw, 20, 0.7, 0.14), WC.yellow);                  // yellow stripe
-      const sg = P(sm, dm - 8, 0); gb.geom(G.box, this.xf(sg[0], 7.2, sg[2], 0, yaw, 0.4, 3, 14), COL(0x161b24));   // roof sign, facing the road
-      const sy = P(sm, dm - 8.25, 0); gb.geom(G.box, this.xf(sy[0], 7.2, sy[2], 0, yaw, 0.1, 0.55, 12.6), WC.yellow);
-    }
-    // light poles around the lot
-    for (const [s, d] of [[-150, eR + 12], [-150, eR + 58], [-222, eR + 12], [-222, eR + 58], [-268, eR + 12]]) {
-      const p = P(s, d, 0), yaw = -ROAD.yaw(s);
-      gb.geom(G.cyl5, this.xf(p[0], 4.5, p[2], 0, yaw, 0.14, 9, 0.14), WC.pole);
-      gb.geom(G.box, this.xf(p[0], 9, p[2], 0, yaw, 1.6, 0.2, 0.5), WC.pole);
-    }
-    // green "to highway" sign at the lot exit
-    { const s = D.LOT_S1 + 6, p = P(s, ROAD.rampD(s) + 5.5, 0), yaw = -ROAD.yaw(s);
-      gb.geom(G.box, this.xf(p[0], 1.4, p[2], 0, yaw, 0.12, 2.8, 0.12), WC.pole);
-      gb.geom(G.box, this.xf(p[0], 3.1, p[2], 0, yaw, 2.6, 1.3, 0.1), WC.sign);
-      const q = P(s - 0.08, ROAD.rampD(s) + 5.5, 0), tip = P(s - 0.08, ROAD.rampD(s) + 5.5 - 0.55, 0);   // arrow pointing toward the highway
-      gb.geom(G.box, this.xf(q[0], 3.1, q[2], 0, yaw, 1.4, 0.18, 0.04), WC.signW);
-      gb.geom(G.box, this.xf(tip[0], 3.22, tip[2], 0, yaw, 0.6, 0.18, 0.04, -0.75), WC.signW);
-      gb.geom(G.box, this.xf(tip[0], 2.98, tip[2], 0, yaw, 0.6, 0.18, 0.04, 0.75), WC.signW);
-    }
+
     const grp = new THREE.Group();
     const m = new THREE.Mesh(gb.build(), this.mat); m.castShadow = true; m.receiveShadow = true;
     const l = new THREE.Mesh(lines.build(), this.roadMat); l.receiveShadow = true;

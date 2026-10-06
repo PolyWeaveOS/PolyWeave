@@ -99,7 +99,7 @@ const Net = {
     if (c.length !== 6) { this.status('Enter the 6-character code, e.g. K7P-2QX', 'err'); return; }
     return this.request({ t: 'join', code: c, name, color, ext: this.ext }, 'Joining ' + c.slice(0, 3) + '-' + c.slice(3) + '…');
   },
-  // opts.scored: leaderboard server (65% traffic); otherwise free drive with opts.density traffic
+  // opts.scored: leaderboard server (60% traffic); otherwise free drive with opts.density traffic
   host(name, color, opts = {}) {
     return this.request({ t: 'create', name, color, ext: this.ext, scored: !!opts.scored, density: opts.density }, 'Creating your private server…');
   },
@@ -119,6 +119,9 @@ const Net = {
   },
   // a traffic car I crashed into: tell the server where it ends up (everyone sees the wreck there)
   reportCrash(c) { this.send({ t: 'crash', id: c.id, s: +c.s.toFixed(2), d: +c.d.toFixed(2), ry: +U.wrap(c.yaw - ROAD.yaw(c.s)).toFixed(3) }); },
+  // that car got going again (back in lane `lane` at speed v) / couldn't and disappeared
+  reportRecover(c) { this.send({ t: 'recover', id: c.id, s: +c.s.toFixed(2), lane: c.lane, v: +c.v.toFixed(2) }); },
+  reportGone(c) { this.send({ t: 'gone', id: c.id }); },
 
   onData(m) {
     if (!m || typeof m !== 'object') return;
@@ -128,7 +131,7 @@ const Net = {
     else if (m.t === 'joined') {
       this.clearRoom();
       this.myId = m.id;
-      this.room = { id: m.room, name: m.name, pub: !!m.pub, code: m.code || '', scored: !!m.scored, density: Number.isFinite(m.density) ? m.density : 0.65 };
+      this.room = { id: m.room, name: m.name, pub: !!m.pub, code: m.code || '', scored: !!m.scored, density: Number.isFinite(m.density) ? m.density : 0.6 };
       this.myBest = m.best || 0;
       this.status(m.pub ? `Connected to ${m.name}` : `Connected to ${m.name} · code ${m.code}`, 'ok');
       this.changed();

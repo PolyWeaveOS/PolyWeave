@@ -62,7 +62,9 @@ class TrafficCar {
     this.bComf = type.truck ? 1.6 : 2.2;
     this.thresh = U.rand(0.15, 0.3);                     // how much better a lane must be to bother
     this.latMax = type.truck ? U.rand(0.65, 0.95) : U.rand(0.9, 1.35);   // sideways speed when changing lanes (m/s)
-    this.mergeAt = type.truck ? U.rand(200, 350) : U.rand(120, 320);     // where they leave a closing lane
+    this.mergeAt = type.truck ? U.rand(300, 700) : U.rand(150, 650);     // where they leave a closing lane (spread out, not all at the cones)
+    this.courteous = Math.random() < 0.5;                // moves out of the lane next to roadworks to make room for mergers
+    this.spreads = Math.random() < 0.75;                 // moves back into the reopened lane after roadworks
     // state
     this.s = s; this.lane = lane; this.tgt = lane; this.d = ROAD.lane(lane); this.latV = 0;
     this.v0 = this.laneV0(lane); this.v = this.v0; this.acc = 0; this.relYaw = 0;
@@ -141,10 +143,12 @@ class Traffic {
     for (let i = this.cars.length - 1; i >= 0; i--) {
       const c = this.cars[i];
       if (c.goneAt !== undefined && rt >= c.goneAt && !c.local) { this.remove(i); continue; }
-      if (c.local) {                                   // a car we hit: our crash physics, reported to everyone
+      if (c.local) {                                   // a car we hit: our crash physics + recovery, reported to everyone
         this.updateCrashed(c, dt);
+        if (c.gone) { if (this.onGone) this.onGone(c); this.remove(i); continue; }
+        if (!c.local) continue;                        // (just recovered: the server drives it again)
         c.repT = (c.repT || 0) - dt;
-        if (c.repT <= 0 && c.crashT < 12 && this.onReport) { c.repT = 0.1; this.onReport(c); }
+        if (c.repT <= 0 && this.onReport) { c.repT = 0.1; this.onReport(c); }
         continue;
       }
       const st = this.sampleRemote(c, rt);
@@ -176,9 +180,15 @@ class Traffic {
     for (let l = 0; l < ROAD.LANES; l++) if (Math.abs(d - ROAD.lane(l)) < ROAD.LW / 2 + hw - 0.3) out.push(l);
     return out;
   }
+  // sideways half-width an agent takes up: a crashed car turned across the road covers far more than its own width
+  static widthOf(o) {
+    if (!o.crashed) return o.hw;
+    const ry = o.body ? U.wrap(o.yaw - ROAD.yaw(o.s)) : (o.relYaw || 0);
+    return Math.abs(Math.sin(ry)) * (o.front - o.rear) / 2 + Math.abs(Math.cos(ry)) * o.hw;
+  }
   buildLanes(P, extra) {
     for (const L of this.lanes) L.length = 0;
-    const add = o => { for (const l of Traffic.lanesOf(o.d, o.hw)) this.lanes[l].push(o); };
+    const add = o => { for (const l of Traffic.lanesOf(o.d, Traffic.widthOf(o))) this.lanes[l].push(o); };
     for (const c of this.cars) add(c);
     if (P) add(P);
     if (extra) for (const o of extra) add(o);   // multiplayer: friends' cars
@@ -240,6 +250,14 @@ class Traffic {
     }
     if (c.v < 8) return;                                         // no optional lane changes in a crawl
     const post = this.inPostZone(c.s);
+    // roadworks: the lane that just reopened (drivers spread back into it), and the lane next to a
+    // closure coming up (courteous drivers move one lane further over so the mergers have room)
+    let reopened = -1, awayDir = 0;
+    for (const z of ZONES.near(c.s - 800, c.s + 900)) {
+      if (c.s > z.end && c.s < z.end + z.taperOut + 700) reopened = z.side;
+      const next = z.side === 0 ? 1 : 2;
+      if (c.lane === next && z.start > c.s && z.start - c.s < 900) awayDir = z.side === 0 ? 1 : -1;
+    }
     let best = -1, bestGain = c.thresh;
     for (const dir of [-1, 1]) {
       const nl = c.lane + dir;
@@ -257,6 +275,8 @@ class Traffic {
         if (c.wish === dir && aNew > aCur - 0.6) gain = 0.5;
         if (held && aNew > aCur + 0.4) gain = Math.max(gain, aNew - aCur);
       } else if (held && aNew > aCur + 0.8) gain = aNew - aCur;
+      if (nl === reopened && c.spreads && aNew > aCur - 0.6) gain = Math.max(gain, 0.6);
+      if (dir === awayDir && c.courteous && aNew > aCur - 0.6) gain = Math.max(gain, 0.45);
       if (gain > bestGain) { bestGain = gain; best = nl; }
     }
     if (best >= 0) { c.forced = false; c.pending = best; c.ind = best < c.lane ? -1 : 1; c.indT = U.rand(2, 4); c.indWait = 0; c.wish = 0; }
@@ -344,15 +364,29 @@ class Traffic {
     }
   }
 
+  // Within 1.5 km before roadworks, drivers have already spread away from the closure (like real
+  // traffic): far fewer cars in the closing lane, a few fewer in the lane next to it, a few more on the
+  // other side. Two full lanes squeezing into one is more than one lane can carry, so without this
+  // the merge always jams. Returns a multiplier per lane for the stretch [a, b].
+  static zoneShares(T, a, b) {
+    const k = [1, 1, 1, 1];
+    for (const side of [0, 3]) {
+      if (!T.closedLaneAhead(side, a, b - a + 1500)) continue;
+      const next = side === 0 ? 1 : 2, far = side === 0 ? 2 : 1;
+      k[side] *= 0.35; k[next] *= 0.85; k[far] *= 1.15; k[side === 0 ? 3 : 0] *= 1.1;
+    }
+    return k;
+  }
+
   // bring every lane in [a, b] back to its even spacing: add into the biggest gaps, remove the most crowded extras
   fillBand(P, a, b, density) {
     const N = this.target(density), shares = [0.26, 0.26, 0.25, 0.23];
     const closed = [0, 1, 2, 3].map(l => !!this.closedLaneAhead(l, a - 20, b - a + 40));
+    const laneK = Traffic.zoneShares(this, a, b);
     for (let l = 0; l < ROAD.LANES; l++) {
       if (closed[l]) continue;                                    // roadworks: no cars in a closed lane
       const spacing = (WIN_AHEAD + WIN_BACK) / Math.max(N * shares[l], 1);
-      let want = (b - a) / spacing * RUN_DENSITY;
-      if ((l === 1 && closed[0]) || (l === 2 && closed[3])) want *= 1.1;   // open lane next to a closure takes a little extra
+      const want = (b - a) / spacing * RUN_DENSITY * laneK[l];
       const inBand = () => this.cars.filter(c => !c.crashed && Math.abs(c.d - ROAD.lane(l)) < 1.2 && c.s > a && c.s < b);
       let guard = 0;
       while (inBand().length < want - 0.5 && guard++ < 6) {
@@ -382,6 +416,7 @@ class Traffic {
   update(dt, P, density, others) {
     this.time += dt;
     if (this.remote) return this.updateRemote(dt, P);
+    for (let i = this.cars.length - 1; i >= 0; i--) if (this.cars[i].gone) this.remove(i);   // wrecks that couldn't get going again
     this.maintain(P, density, dt);
     this.buildLanes(P, others);
     const mergers = this.cars.filter(c => c.forced && c.ind && !c.changing && !c.crashed);
@@ -498,9 +533,67 @@ class Traffic {
     c.nm.done = true;
   }
 
+  // ---- after a crash: once the car has stopped it straightens up and pulls back into the nearest clear
+  // lane, then drives on. If it's off the road, or no lane frees up for a while, it disappears instead.
+  laneClearFor(c, l, s) {
+    const d = ROAD.lane(l);
+    for (const o of this.cars) {
+      if (o === c || Math.abs(o.d - d) > 2.8) continue;
+      if (o.s > s && o.s - s < 12) return false;                                         // someone right ahead
+      if (o.s <= s && s - o.s < 8 + Math.max(0, (o.v || 0) - 10) * 1.3) return false;   // someone coming too fast behind
+    }
+    return true;
+  }
+  startRecovery(c) {
+    const pr = ROAD.project(c.body.x, c.body.z);
+    if (pr.d < ROAD.edgeL - 0.5 || pr.d > ROAD.edgeR + 0.5) { c.rec = { fade: true, t: 0 }; return; }
+    const pref = ROAD.nearestLane(pr.d);
+    for (const l of [pref, pref - 1, pref + 1, pref - 2, pref + 2]) {
+      if (l < 0 || l >= ROAD.LANES || !this.laneClearFor(c, l, pr.s)) continue;
+      c.rec = { t: 0, T: 2.6, s: pr.s, d0: pr.d, ry0: U.wrap(c.yaw - ROAD.yaw(pr.s)), lane: l, v: 0 };
+      return;
+    }
+    if (c.crashT > 10) c.rec = { fade: true, t: 0 };            // boxed in for too long: just disappear
+  }
+  recoverStep(c, dt) {
+    const r = c.rec, vis = c.vis;
+    r.t += dt;
+    if (r.fade) {                                              // sink out of sight, then gone
+      const k = Math.min(1, r.t / 1.2);
+      vis.root.position.y = -1.8 * k * k;
+      if (k >= 1) c.gone = true;
+      return;
+    }
+    const k = U.smooth(0, 1, r.t / r.T);
+    r.v = Math.min(17, r.v + 6.5 * dt);                       // (gets up to ~60 km/h; the lane's flow carries it on from there)
+    r.s += r.v * dt;
+    c.s = r.s; c.d = U.lerp(r.d0, ROAD.lane(r.lane), k); c.relYaw = r.ry0 * (1 - k); c.v = r.v;
+    const p = ROAD.pos(c.s, c.d);
+    c.x = p.x; c.z = p.z; c.yaw = ROAD.yaw(c.s) + c.relYaw;
+    const b = c.body;                                          // (keep the physics body with it, in case it's hit again)
+    b.x = c.x; b.z = c.z; b.vx = c.v * Math.sin(c.yaw); b.vz = -c.v * Math.cos(c.yaw); b.w = 0;
+    vis.root.position.set(c.x, 0, c.z); vis.root.rotation.y = -c.yaw;
+    animateWheels(vis, c.v * dt, 0);
+    vis.brake.visible = false; vis.indL.visible = vis.indR.visible = (this.time * 1.45 % 1) < 0.55;
+    if (r.t < r.T) return;
+    // back to normal driving
+    c.crashed = false; c.body = null; c.rec = null; c.crashT = 0;
+    c.lane = c.tgt = r.lane; c.d = ROAD.lane(r.lane); c.relYaw = 0; c.latV = 0; c.acc = 0;
+    c.ind = 0; c.forced = false; c.blocked = false; c.pending = undefined; c.cool = U.rand(3, 6); c.check = 1;
+    c.nm = { active: false, done: true, min: 9 };
+    vis.indL.visible = vis.indR.visible = false;
+    if (this.remote) { c.local = false; c.buf = []; if (this.onRecover) this.onRecover(c); }
+  }
+
   updateCrashed(c, dt) {
+    if (c.rec) { this.recoverStep(c, dt); return; }
     const b = c.body;
     c.crashT += dt;
+    // stopped (or long enough): try to get going again
+    if ((c.crashT > 2.2 && Math.hypot(b.vx, b.vz) < 0.6 && Math.abs(b.w) < 0.15) || c.crashT > 8) {
+      c.recTry = (c.recTry || 0) - dt;
+      if (c.recTry <= 0) { c.recTry = 0.8; this.startRecovery(c); if (c.rec) return; }
+    }
     const sy = Math.sin(c.yaw), cy = Math.cos(c.yaw);
     let fv = b.vx * sy - b.vz * cy, lv = b.vx * cy + b.vz * sy;
     const dec = (x, a) => Math.sign(x) * Math.max(0, Math.abs(x) - a * dt);
@@ -562,6 +655,7 @@ class Traffic {
       const col = SAT.test(PA, B);
       if (!col) continue;
       this.crash(c);
+      if (c.rec) { c.rec = null; c.crashT = 0; c.vis.root.position.y = 0; }   // hit again while recovering: back to sliding
       const vn = resolveImpulse(pb, c.body, col, 0.12, 0.35);
       impact = Math.max(impact, vn);
       this.wallCollide(c); // shoved into a wall: it stops there instead of passing through
@@ -569,23 +663,30 @@ class Traffic {
       SAT.toWorld(playerHull, pb.x, pb.z, player.visYaw, PA);
     }
     if (hit) player.fromBody(pb);
-    if (this.remote) return impact;            // (online the server owns the other cars)
-    // crashed cars knocking into other traffic
+    // crashed cars are solid: a sliding wreck knocks into other cars, and a car that runs into a wreck
+    // crashes too. (Online: only the wrecks this player is simulating; the cars it hits are taken over
+    // and reported to the server, so everyone sees the pile-up.)
     for (const a of this.cars) {
-      if (!a.crashed) continue;
+      if (!a.crashed || !a.body || a.rec || (this.remote && !a.local)) continue;
       const ab = a.body;
-      if (Math.hypot(ab.vx, ab.vz) < 0.3 && Math.abs(ab.w) < 0.05) continue;
       const A = SAT.toWorld(a.hull, ab.x, ab.z, a.yaw, this._pa);
       for (const c of this.cars) {
-        if (c === a) continue;
+        if (c === a || c.rec) continue;
         const dx = c.x - ab.x, dz = c.z - ab.z;
         if (dx * dx + dz * dz > 600) continue;
+        const moving = Math.hypot(ab.vx, ab.vz) > 0.3 || Math.abs(ab.w) > 0.05;
+        if (!moving && (c.crashed || c.v < 1)) continue;         // two cars at rest don't push each other
         const B = SAT.toWorld(c.hull, c.x, c.z, c.yaw, this._pb);
         const col = SAT.test(A, B);
         if (!col) continue;
+        if (!c.crashed) {                                         // a light brush isn't a crash: only a real hit (> ~11 km/h)
+          const cvx = c.v * Math.sin(c.yaw), cvz = -c.v * Math.cos(c.yaw);
+          if ((ab.vx - cvx) * col.nx + (ab.vz - cvz) * col.nz < 3) continue;
+        }
         this.crash(c);
         resolveImpulse(ab, c.body, col, 0.15, 0.35);
-        this.wallCollide(c);
+        this.wallCollide(c); this.wallCollide(a);
+        SAT.toWorld(a.hull, ab.x, ab.z, a.yaw, A);
       }
     }
     return impact;

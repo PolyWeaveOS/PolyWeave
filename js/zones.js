@@ -5,6 +5,9 @@
 //  and collisions all agree. Roughly one zone every ~2.5-3.5 km.
 // =====================================================================
 const ZONES = {
+  // Construction is held back for Season 1 (after the beta). Everything below is kept and works:
+  // set ENABLED to true to bring roadworks back (world, traffic merging, barriers and cones all follow).
+  ENABLED: false,
   SLOT: 2600,          // one possible zone per slot
   CHANCE: 0.75,        // chance a slot has a zone
   cache: new Map(),
@@ -49,6 +52,7 @@ const ZONES = {
   // zones relevant to the stretch [s0, s1] (including their advance-warning area)
   near(s0, s1) {
     const out = [];
+    if (!this.ENABLED) return out;                 // (no roadworks until Season 1)
     for (let i = Math.floor((s0 - 800) / this.SLOT); i <= Math.floor((s1 + 800) / this.SLOT); i++) {
       const z = this.slot(i);
       if (z && z.end + z.taperOut > s0 - 60 && z.start - 420 < s1) out.push(z);

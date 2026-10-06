@@ -5,7 +5,7 @@
 
 // ---------- settings ----------
 const DEFAULTS = { density: 0.55, assist: 0, sens: 1.0, vol: 0.6, tc: true, manual: false, color: '#a6b0b8', mpDensity: 0.55, minimap: true };
-const SCORED_DENSITY = 0.65;              // scored (leaderboard) runs always use this much traffic
+const SCORED_DENSITY = 0.6;               // scored (leaderboard) runs always use this much traffic
 const Settings = Object.assign({}, DEFAULTS);
 try { Object.assign(Settings, JSON.parse(localStorage.getItem('tw_settings2') || '{}')); } catch (e) { /* ignore */ }
 const saveSettings = () => { try { localStorage.setItem('tw_settings2', JSON.stringify(Settings)); } catch (e) { /* ignore */ } };
@@ -195,11 +195,6 @@ function railCollide(h) {
       if (wl.zone && pen > 1.4) continue;          // corner is deep past the barrier line (beyond its ends)
       if (pen > 0 && (!worst || pen > worst.pen)) worst = { q, pen, nx: wl.sg * Math.cos(ry), nz: wl.sg * Math.sin(ry), zone: !!wl.zone };
     }
-    // loop: the fence across the far end of the parking lot
-    if (lotArea && pr.d > ROAD.edgeR + 0.35) {
-      const pen = LOOP.LOT_S0 - ROAD.lotS(pr.s);
-      if (pen > 0 && pen < 8 && (!worst || pen > worst.pen)) worst = { q, pen, nx: -Math.sin(ry), nz: Math.cos(ry), zone: false };
-    }
   }
   if (!worst) return 0;
   const b = car.toBody();
@@ -243,17 +238,17 @@ function exitServer() {
   startPosition();
   score.reset();
 }
-// in (or right at the edge of) the parking lot / on-ramp area beside the road
+// in (or right at the edge of) the start area beside the road: off-ramp, pad, on-ramp
 function nearLot(s, d) {
   if (!ROAD.loop || d < ROAD.edgeR - 0.5) return false;
   const ls = ROAD.lotS(s);
-  return ls > LOOP.LOT_S0 - 8 && ls < LOOP.RAIL_OPEN1 + 2 && d < ROAD.edgeR + LOOP.LOT_D1 + 8;
+  return ls > LOOP.OFF0 - 8 && ls < LOOP.RAIL_OPEN1 + 2 && d < ROAD.edgeR + LOOP.LOT_D1 + 8;
 }
-// the on-ramp's acceleration lane and the lot don't count as the shoulder
+// the deceleration / acceleration lanes and the start area don't count as the shoulder
 function inStartArea(s, d) {
   if (!ROAD.loop || d < 2 * ROAD.LW) return false;
   const ls = ROAD.lotS(s);
-  return ls > LOOP.LOT_S0 - 5 && ls < LOOP.RAIL_OPEN1 + 5;
+  return ls > LOOP.OFF0 - 5 && ls < LOOP.RAIL_OPEN1 + 5;
 }
 
 function crashEvent(strength) {
@@ -436,7 +431,7 @@ async function loadLeaderboard() {
   try { j = await (await fetch(base + '/api/leaderboard?mode=' + mode, { cache: 'no-store' })).json(); }
   catch (e) { note.textContent = 'Could not load the leaderboard. Check your internet connection.'; return; }
   if (mode !== lbTab) return;
-  note.textContent = (mode === 'sp' ? 'Top 100 scored singleplayer drives (65% traffic).' : 'Top 100 drives on public and scored servers.')
+  note.textContent = (mode === 'sp' ? 'Top 100 scored singleplayer drives (60% traffic).' : 'Top 100 drives on public and scored servers.')
     + (j.persistent ? '' : ' (Not saved permanently yet: they reset when the server restarts.)');
   const ago = t => { const m = (Date.now() - t) / 60000; return m < 60 ? Math.max(1, Math.round(m)) + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' d ago'; };
   const head = document.createElement('div'); head.className = 'lbRow head';
@@ -514,8 +509,10 @@ Net.ext = { front: M4_EXT.front, rear: M4_EXT.rear, hw: M4_EXT.hw };
 Net.refS = () => car.s;
 Net.onTraffic = m => traffic.applySnapshot(m);
 traffic.onReport = c => Net.reportCrash(c);
+traffic.onRecover = c => Net.reportRecover(c);
+traffic.onGone = c => Net.reportGone(c);
 Net.onJoined = (room, slot) => {
-  Net.slot = slot;
+  Net.slot = slot; bigMap = false;
   score.reset();
   game.mode = 'mp'; game.scored = !!room.scored; game.density = room.density;
   enterServer(slot);
@@ -561,45 +558,99 @@ function proximity(kmh) {
   return g <= 9 ? PROX_CURVE(Math.max(0.3, g)) : 1;
 }
 
-// ---------- minimap (multiplayer): you in the middle pointing up, the road and the other players around ----------
+// ---------- minimap (multiplayer) ----------
+// Small: rounded square in the corner, you in the middle pointing up, the road, the start area and other
+// players within ~600 m (players further away sit on the edge, in their direction).
+// Big (M, rebindable): the whole loop, north up, every player with their name.
 const mm = $id('minimap'), mmc = mm.getContext('2d');
-let mmT = 0;
+let mmT = 0, bigMap = false, mmSize = 0;
+const MM_SMALL = 190, MM_BIG = 420;
+const mmLoop = () => {                                     // whole loop outline (world x/z), cached
+  if (mmLoop.c && mmLoop.c.lp === ROAD.loop) return mmLoop.c;
+  const pts = []; let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+  for (let s = 0; s <= ROAD.loop.L; s += 40) { const p = ROAD.pos(s, 0); pts.push([p.x, p.z]); x0 = Math.min(x0, p.x); x1 = Math.max(x1, p.x); z0 = Math.min(z0, p.z); z1 = Math.max(z1, p.z); }
+  return (mmLoop.c = { lp: ROAD.loop, pts, x0, x1, z0, z1 });
+};
+// the start area outline: off-ramp, pad, on-ramp (road coordinates around a lap start)
+function mmStartShapes(lap) {
+  const eR = ROAD.edgeR, D = LOOP, pad = [], off = [], on = [];
+  for (const [s, d] of [[D.LOT_S0, D.LOT_D0], [D.LOT_S1, D.LOT_D0], [D.LOT_S1, D.LOT_D1], [D.LOT_S0, D.LOT_D1]]) pad.push(ROAD.pos(lap + s, eR + d));
+  for (let s = D.DEC1; s <= D.LOT_S0; s += 10) off.push(ROAD.pos(lap + s, ROAD.offD(s)));
+  for (let s = D.LOT_S1; s <= D.ACC0; s += 10) on.push(ROAD.pos(lap + s, ROAD.rampD(s)));
+  return { pad, off, on };
+}
 function drawMinimap(dt) {
-  const on = game.mode === 'mp' && Settings.minimap && !menuOpen;
+  const on = game.mode === 'mp' && !menuOpen && (Settings.minimap || bigMap);
   if (mm.classList.contains('hidden') === on) mm.classList.toggle('hidden', !on);
   if (!on || (mmT -= dt) > 0) return;
-  mmT = 0.08;
-  const W = mm.width, R = W / 2, range = 800, k = R / range, yaw = car.visYaw, sy = Math.sin(yaw), cy = Math.cos(yaw);
-  const map = (x, z) => { const dx = x - car.x, dz = z - car.z; return [R + (dx * cy + dz * sy) * k, R - (dx * sy - dz * cy) * k]; };
-  const g = mmc;
+  mmT = bigMap ? 0.12 : 0.08;
+  const size = bigMap ? MM_BIG : MM_SMALL, dpr = Math.min(devicePixelRatio || 1, 2);
+  if (mmSize !== size) { mmSize = size; mm.width = mm.height = Math.round(size * dpr); mm.style.width = mm.style.height = size + 'px'; mm.classList.toggle('big', bigMap); }
+  const g = mmc, W = size;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, W, W);
-  g.save();
-  g.beginPath(); g.arc(R, R, R - 1, 0, Math.PI * 2); g.fillStyle = 'rgba(14,18,26,0.55)'; g.fill(); g.clip();
-  // parking lot
-  const lot = [[LOOP.LOT_S0, LOOP.LOT_D0], [LOOP.LOT_S1, LOOP.LOT_D0], [LOOP.LOT_S1, LOOP.LOT_D1], [LOOP.LOT_S0, LOOP.LOT_D1]];
-  const lap = ROAD.near(0, car.s);
-  if (Math.abs(car.s - lap) < 1500) {
-    g.beginPath();
-    lot.forEach(([s, d], i) => { const p = ROAD.pos(lap + s, ROAD.edgeR + d), q = map(p.x, p.z); i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]); });
-    g.closePath(); g.fillStyle = 'rgba(160,170,185,0.45)'; g.fill();
+  g.lineJoin = g.lineCap = 'round';
+  const line = (pts, map, w, col) => { g.beginPath(); pts.forEach((p, i) => { const q = map(p.x ?? p[0], p.z ?? p[1]); i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]); }); g.lineWidth = w; g.strokeStyle = col; g.stroke(); };
+  const lap = ROAD.near(0, car.s), start = mmStartShapes(lap);
+  const dot = (x, y, col, r) => { g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fillStyle = col; g.fill(); g.lineWidth = 1.6; g.strokeStyle = '#fff'; g.stroke(); };
+  const meArrow = (x, y, ang, sc) => {
+    g.save(); g.translate(x, y); g.rotate(ang); g.scale(sc, sc);
+    g.beginPath(); g.moveTo(0, -8); g.lineTo(6, 6); g.lineTo(0, 3); g.lineTo(-6, 6); g.closePath();
+    g.fillStyle = '#ffd84a'; g.fill(); g.lineWidth = 1.4; g.strokeStyle = '#1a1f28'; g.stroke(); g.restore();
+  };
+
+  if (!bigMap) {
+    // ---- small: heading-up around me ----
+    const R = W / 2, range = 600, k = R / range, yaw = car.visYaw, sy = Math.sin(yaw), cy = Math.cos(yaw);
+    const map = (x, z) => { const dx = x - car.x, dz = z - car.z; return [R + (dx * cy + dz * sy) * k, R - (dx * sy - dz * cy) * k]; };
+    g.save(); g.beginPath(); g.rect(4, 4, W - 8, W - 8); g.clip();
+    const road = []; for (let s = car.s - range * 1.6; s <= car.s + range * 1.6; s += 10) road.push(ROAD.pos(s, 0));
+    if (Math.abs(car.s - lap) < 1600) {
+      line(start.off, map, Math.max(3, 7 * k), 'rgba(205,212,222,0.55)');
+      line(start.on, map, Math.max(3, 7 * k), 'rgba(205,212,222,0.55)');
+      g.beginPath(); start.pad.forEach((p, i) => { const q = map(p.x, p.z); i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]); }); g.closePath();
+      g.fillStyle = 'rgba(200,198,190,0.55)'; g.fill();
+    }
+    line(road, map, Math.max(6, 18 * k), 'rgba(10,13,19,0.55)');
+    line(road, map, Math.max(4, 15 * k), 'rgba(214,220,230,0.85)');
+    for (const p of Net.players.values()) {
+      const n = p.now; if (!n) continue;
+      const pos = ROAD.pos(n.s, n.d); let [x, y] = map(pos.x, pos.z);
+      const m = 11, far = x < m || y < m || x > W - m || y > W - m;
+      if (far) { const dx = x - R, dy = y - R, f = (R - m) / Math.max(Math.abs(dx), Math.abs(dy)); x = R + dx * f; y = R + dy * f; }
+      dot(x, y, p.color, far ? 4 : 5.5);
+    }
+    g.restore();
+    meArrow(R, R, 0, 1);
+    g.font = '700 10px Segoe UI, Arial'; g.textAlign = 'right'; g.fillStyle = 'rgba(255,255,255,0.6)';
+    g.fillText(keyLabel(Input.binds.map[0]) + ' · MAP', W - 9, W - 9);
+  } else {
+    // ---- big: the whole loop, north up ----
+    const L = mmLoop(), pad = 30, k = (W - pad * 2) / Math.max(L.x1 - L.x0, L.z1 - L.z0);
+    const ox = (W - (L.x1 - L.x0) * k) / 2, oz = (W - (L.z1 - L.z0) * k) / 2 + 6;
+    const map = (x, z) => [ox + (x - L.x0) * k, oz + (z - L.z0) * k];
+    g.font = '800 12px Segoe UI, Arial'; g.textAlign = 'left'; g.fillStyle = 'rgba(255,255,255,0.75)';
+    g.fillText('MAP', 14, 22);
+    g.textAlign = 'right'; g.font = '700 11px Segoe UI, Arial'; g.fillStyle = 'rgba(255,255,255,0.55)';
+    g.fillText(keyLabel(Input.binds.map[0]) + ' to close', W - 14, 22);
+    line(L.pts.concat([L.pts[0]]), map, 7, 'rgba(10,13,19,0.55)');
+    line(L.pts.concat([L.pts[0]]), map, 4.5, 'rgba(214,220,230,0.85)');
+    // start area
+    const sp = map(start.pad[0].x, start.pad[0].z);
+    g.beginPath(); g.arc(sp[0], sp[1], 7, 0, Math.PI * 2); g.fillStyle = '#2f3440'; g.fill(); g.lineWidth = 1.5; g.strokeStyle = '#d6dbe3'; g.stroke();
+    g.font = '900 9px Segoe UI, Arial'; g.textAlign = 'center'; g.fillStyle = '#ffd84a'; g.fillText('S', sp[0], sp[1] + 3.2);
+    // players with names
+    g.font = '700 11px Segoe UI, Arial';
+    for (const p of Net.players.values()) {
+      const n = p.now; if (!n) continue;
+      const pos = ROAD.pos(n.s, n.d), [x, y] = map(pos.x, pos.z);
+      dot(x, y, p.color, 5.5);
+      g.textAlign = 'left'; g.lineWidth = 3; g.strokeStyle = 'rgba(10,13,19,0.8)'; g.strokeText(p.name, x + 8, y + 4);
+      g.fillStyle = '#fff'; g.fillText(p.name, x + 8, y + 4);
+    }
+    const [mx, my] = map(car.x, car.z);
+    meArrow(mx, my, car.visYaw, 1.15);
   }
-  // road
-  g.beginPath();
-  for (let s = car.s - range * 1.6, i = 0; s <= car.s + range * 1.6; s += 12, i++) { const p = ROAD.pos(s, 0), q = map(p.x, p.z); i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]); }
-  g.lineWidth = Math.max(4, 16 * k); g.strokeStyle = 'rgba(205,212,222,0.75)'; g.lineJoin = 'round'; g.stroke();
-  // other players (clamped to the edge when far away)
-  for (const p of Net.players.values()) {
-    const n = p.now; if (!n) continue;
-    const pos = ROAD.pos(n.s, n.d); let [x, y] = map(pos.x, pos.z);
-    const dx = x - R, dy = y - R, dist = Math.hypot(dx, dy), far = dist > R - 8;
-    if (far) { x = R + dx / dist * (R - 8); y = R + dy / dist * (R - 8); }
-    g.beginPath(); g.arc(x, y, far ? 4 : 5.5, 0, Math.PI * 2); g.fillStyle = p.color; g.fill();
-    g.lineWidth = 1.5; g.strokeStyle = '#fff'; g.stroke();
-  }
-  g.restore();
-  // me: yellow arrow in the middle
-  g.beginPath(); g.moveTo(R, R - 9); g.lineTo(R + 6, R + 6); g.lineTo(R, R + 3); g.lineTo(R - 6, R + 6); g.closePath();
-  g.fillStyle = '#ffd84a'; g.fill(); g.lineWidth = 1.5; g.strokeStyle = '#1a1f28'; g.stroke();
 }
 
 // what's on the pause screen
@@ -607,7 +658,7 @@ function updatePause() {
   const r = Net.room;
   $id('pauseMode').textContent = game.mode === 'mp'
     ? `${r && r.pub ? r.name : 'Private server'} · ${game.scored ? 'Scored' : 'Free drive'} · ${Math.round(game.density * 100)}% traffic`
-    : game.scored ? 'Singleplayer · Scored · 65% traffic' : `Singleplayer · Free drive · ${Math.round(game.density * 100)}% traffic`;
+    : game.scored ? 'Singleplayer · Scored · 60% traffic' : `Singleplayer · Free drive · ${Math.round(game.density * 100)}% traffic`;
 }
 function hintText() {
   const k = a => keyLabel(Input.binds[a][0]);
@@ -622,7 +673,7 @@ function closeMenu() {
   menuOpen = false; menu.classList.add('hidden'); document.getElementById('hud').classList.remove('hidden');
   $id('hint').textContent = hintText();
   hud.trafficLabel = game.mode === 'mp' ? (game.scored ? 'SCORED SERVER' : `SHARED TRAFFIC ${Math.round(game.density * 100)}%`)
-    : game.scored ? 'SCORED · 65% TRAFFIC' : `FREE DRIVE · ${Math.round(game.density * 100)}%`;
+    : game.scored ? 'SCORED · 60% TRAFFIC' : `FREE DRIVE · ${Math.round(game.density * 100)}%`;
   sound.init(); sound.suspend(false);
   started = true; last = performance.now();
 }
@@ -816,7 +867,8 @@ function frame(now) {
     const el = $id('fdDens'); el.value = Math.round(game.density * 100); el.dispatchEvent(new Event('input'));
     hud.trafficLabel = `FREE DRIVE · ${Math.round(game.density * 100)}%`;
   }
-  if (Input.hit('KeyM')) { car.manual = Settings.manual = !car.manual; manEl.checked = car.manual; saveSettings(); }
+  if (Input.tap('gearbox')) { car.manual = Settings.manual = !car.manual; manEl.checked = car.manual; saveSettings(); hud.message(car.manual ? 'MANUAL' : 'AUTO'); }
+  if (Input.tap('map') && game.mode === 'mp') bigMap = !bigMap;
   if (Input.tap('shiftUp') || ctl.up) { if (!car.manual) { car.manual = Settings.manual = true; manEl.checked = true; } car.shift(1); }
   if (Input.tap('shiftDown') || ctl.down) { if (!car.manual) { car.manual = Settings.manual = true; manEl.checked = true; } car.shift(-1); }
 

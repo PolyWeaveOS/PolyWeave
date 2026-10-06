@@ -16,11 +16,13 @@ const PAD_DEFAULTS = {
 // keyboard actions -> keys (first key can be changed in Settings; arrows stay as a backup for driving)
 const KEY_DEFAULTS = {
   throttle: ['KeyW', 'ArrowUp'], brake: ['KeyS', 'ArrowDown'], left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'],
-  handbrake: ['Space'], shiftUp: ['KeyE'], shiftDown: ['KeyQ'], camera: ['KeyC'], reset: ['KeyR'], style: ['KeyT'],
+  handbrake: ['Space'], shiftUp: ['KeyE'], shiftDown: ['KeyQ'], gearbox: ['KeyG'], camera: ['KeyC'], reset: ['KeyR'], style: ['KeyT'],
+  map: ['KeyM'],
 };
 const KEY_NAMES = {
   throttle: 'Throttle', brake: 'Brake / reverse', left: 'Steer left', right: 'Steer right', handbrake: 'Handbrake',
-  shiftUp: 'Shift up', shiftDown: 'Shift down', camera: 'Camera (1st / 3rd person)', reset: 'Reset car', style: 'Visual style',
+  shiftUp: 'Shift up', shiftDown: 'Shift down', gearbox: 'Auto / manual gearbox', camera: 'Camera (1st / 3rd person)',
+  reset: 'Reset car', style: 'Visual style', map: 'Big map (multiplayer)',
 };
 const keyLabel = c => ({ Space: 'Space', ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→', ShiftLeft: 'L Shift', ShiftRight: 'R Shift',
   ControlLeft: 'L Ctrl', ControlRight: 'R Ctrl', AltLeft: 'L Alt', AltRight: 'R Alt', Enter: 'Enter', Tab: 'Tab', Backspace: 'Backspace' }[c]
