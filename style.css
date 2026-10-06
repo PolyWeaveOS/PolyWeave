@@ -159,6 +159,16 @@ button:disabled { opacity: .45; cursor: default; }
 .panel.narrow h1 { letter-spacing: 4px; }
 .stack { display: flex; flex-direction: column; gap: 10px; margin-top: 18px; }
 .stack button { font-size: 15px; padding: 12px; letter-spacing: 2px; }
+/* accounts (Sign in with Google) */
+.acct { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 44px; margin: -18px 0 22px; font-size: 14px; text-shadow: 0 2px 6px rgba(0,0,0,.4); }
+.acct.left { justify-content: flex-start; margin: 0 0 12px; text-shadow: none; }
+.acct .who { background: var(--panel); padding: 8px 14px; border-radius: 22px; border: 1px solid rgba(255,255,255,.12); text-shadow: none; }
+.acct .who b { color: var(--accent); }
+.acct .why { opacity: .85; font-size: 13px; }
+.acctNote { font-size: 12px; margin: -6px 0 12px; opacity: .8; }
+.acctNote.warn { color: #ffb86b; opacity: 1; }
+#acctName { width: 100%; font-size: 16px; margin-top: 8px; }
+.err { min-height: 18px; margin-top: 8px; font-size: 13px; color: var(--red); }
 /* leaderboard */
 .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
 .tab { padding: 9px 16px; font-size: 13px; letter-spacing: 2px; }

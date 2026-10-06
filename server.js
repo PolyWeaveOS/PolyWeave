@@ -14,6 +14,7 @@ const path = require('path');
 const { WebSocketServer } = require('ws');
 const { RingTraffic, nowS } = require('./trafficserver');
 const LB = require('./leaderboard');
+const Accounts = require('./accounts');
 
 const PORT = +process.env.PORT || 8790;
 const ROOT = __dirname;
@@ -59,7 +60,8 @@ for (const [id, name] of PUBLIC_ROOMS) rooms.set(id, makeRoom(id, name, true, ''
 function recordRun(p, room) {
   const pts = p.runPeak || 0; p.runPeak = 0;
   if (!room || !room.scored || pts < MIN_RUN) return;
-  LB.add('mp', p.name, pts, { server: room.pub ? room.name : 'Private' })
+  if (!p.account || !p.account.name) return;              // leaderboards are for signed-in drivers only
+  LB.add('mp', p.account.name, pts, { uid: p.account.id, server: room.pub ? room.name : 'Private' })
     .then(rank => { if (rank) send(p.ws, { t: 'rank', rank }); })
     .catch(e => console.log('leaderboard error:', e.message));
 }
@@ -119,33 +121,64 @@ const server = http.createServer((req, res) => {
     return;
   }
   const json = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); };
-  // leaderboard: GET /api/leaderboard?mode=sp|mp -> top 100
-  if (req.url.startsWith('/api/leaderboard')) {
-    const mode = new URL(req.url, 'http://x').searchParams.get('mode') === 'mp' ? 'mp' : 'sp';
-    LB.top(mode).then(list => json(200, { mode, list: list.map(e => ({ name: e.name, score: e.score, t: e.t, server: e.server })), persistent: LB.persistent }))
+  const url = new URL(req.url, 'http://x'), route = url.pathname;
+  const ip = req.headers['x-forwarded-for'] ? String(req.headers['x-forwarded-for']).split(',')[0].trim() : req.socket.remoteAddress;
+  const body = fn => {                                  // small JSON POST bodies only
+    let b = '';
+    req.on('data', c => { b += c; if (b.length > 8192) req.destroy(); });
+    req.on('end', () => { let m; try { m = JSON.parse(b); } catch (e) { json(400, { error: 'bad request' }); return; } fn(m || {}); });
+  };
+  const tooFast = (key, ms) => { const now = Date.now(); if (now - (lastHit.get(key) || 0) < ms) return true; lastHit.set(key, now); return false; };
+
+  // ---- accounts (Sign in with Google): only signed-in players get on the leaderboards
+  if (route === '/api/config') { json(200, { googleClientId: Accounts.clientId() }); return; }
+  if (route === '/api/auth/google' && req.method === 'POST') {
+    body(m => {
+      if (tooFast('auth:' + ip, 1500)) { json(429, { error: 'Too many sign-in attempts. Wait a moment.' }); return; }
+      Accounts.login(m.credential).then(({ token, user }) => json(200, { session: token, name: user.name }))
+        .catch(e => json(401, { error: e.message }));
+    });
+    return;
+  }
+  if (route === '/api/account') {                       // who am I? (Authorization: Bearer <session>)
+    const u = Accounts.bySession(String(req.headers.authorization || '').replace(/^Bearer /, ''));
+    json(u ? 200 : 401, u ? { name: u.name } : { error: 'not signed in' });
+    return;
+  }
+  if (route === '/api/account/name' && req.method === 'POST') {
+    body(m => {
+      const u = Accounts.bySession(m.session); if (!u) { json(401, { error: 'Not signed in.' }); return; }
+      const err = Accounts.setName(u, m.name);
+      json(err ? 400 : 200, err ? { error: err } : { name: u.name });
+    });
+    return;
+  }
+  if (route === '/api/auth/logout' && req.method === 'POST') { body(m => { Accounts.logout(m.session); json(200, { ok: true }); }); return; }
+
+  // leaderboard: GET /api/leaderboard?mode=sp|mp -> top 100 (signed-in drivers only, under their current name)
+  if (route === '/api/leaderboard') {
+    const mode = url.searchParams.get('mode') === 'mp' ? 'mp' : 'sp';
+    LB.top(mode).then(list => json(200, { mode, persistent: LB.persistent, accounts: Accounts.enabled(),
+      list: list.filter(e => e.uid).map(e => ({ name: Accounts.nameOf(e.uid) || e.name, score: e.score, t: e.t, server: e.server })) }))
       .catch(() => json(500, { error: 'leaderboard unavailable' }));
     return;
   }
-  // a finished scored singleplayer drive: POST /api/score {mode:'sp', name, score}
-  if (req.url.startsWith('/api/score') && req.method === 'POST') {
-    let body = '';
-    req.on('data', c => { body += c; if (body.length > 2048) req.destroy(); });
-    req.on('end', () => {
-      let m; try { m = JSON.parse(body); } catch (e) { json(400, { error: 'bad request' }); return; }
-      const ip = req.headers['x-forwarded-for'] ? String(req.headers['x-forwarded-for']).split(',')[0].trim() : req.socket.remoteAddress;
-      const now = Date.now();
-      if (now - (lastSubmit.get(ip) || 0) < 5000) { json(429, { error: 'too fast' }); return; }   // one drive per 5 s per player
-      lastSubmit.set(ip, now);
+  // a finished scored singleplayer drive: POST /api/score {session, score} (needs a signed-in account with a name)
+  if (route === '/api/score' && req.method === 'POST') {
+    body(m => {
+      const u = Accounts.bySession(m.session);
+      if (!u || !u.name) { json(401, { error: 'Sign in to get on the leaderboard.' }); return; }
+      if (tooFast('score:' + u.id, 5000)) { json(429, { error: 'too fast' }); return; }   // one drive per 5 s per player
       const sc = num(m.score, 0, 5e7);
       if (!(sc >= MIN_RUN)) { json(200, { rank: null }); return; }
-      LB.add('sp', cleanName(m.name), sc).then(rank => json(200, { rank })).catch(() => json(500, { error: 'leaderboard unavailable' }));
+      LB.add('sp', u.name, sc, { uid: u.id }).then(rank => json(200, { rank })).catch(() => json(500, { error: 'leaderboard unavailable' }));
     });
     return;
   }
   serveStatic(req, res);
 });
-const lastSubmit = new Map();
-setInterval(() => { const t = Date.now(); for (const [k, v] of lastSubmit) if (t - v > 60000) lastSubmit.delete(k); }, 60000);
+const lastHit = new Map();
+setInterval(() => { const t = Date.now(); for (const [k, v] of lastHit) if (t - v > 60000) lastHit.delete(k); }, 60000);
 
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 4096 });
 let nextId = 1;
@@ -183,7 +216,8 @@ wss.on('connection', ws => {
       else if (Number.isFinite(m.s) && Number.isInteger(m.lane) && m.lane >= 0 && m.lane < 4) room.traffic.recover(c, m.s, m.lane, num(m.v, 0, 40));
       return;
     }
-    if (m.name !== undefined) p.name = cleanName(m.name);
+    if (m.session !== undefined) p.account = Accounts.bySession(m.session);   // signed in: runs count, name = account name
+    if (m.name !== undefined) p.name = p.account && p.account.name ? p.account.name : cleanName(m.name);
     if (m.color !== undefined) p.color = cleanColor(m.color);
     if (m.ext && typeof m.ext === 'object') p.ext = { front: num(m.ext.front, 1, 4), rear: num(m.ext.rear, -4, -1), hw: num(m.ext.hw, 0.6, 1.3) };
     if (m.t === 'join') {

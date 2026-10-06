@@ -85,6 +85,7 @@ const Net = {
   send(m) { if (this.ws && this.ws.readyState === 1) this.ws.send(JSON.stringify(m)); },
   async request(m, label) {
     this.me = { name: m.name, color: m.color };
+    if (typeof Account !== 'undefined' && Account.session) m.session = Account.session;   // signed in: runs count for the leaderboard
     this.status(label);
     const slow = setTimeout(() => this.status(label + ' (waking up the server, can take up to a minute)'), 3000);
     try { await this.connect(); this.send(m); }

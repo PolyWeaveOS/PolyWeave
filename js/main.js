@@ -382,7 +382,43 @@ for (const el of nameIns) {
   el.value = Settings.mpName || '';
   el.addEventListener('input', () => { Settings.mpName = el.value.trim(); for (const o of nameIns) if (o !== el) o.value = el.value; saveSettings(); });
 }
-const myName = () => ((Settings.mpName || '').trim() || 'Driver').slice(0, 16);
+const myName = () => (Account.signedIn ? Account.user.name : ((Settings.mpName || '').trim() || 'Driver')).slice(0, 16);
+
+// ---------- accounts: Sign in with Google (needed for the leaderboards) ----------
+let acctMsg = '';
+function renderAccount() {
+  for (const box of document.querySelectorAll('[data-acct]')) {
+    box.innerHTML = '';
+    if (!Account.ready || !Account.clientId) continue;          // (sign-in not set up on this server)
+    if (Account.signedIn) {
+      const who = document.createElement('span'); who.className = 'who';
+      who.append('Signed in as ', Object.assign(document.createElement('b'), { textContent: Account.user.name }));
+      const rn = Object.assign(document.createElement('button'), { textContent: 'RENAME', onclick: () => { $id('acctName').value = Account.user.name; show('scrName'); } });
+      const out = Object.assign(document.createElement('button'), { textContent: 'SIGN OUT', onclick: () => Account.signOut() });
+      box.append(who, rn, out);
+    } else {
+      const g = document.createElement('div'); box.appendChild(g); Account.renderButton(g);
+      box.appendChild(Object.assign(document.createElement('span'), { className: 'why', textContent: acctMsg || 'Sign in to get on the leaderboards' }));
+    }
+  }
+  // driver name fields: your account name when signed in
+  for (const el of nameIns) { el.disabled = Account.signedIn; el.value = Account.signedIn ? Account.user.name : (Settings.mpName || ''); }
+  for (const n of document.querySelectorAll('.acctNote')) {
+    const on = !!Account.clientId;
+    n.textContent = !on ? '' : Account.signedIn ? 'Scored runs go on the leaderboard under this name.' : 'Not signed in: scored runs won\'t go on the leaderboard. Sign in on the main menu.';
+    n.classList.toggle('warn', on && !Account.signedIn);
+  }
+}
+Account.onChange = () => { acctMsg = ''; renderAccount(); };
+Account.onMsg = t => { acctMsg = t; renderAccount(); };
+Account.onNeedName = () => { $id('acctName').value = ''; $id('acctNameErr').textContent = ''; if (!menuOpen) openMenu('scrName'); else show('scrName'); };
+$id('acctNameSave').onclick = async () => {
+  const err = await Account.setName($id('acctName').value);
+  $id('acctNameErr').textContent = err || '';
+  if (!err) show('scrTitle');
+};
+$id('acctName').addEventListener('keydown', e => { if (e.key === 'Enter') $id('acctNameSave').click(); });
+$id('acctNameLater').onclick = () => show('scrTitle');
 
 // ---------- singleplayer ----------
 $id('spScored').onclick = () => startSingle(true);
@@ -395,11 +431,15 @@ function startSingle(scored) {
   hud.message(scored ? 'SCORED RUN' : 'FREE DRIVE');
 }
 // scored singleplayer streaks go to the leaderboard (multiplayer runs are recorded by the server itself)
-score.onStreakEnd = (pts, peak) => { if (game.mode === 'sp' && game.scored && pts >= 100) submitScore(pts, peak); };
+score.onStreakEnd = (pts, peak) => {
+  if (!game.scored || pts < 100) return;
+  if (!Account.signedIn) { if (Account.clientId) hud.message('SIGN IN TO SAVE SCORES'); return; }   // (multiplayer runs: the server records them)
+  if (game.mode === 'sp') submitScore(pts, peak);
+};
 async function submitScore(pts, peak) {
   const base = await Net.findBase(); if (!base) return;
   try {
-    const r = await fetch(base + '/api/score', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'sp', name: myName(), score: pts, peak }) });
+    const r = await fetch(base + '/api/score', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'sp', session: Account.session, score: pts, peak }) });
     const j = await r.json();
     if (j && j.rank) hud.message(`LEADERBOARD #${j.rank}`);
   } catch (e) { /* offline: no leaderboard */ }
@@ -432,7 +472,8 @@ async function loadLeaderboard() {
   catch (e) { note.textContent = 'Could not load the leaderboard. Check your internet connection.'; return; }
   if (mode !== lbTab) return;
   note.textContent = (mode === 'sp' ? 'Top 100 scored singleplayer drives (60% traffic).' : 'Top 100 drives on public and scored servers.')
-    + (j.persistent ? '' : ' (Not saved permanently yet: they reset when the server restarts.)');
+    + (j.persistent ? '' : ' (Not saved permanently yet: they reset when the server restarts.)')
+    + (j.accounts ? ' Sign in with Google to get on it.' : ' (Sign-in isn\'t set up on this server yet, so no drives can be saved.)');
   const ago = t => { const m = (Date.now() - t) / 60000; return m < 60 ? Math.max(1, Math.round(m)) + ' min ago' : m < 1440 ? Math.round(m / 60) + ' h ago' : Math.round(m / 1440) + ' d ago'; };
   const head = document.createElement('div'); head.className = 'lbRow head';
   head.innerHTML = '<span>#</span><span>DRIVER</span><span style="text-align:right">SCORE</span><span style="text-align:right">WHEN</span>';
@@ -450,6 +491,7 @@ async function loadLeaderboard() {
 
 // ---------- multiplayer (dedicated server: public servers + private rooms with codes) ----------
 Net.init(scene);
+renderAccount(); Account.init();
 const mpEl = $id;
 const mpCode = mpEl('mpCode');
 mpEl('mpHostScored').onclick = () => Net.host(myName(), Settings.color, { scored: true });
@@ -518,6 +560,7 @@ Net.onJoined = (room, slot) => {
   enterServer(slot);
   closeMenu();
   hud.message(room.pub ? 'JOINED ' + room.name.toUpperCase() : 'PRIVATE SERVER ' + room.code);
+  if (room.scored && Account.clientId && !Account.signedIn) setTimeout(() => hud.message('NOT SIGNED IN · RUNS WON\'T BE SAVED'), 1800);
 };
 // left the server (or lost it): endless road again, back to the menu
 Net.onRank = r => hud.message(`LEADERBOARD #${r}`);

@@ -47,6 +47,7 @@
     <button id="installBtn" class="hidden" title="Install PolyWeave as an app on this computer">INSTALL APP</button>
     <h1 class="logo">POLY<span>WEAVE</span></h1>
     <p class="tagline">Weave through traffic. Chain near misses. Don't crash.</p>
+    <div class="acct" data-acct></div>
     <div class="cards">
       <button class="card" data-go="scrSP">
         <svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><circle class="fg" cx="32" cy="25" r="11"/><path class="fg" d="M13 53C15 43 23 39 32 39S49 43 51 53C46 59 39 63 32 63S18 59 13 53Z"/></svg>
@@ -71,6 +72,7 @@
   <div id="scrSP" class="screen panel hidden">
     <div class="hdr"><button class="back" data-go="scrTitle">← BACK</button><h1>SINGLEPLAYER</h1></div>
     <label class="mpField">Driver name <input type="text" class="nameIn" maxlength="16" placeholder="Driver" spellcheck="false" autocomplete="off"></label>
+    <div class="acctNote"></div>
     <div class="modes">
       <div class="mode">
         <h3>SCORED</h3>
@@ -90,6 +92,7 @@
   <div id="scrMP" class="screen panel hidden">
     <div class="hdr"><button class="back" data-go="scrTitle">← BACK</button><h1>MULTIPLAYER <span id="mpOnline"></span></h1></div>
     <label class="mpField">Driver name <input type="text" class="nameIn" maxlength="16" placeholder="Driver" spellcheck="false" autocomplete="off"></label>
+    <div class="acctNote"></div>
     <div class="grid mpGrid">
       <div>
         <div class="mpHead">Public servers · scored <button id="mpRefresh" title="Refresh">↻</button></div>
@@ -121,6 +124,7 @@
   <!-- leaderboard -->
   <div id="scrLB" class="screen panel hidden">
     <div class="hdr"><button class="back" data-go="scrTitle">← BACK</button><h1>LEADERBOARD</h1></div>
+    <div class="acct left" data-acct></div>
     <div class="tabs"><button class="tab sel" data-lb="sp">SINGLEPLAYER</button><button class="tab" data-lb="mp">MULTIPLAYER</button></div>
     <div id="lbNote"></div>
     <div id="lbList"></div>
@@ -161,6 +165,15 @@
     </div>
   </div>
 
+  <!-- first sign-in: pick a driver name (shown on the leaderboards) -->
+  <div id="scrName" class="screen panel narrow hidden">
+    <h1>DRIVER NAME</h1>
+    <p class="sub">This is the name shown on the leaderboards and to other players. You can change it later.</p>
+    <input type="text" id="acctName" maxlength="16" placeholder="Your driver name" spellcheck="false" autocomplete="off">
+    <div id="acctNameErr" class="err"></div>
+    <div class="stack"><button id="acctNameSave" class="go">SAVE</button><button id="acctNameLater">LATER</button></div>
+  </div>
+
   <!-- pause (Esc while driving) -->
   <div id="scrPause" class="screen panel narrow hidden">
     <h1>PAUSED</h1>
@@ -189,7 +202,7 @@
   // Remove names from this list to take a vehicle out of traffic; with none loaded the old traffic returns.
   const VEHICLES = ['camry', 'civic', 'model3', 'golf', 'mini', 'mustang', 'p911', 'prius', 'charger', 'gtr',
     'rav4', 'wrangler', 'tahoe', 'f150', 'transit', 'odyssey', 'vwbus', 'boxtruck', 'cascadia'];
-  const files = ['js/core', 'js/zones', 'js/models', 'js/lowpoly', 'js/toykit', ...VEHICLES.map(k => 'js/vehicles/' + k), 'js/world', 'js/physics', 'js/traffic', 'js/input', 'js/hud', 'js/net', 'js/main'];
+  const files = ['js/core', 'js/zones', 'js/models', 'js/lowpoly', 'js/toykit', ...VEHICLES.map(k => 'js/vehicles/' + k), 'js/world', 'js/physics', 'js/traffic', 'js/input', 'js/hud', 'js/net', 'js/account', 'js/main'];
   for (const f of files) {
     const s = document.createElement('script');
     s.src = `${f}.js?v=${v}`; s.async = false;
