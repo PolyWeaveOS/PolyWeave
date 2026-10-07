@@ -76,10 +76,10 @@
     <div class="modes">
       <div class="mode">
         <h3>SCORED</h3>
-        <p>The endless highway at <b>60% traffic</b>. Your best drives go on the singleplayer leaderboard.</p>
+        <p>Endless highway traffic, increase score and battle for leaderboard positions.</p>
         <button id="spScored" class="go">PLAY SCORED</button>
       </div>
-      <div class="mode">
+      <div class="mode blue">
         <h3>FREE DRIVE</h3>
         <p>Pick your own traffic. Just for fun, no leaderboard.</p>
         <label>Traffic <b id="fdDensV"></b><input type="range" id="fdDens" min="0" max="100"></label>
@@ -97,20 +97,20 @@
       <div>
         <div class="mpHead">Public servers · scored <button id="mpRefresh" title="Refresh">↻</button></div>
         <div id="mpServers"><div class="mpEmpty">Loading servers…</div></div>
-        <div class="mpHead" style="margin-top:16px">Join a friend</div>
+        <div class="mpHead friend" style="margin-top:16px">Join a friend</div>
         <div class="mpRow">
           <input type="text" id="mpCode" maxlength="7" placeholder="K7P-2QX" spellcheck="false" autocomplete="off">
           <button id="mpJoin">JOIN WITH CODE</button>
         </div>
       </div>
       <div>
-        <div class="mpHead">Host your own server</div>
+        <div class="mpHead host">Host your own server</div>
         <div class="mode small">
           <h3>SCORED SERVER</h3>
-          <p>60% traffic. Runs count for the multiplayer leaderboard.</p>
+          <p>Runs count for the multiplayer leaderboards.</p>
           <button id="mpHostScored" class="go">HOST SCORED</button>
         </div>
-        <div class="mode small">
+        <div class="mode small blue">
           <h3>FREE DRIVE SERVER</h3>
           <p>Your traffic, your rules. No leaderboard.</p>
           <label>Traffic <b id="mpDensV"></b><input type="range" id="mpDens" min="0" max="100"></label>
@@ -138,7 +138,11 @@
         <h2>Driving</h2>
         <label>Lane assist <b id="laV"></b><input type="range" id="la" min="0" max="100"></label>
         <label>Wheel sensitivity <b id="sensV"></b><input type="range" id="sens" min="30" max="200"></label>
-        <label>Keyboard sensitivity <b id="kbSensV"></b><input type="range" id="kbSens" min="30" max="200"></label>        <label>Volume <b id="volV"></b><input type="range" id="vol" min="0" max="100"></label>
+        <label>Keyboard sensitivity <b id="kbSensV"></b><input type="range" id="kbSens" min="30" max="200"></label>        <label>Motion blur <b id="blurV"></b><input type="range" id="blur" min="0" max="100"></label>
+        <label class="row">Mirror quality <select id="mirrorQ"><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+        <label class="row">Speed units <select id="units"><option value="mph">MPH</option><option value="kmh">KM/H</option></select></label>
+        <label class="row">Driver side <select id="rhd"><option value="left">Left</option><option value="right">Right</option></select></label>
+        <label>Volume <b id="volV"></b><input type="range" id="vol" min="0" max="100"></label>
         <label class="chk"><input type="checkbox" id="tc"> Traction control</label>
         <label class="chk"><input type="checkbox" id="manual"> Manual gearbox</label>
         <label class="chk"><input type="checkbox" id="minimapOn"> Minimap (multiplayer)</label>

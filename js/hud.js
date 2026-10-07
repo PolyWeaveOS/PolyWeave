@@ -141,8 +141,9 @@ class Hud {
     }
     e.bar.style.width = (U.clamp(score.timer, 0, 1) * 100).toFixed(1) + '%';
     // speedo
-    const kmh = Math.round(Math.abs(car.u) * 3.6);
-    this.set('spd', e.spd, String(kmh));
+    const mph = settings.units !== 'kmh';
+    this.set('spd', e.spd, String(Math.round(Math.abs(car.u) * (mph ? 2.23694 : 3.6))));
+    this.set('unit', e.unit || (e.unit = $('unit')), mph ? 'MPH' : 'KM/H');
     this.set('gear', e.gear, car.gear < 0 ? 'R' : car.gear === 0 ? 'N' : String(car.gear));
     this.set('mode', e.mode, car.manual ? 'MANUAL' : 'AUTO');
     e.rpm.style.width = (U.clamp(car.rpm / M4.redline, 0, 1) * 100).toFixed(1) + '%';

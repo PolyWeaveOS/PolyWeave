@@ -41,6 +41,26 @@ const OVERLAY = {
   ind: new THREE.MeshBasicMaterial({ color: 0xffa21a, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -8 }),
 };
 
+// M4 door mirror (shared by the car body and the cockpit's live mirror glass).
+// Seen from behind it's a low-poly outline with two big cut ("triangle") corners - top outer and bottom
+// inner - and small cuts on the other two; the head tapers toward the front. sg: -1 left, +1 right.
+// Local frame: head centred on (0,0); u = outward, v = up; glass face at z = M4_MIRROR.depth (rear).
+const M4_MIRROR = { x: 0.985, y: 1.03, z: -0.715, w: 0.2, h: 0.1, depth: 0.11, yaw: 0.1 };
+function m4MirrorOutline(sg, scale = 1) {
+  const w = M4_MIRROR.w / 2 * scale, h = M4_MIRROR.h / 2 * scale, big = 0.034 * scale, small = 0.01 * scale;
+  const pts = [[-w + big, -h], [w - small, -h], [w, -h + small], [w, h - big], [w - big, h], [-w + small, h], [-w, h - small], [-w, -h + big]];
+  return new THREE.Shape(pts.map(([u, v]) => new THREE.Vector2(u * sg, v)));
+}
+function m4MirrorHousing(sg) {
+  const g = new THREE.ExtrudeGeometry(m4MirrorOutline(sg), { depth: M4_MIRROR.depth, bevelEnabled: false });
+  const p = g.attributes.position, inner = -M4_MIRROR.w / 2 * sg;
+  for (let i = 0; i < p.count; i++) if (p.getZ(i) < 1e-4) {         // front end: narrower, pulled toward the door
+    p.setX(i, inner + (p.getX(i) - inner) * 0.72); p.setY(i, p.getY(i) * 0.78);
+  }
+  g.computeVertexNormals();
+  return g;
+}
+
 const _paints = new Map();
 function paintMat(hex) {
   if (!_paints.has(hex)) _paints.set(hex, new THREE.MeshStandardMaterial({ color: hex, roughness: 0.32, metalness: 0.45 }));
@@ -504,9 +524,12 @@ CATALOG.m4 = () => {
   }
   // --- Side gills, mirrors ---
   gb.box2(0.925, 0.62, -1.0, 0.03, 0.12, 0.16, SLOT.CARBON);
-  gb.box2(1.02, 1.04, -0.66, 0.20, 0.10, 0.11, SLOT.PAINT, 0, 0.12, 0);
-  gb.box2(0.94, 1.02, -0.70, 0.08, 0.035, 0.07, SLOT.CARBON);
-  gb.box2(1.03, 1.025, -0.60, 0.17, 0.08, 0.01, SLOT.DARK);
+  for (const sg of [-1, 1]) {   // shaped heads (see M4_MIRROR) on a short arm from the door
+    const M = M4_MIRROR, at = gb.xf(sg * M.x, M.y, M.z, 0, sg * M.yaw, 0);
+    gb.geom(m4MirrorHousing(sg), at, SLOT.PAINT);
+    gb.geom(new THREE.ShapeGeometry(m4MirrorOutline(sg, 0.92)), gb.xf(sg * M.x, M.y, M.z, 0, sg * M.yaw, 0).multiply(new THREE.Matrix4().makeTranslation(0, 0, M.depth + 0.001)), SLOT.DARK);
+    gb.box(sg * 0.905, 1.0, -0.68, 0.06, 0.035, 0.075, SLOT.CARBON);
+  }
   // --- Door handles ---
   gb.box2(0.925, 0.95, 0.15, 0.02, 0.025, 0.14, SLOT.CARBON);
   // --- Rear: laser tail lights, diffuser, quad exhaust, lip, plate ---

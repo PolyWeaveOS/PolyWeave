@@ -133,9 +133,10 @@ class Traffic {
     const b = c.buf; if (!b.length) return null;
     let i = b.length - 1;
     while (i > 0 && b[i - 1].t > t) i--;
-    if (i === 0) return b[0];
-    const a = b[i - 1], n = b[i], k = U.clamp((t - a.t) / Math.max(n.t - a.t, 1e-3), 0, 1.6);
-    return { s: a.s + (n.s - a.s) * k, d: a.d + (n.d - a.d) * k, v: a.v + (n.v - a.v) * k, ry: a.ry + U.wrap(n.ry - a.ry) * k, f: k < 0.5 ? a.f : n.f };
+    if (i === 0) return Object.assign({ vs: 0, vd: 0, vr: 0 }, b[0]);
+    const a = b[i - 1], n = b[i], dt = Math.max(n.t - a.t, 1e-3), k = U.clamp((t - a.t) / dt, 0, 1.6);
+    return { s: a.s + (n.s - a.s) * k, d: a.d + (n.d - a.d) * k, v: a.v + (n.v - a.v) * k, ry: a.ry + U.wrap(n.ry - a.ry) * k, f: k < 0.5 ? a.f : n.f,
+      vs: (n.s - a.s) / dt, vd: (n.d - a.d) / dt, vr: U.wrap(n.ry - a.ry) / dt };   // (how it's moving: to draw it where it is now)
   }
   updateRemote(dt, P) {
     const rt = performance.now() / 1000 - (this.srvOff || 0) - 0.15;
@@ -153,6 +154,15 @@ class Traffic {
       }
       const st = this.sampleRemote(c, rt);
       if (!st) continue;
+      // The snapshot is from a moment ago (server delay + the smoothing buffer). Friends' cars are drawn
+      // where they are NOW, so carry the traffic forward by the same time - otherwise a friend appears to
+      // drive straight through the car they're hitting (it's still ~0.2 s behind on your screen). A wreck
+      // being shoved around is carried along with how it was moving and spinning.
+      const L = this.lead || 0;
+      if (L) {
+        if (st.f & 8) { st.s += U.clamp(st.vs, -60, 90) * L; st.d += U.clamp(st.vd, -15, 15) * L; st.ry += U.clamp(st.vr, -6, 6) * L; }
+        else { st.s += st.v * L; st.d += U.clamp(st.vd, -3, 3) * L; }
+      }
       const pd = c.d;
       c.s = st.s; c.d = st.d; c.v = st.v; c.relYaw = st.ry;
       c.crashed = !!(st.f & 8);

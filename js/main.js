@@ -4,7 +4,7 @@
 // =====================================================================
 
 // ---------- settings ----------
-const DEFAULTS = { density: 0.55, assist: 0, sens: 1.0, kbSens: 1.0, vol: 0.6, tc: true, manual: false, color: '#a6b0b8', mpDensity: 0.55, minimap: true };
+const DEFAULTS = { density: 0.55, assist: 0, sens: 1.0, kbSens: 1.0, blur: 0, mirrors: 'medium', units: 'mph', rhd: false, vol: 0.6, tc: true, manual: false, color: '#a6b0b8', mpDensity: 0.55, minimap: true };
 const SCORED_DENSITY = 0.6;               // scored (leaderboard) runs always use this much traffic
 const Settings = Object.assign({}, DEFAULTS);
 try { Object.assign(Settings, JSON.parse(localStorage.getItem('tw_settings2') || '{}')); } catch (e) { /* ignore */ }
@@ -98,6 +98,163 @@ else { swTilt.position.set(-0.37, 0.90, -0.40); swTilt.rotation.x = 0.36; }
 const swMesh = new THREE.Mesh(playerVis.M.wheelSW, importedM4 ? playerVis.body.material : playerVis.mats);
 swTilt.add(swMesh); playerVis.root.add(swTilt);
 scene.add(playerRoot);
+
+// ---------- first-person cockpit (only drawn in the cockpit camera) ----------
+// Low-poly interior in the game's style (flat-shaded, few sides): a faceted dash with the gauge cluster set
+// into it in front of the driver (live speed / gear / revs), console, doors, passenger seat, a faceted wheel
+// with the M stripe, and real mirrors: a rear-view mirror hanging from the windscreen and the two door
+// mirrors (their glass fills the whole mirror), each showing what's behind you from a camera on the car.
+// Settings: mirror quality (low / medium / high), speed units, which side you drive from.
+const cockpit = new THREE.Group(); cockpit.visible = false; playerVis.root.add(cockpit);
+const cockpitWheel = new THREE.Group(); cockpitWheel.visible = false; swTilt.add(cockpitWheel);
+const driverSide = new THREE.Group(); cockpit.add(driverSide);       // (the bits in front of the driver: moved for right-hand drive)
+const MIRRORS = (() => {
+  const std = (color, roughness, metalness = 0) => new THREE.MeshStandardMaterial({ color, roughness, metalness, flatShading: true });
+  const dash = std(0x17191d, 0.85), dash2 = std(0x202329, 0.8), trim = std(0x3c424b, 0.35, 0.6), leather = std(0x16181c, 0.9), gloss = std(0x0d0e11, 0.35, 0.3);
+  const add = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, parent = cockpit) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); parent.add(m); return m; };
+  const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+  // a rectangle with cut (chamfered) corners: the low-poly mirror outline
+  const chamfer = (w, h, c) => {
+    const s = new THREE.Shape(), x = w / 2, y = h / 2;
+    s.moveTo(-x + c, -y); s.lineTo(x - c, -y); s.lineTo(x, -y + c); s.lineTo(x, y - c); s.lineTo(x - c, y); s.lineTo(-x + c, y); s.lineTo(-x, y - c); s.lineTo(-x, -y + c); s.closePath();
+    return s;
+  };
+  // mirror glass: the picture is flipped left-right, like a real mirror
+  const glassGeo = (w, h, c, shape) => {
+    const g = new THREE.ShapeGeometry(shape || chamfer(w, h, c)), p = g.attributes.position, uv = g.attributes.uv;
+    for (let i = 0; i < p.count; i++) uv.setXY(i, 1 - (p.getX(i) + w / 2) / w, (p.getY(i) + h / 2) / h);
+    return g;
+  };
+  // --- dash: one faceted piece across the car (a side profile pushed out sideways) ---
+  {
+    const prof = new THREE.Shape([[0.55, 0.58], [0.55, 0.78], [0.62, 0.855], [0.75, 0.9], [0.96, 0.91], [0.96, 0.58]].map(([a, b]) => new THREE.Vector2(a, b)));
+    const g = new THREE.ExtrudeGeometry(prof, { depth: 1.72, bevelEnabled: false });
+    g.applyMatrix4(new THREE.Matrix4().set(0, 0, 1, -0.86, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 0, 1));   // profile (forward, up) -> car (x, y, z)
+    add(g, dash, 0, 0, 0);
+    add(box(1.70, 0.012, 0.012), trim, 0, 0.782, -0.555);                          // thin trim line along the dash face
+    for (const x of [-0.12, 0.12]) add(box(0.13, 0.05, 0.02), gloss, x, 0.72, -0.553);   // centre air vents
+  }
+  // --- gauge cluster: a faceted pod sitting on the dash, screen set into its face, hood over it ---
+  const gauge = document.createElement('canvas'); gauge.width = 512; gauge.height = 176;
+  const gTex = new THREE.CanvasTexture(gauge); gTex.encoding = THREE.sRGBEncoding;
+  {
+    const pod = new THREE.Group(); pod.position.set(-0.37, 0.905, -0.70); pod.rotation.x = -0.32; driverSide.add(pod);
+    add(box(0.40, 0.14, 0.16), dash2, 0, 0.0, 0, 0, 0, 0, pod);                   // the pod (half sunk into the dash)
+    add(box(0.42, 0.018, 0.2), dash2, 0, 0.078, 0.02, 0, 0, 0, pod);               // hood overhang
+    add(box(0.362, 0.118, 0.004), gloss, 0, -0.004, 0.0805, 0, 0, 0, pod);          // bezel
+    add(new THREE.PlaneGeometry(0.35, 0.106), new THREE.MeshBasicMaterial({ map: gTex, toneMapped: false }), 0, -0.004, 0.0828, 0, 0, 0, pod);
+  }
+  // --- console, doors, passenger seat ---
+  add(box(0.26, 0.2, 0.86), dash, 0, 0.58, -0.26);
+  add(box(0.2, 0.012, 0.7), trim, 0, 0.687, -0.24);
+  add(new THREE.CylinderGeometry(0.022, 0.03, 0.08, 6), gloss, 0, 0.73, -0.08);   // gear selector
+  for (const sg of [-1, 1]) {
+    add(box(0.07, 0.07, 1.25), trim, sg * 0.86, 0.86, -0.08);                       // door top
+    add(box(0.08, 0.06, 0.44), leather, sg * 0.83, 0.72, -0.05);                    // armrest
+  }
+  const passenger = new THREE.Group(); cockpit.add(passenger);
+  add(box(0.48, 0.13, 0.5), leather, 0, 0.47, 0.24, 0, 0, 0, passenger);
+  add(box(0.48, 0.66, 0.13), leather, 0, 0.86, 0.56, -0.2, 0, 0, passenger);
+  add(box(0.26, 0.16, 0.11), leather, 0, 1.28, 0.65, -0.2, 0, 0, passenger);
+  for (const sg of [-1, 1]) add(box(0.06, 0.6, 0.16), leather, sg * 0.25, 0.86, 0.53, -0.2, 0, 0, passenger);   // bolsters
+  // --- steering wheel (turns with yours): faceted rim, three spokes, M stripe at the top ---
+  { // rim: faceted all round, with the M stripe (blue / dark blue / red) painted onto the top of it
+    const g = new THREE.TorusGeometry(0.185, 0.028, 5, 120).rotateZ(Math.PI / 120).toNonIndexed(), p = g.attributes.position, col = new Float32Array(p.count * 3);
+    const base = new THREE.Color(0x16181c), stripe = [0x2b7fd8, 0x1d3b8f, 0xd8302b].map(c => new THREE.Color(c));
+    for (let i = 0; i < p.count; i += 3) {
+      const a = Math.atan2((p.getY(i) + p.getY(i + 1) + p.getY(i + 2)) / 3, (p.getX(i) + p.getX(i + 1) + p.getX(i + 2)) / 3) * 180 / Math.PI;
+      const k = Math.floor((a - 85.5) / 3), c = k >= 0 && k < 3 ? stripe[2 - k] : base;   // three 3-degree bands at the top
+      for (let j = 0; j < 3; j++) col.set([c.r, c.g, c.b], (i + j) * 3);
+    }
+    g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    add(g, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.85, flatShading: true }), 0, 0, 0, 0, 0, 0, cockpitWheel);
+  }
+  add(new THREE.CylinderGeometry(0.046, 0.05, 0.045, 8), gloss, 0, -0.012, 0.005, Math.PI / 2, 0, 0, cockpitWheel);
+  for (const [a, len] of [[0, 0.13], [Math.PI, 0.13], [-Math.PI / 2, 0.12]])
+    add(box(len, 0.034, 0.022), trim, Math.cos(a) * 0.1, Math.sin(a) * 0.1 - 0.01, 0, 0, 0, a, cockpitWheel);
+  // --- mirrors ---
+  const list = [];
+  const mirror = (key, w, h, c, parent, camPos, camDir, fov, shape) => {
+    const mat = new THREE.MeshBasicMaterial({ toneMapped: false, color: 0xffffff });
+    add(glassGeo(w, h, c, shape), mat, 0, 0, 0, 0, 0, 0, parent);
+    list.push({ key, mat, target: null, cam: new THREE.PerspectiveCamera(fov, w / h, 0.3, 450), camPos, camDir: camDir.normalize(), aspect: w / h });
+  };
+  // rear-view mirror: hangs from the windscreen on a short stalk, angled toward the driver
+  const rv = new THREE.Group(); rv.position.set(0.0, 1.228, -0.05); cockpit.add(rv);
+  add(new THREE.ExtrudeGeometry(chamfer(0.192, 0.062, 0.018), { depth: 0.024, bevelEnabled: false }), gloss, 0, 0, -0.026, 0, 0, 0, rv);
+  mirror('rear', 0.18, 0.052, 0.014, rv, new THREE.Vector3(0, 1.3, 2.5), new THREE.Vector3(0, -0.035, 1), 15);
+  const stalk = new THREE.Mesh(new THREE.CylinderGeometry(0.011, 0.014, 1, 6), gloss); cockpit.add(stalk);
+  { // stalk from the back of the mirror up to the glass
+    const a = new THREE.Vector3(0, 1.255, -0.075), b = new THREE.Vector3(0, 1.318, -0.094), d = b.clone().sub(a);
+    stalk.position.copy(a).add(b).multiplyScalar(0.5); stalk.scale.y = d.length(); stalk.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize());
+    add(box(0.05, 0.012, 0.04), gloss, 0, 1.322, -0.1, -0.5);                     // foot on the glass
+  }
+  // door mirrors: live glass laid over the whole face of the car's own mirror heads (same shape, see M4_MIRROR)
+  for (const sg of [-1, 1]) {
+    const M = M4_MIRROR, head = new THREE.Group(); head.position.set(sg * M.x, M.y, M.z); head.rotation.y = sg * M.yaw; cockpit.add(head);
+    const gl = new THREE.Group(); gl.position.set(0, 0, M.depth + 0.002); head.add(gl);
+    mirror(sg < 0 ? 'left' : 'right', M.w * 0.94, M.h * 0.94, 0, gl, new THREE.Vector3(sg * (M.x + 0.02), M.y, M.z + M.depth + 0.01),
+      new THREE.Vector3(sg * 0.16, -0.03, 1), 22, m4MirrorOutline(sg, 0.94));
+  }
+  // quality: picture size, smoothing and how often each mirror is redrawn (low suits slower computers)
+  const Q = { low: { rear: [256, 74], side: [128, 62], samples: 0, every: [2, 4], far: 220 },
+              medium: { rear: [384, 110], side: [192, 92], samples: 0, every: [1, 3], far: 320 },
+              high: { rear: [512, 148], side: [256, 124], samples: 2, every: [1, 2], far: 450 } };
+  let q = Q.medium;
+  const setQuality = name => {
+    q = Q[name] || Q.medium;
+    for (const m of list) {
+      if (m.target) m.target.dispose();
+      const [w, h] = m.key === 'rear' ? q.rear : q.side;
+      m.target = new THREE.WebGLRenderTarget(w, h, { samples: q.samples });
+      m.mat.map = m.target.texture; m.mat.needsUpdate = true;
+      m.cam.far = q.far; m.cam.updateProjectionMatrix();
+    }
+  };
+  // which side you drive from: steering wheel, cluster, your eye position, passenger seat, rear-view angle
+  const setSide = rhd => {
+    const s = rhd ? 1 : -1;
+    swTilt.position.x = s * 0.37; driverSide.position.x = rhd ? 0.74 : 0; passenger.position.x = -s * 0.37;
+    rv.rotation.y = s * 0.45;
+  };
+  // live gauge cluster (redrawn ~12 times a second)
+  let gT = 0;
+  const drawGauge = dt => {
+    if ((gT -= dt) > 0) return; gT = 0.08;
+    const g = gauge.getContext('2d'), mph = Settings.units !== 'kmh', spd = Math.round(Math.abs(car.u) * (mph ? 2.23694 : 3.6)), rpm = U.clamp(car.rpm / M4.redline, 0, 1);
+    g.fillStyle = '#0b0e13'; g.fillRect(0, 0, 512, 176);
+    g.fillStyle = 'rgba(255,255,255,.07)'; g.fillRect(28, 140, 456, 10);
+    const rg = g.createLinearGradient(28, 0, 484, 0); rg.addColorStop(0, '#3aa0ff'); rg.addColorStop(0.75, '#7fd0ff'); rg.addColorStop(0.9, '#ff4d4d');
+    g.fillStyle = rg; g.fillRect(28, 140, 456 * rpm, 10);
+    g.fillStyle = '#fff'; g.textAlign = 'center'; g.font = '800 88px Segoe UI, Arial'; g.fillText(String(spd), 256, 100);
+    g.font = '700 19px Segoe UI, Arial'; g.fillStyle = 'rgba(255,255,255,.6)'; g.fillText(mph ? 'MPH' : 'KM/H', 256, 128);
+    g.textAlign = 'left'; g.font = '800 44px Segoe UI, Arial'; g.fillStyle = '#ffd84a';
+    g.fillText(car.gear < 0 ? 'R' : car.gear === 0 ? 'N' : String(car.gear), 34, 84);
+    g.textAlign = 'right'; g.font = '700 17px Segoe UI, Arial'; g.fillStyle = 'rgba(255,255,255,.55)'; g.fillText(car.manual ? 'MANUAL' : 'AUTO', 478, 84);
+    gTex.needsUpdate = true;
+  };
+  return { list, drawGauge, setQuality, setSide, frame: 0, every: () => q.every };
+})();
+// the mirrors' cameras follow the car (each redrawn every few frames, depending on quality)
+const _mp = new THREE.Vector3(), _md = new THREE.Vector3();
+function renderMirrors() {
+  if (!cockpit.visible) return;
+  playerVis.root.updateMatrixWorld(true);
+  const was = renderer.shadowMap.autoUpdate, rtWas = renderer.getRenderTarget();
+  renderer.shadowMap.autoUpdate = false;                 // (reuse this frame's shadows)
+  const f = MIRRORS.frame++, [eR, eS] = MIRRORS.every();
+  MIRRORS.list.forEach((m, i) => {
+    const every = m.key === 'rear' ? eR : eS;
+    if ((f + i) % every) return;                          // (door mirrors are staggered against each other)
+    _mp.copy(m.camPos).applyMatrix4(playerVis.root.matrixWorld);
+    _md.copy(m.camDir).transformDirection(playerVis.root.matrixWorld);
+    m.cam.position.copy(_mp); m.cam.up.set(0, 1, 0); m.cam.lookAt(_mp.x + _md.x, _mp.y + _md.y, _mp.z + _md.z);
+    renderer.setRenderTarget(m.target); renderer.render(scene, m.cam);
+  });
+  renderer.setRenderTarget(rtWas);
+  renderer.shadowMap.autoUpdate = was;
+}
+MIRRORS.setQuality(Settings.mirrors); MIRRORS.setSide(Settings.rhd);
 const playerHull = playerVis.M.hull.map(([x, f]) => [x, f - CG_F]);
 // against traffic the hitbox is a touch smaller (~3 cm narrower each side, ~4 cm shorter each end)
 // so paint-scraping near misses don't count as crashes
@@ -291,10 +448,8 @@ function updateCamera(dt) {
     return;
   }
   if (camMode !== 1) {
-    // chase cameras (0: close, 2: far - pulled back a little and only slightly higher).
-    // The camera follows the direction of travel smoothly (like "Low Poly Traffic Racer"),
+    // chase camera: follows the direction of travel smoothly (like "Low Poly Traffic Racer"),
     // so you see the car rotate into the turn instead of the whole world swinging
-    const far = camMode === 2;
     const travel = car.u > 4 ? car.yaw + Math.atan2(car.v, Math.max(car.u, 0.1)) : car.yaw;
     camS.yaw = U.dampAngle(camS.yaw, travel, 5, dt);
     // ...and slides slightly sideways toward the turn instead of orbiting
@@ -303,8 +458,8 @@ function updateCamera(dt) {
     const sp = U.clamp(spd / 80, 0, 1);
     // camera has inertia: it lags back when accelerating and surges toward the car under braking
     const brk = U.clamp(-car.ax / 13, 0, 1);
-    const dist = (far ? 8.1 : 5.7) + sp * 0.9 + U.clamp(car.ax, -15, 9) * 0.05;
-    const hgt = (far ? 2.3 : 1.72) + sp * 0.12;
+    const dist = 5.7 + sp * 0.9 + U.clamp(car.ax, -15, 9) * 0.05;
+    const hgt = 1.72 + sp * 0.12;
     const cyw = Math.cos(camS.yaw), syw = Math.sin(camS.yaw);
     const ox = -syw * dist + cyw * camS.shift, oz = cyw * dist + syw * camS.shift;
     camS.off.x = U.damp(camS.off.x, ox, 14, dt);
@@ -326,12 +481,12 @@ function updateCamera(dt) {
     camS.fov = U.damp(camS.fov, 60 + U.clamp((spd - 20) / 60, 0, 1) * 11, 3, dt);
   } else {
     // cockpit: driver's eye, with subtle head motion from g-forces
-    const lx = -0.37 - U.clamp(car.ay, -12, 12) * 0.004;
+    const lx = (Settings.rhd ? 0.37 : -0.37) - U.clamp(car.ay, -12, 12) * 0.004;   // (driver's seat: left or right)
     const lf = -0.32 - CG_F - U.clamp(car.ax, -15, 12) * 0.006; // head pitches forward under braking
     const y = 1.13 +Math.sin(time * 31) * Math.min(spd / 80, 1) * 0.0015;
     camera.position.set(car.x + lf * sy + lx * cy, y, car.z - lf * cy + lx * sy);
     camera.rotation.order = 'YXZ';
-    camera.rotation.set(-0.045 + U.clamp(car.ax, -15, 10) * 0.0025 + (camS.body ? camS.body.pitch : 0), -car.visYaw, U.clamp(car.ay, -12, 12) * 0.0015);
+    camera.rotation.set(-0.045, -car.visYaw, 0);   // level: no tilt from braking / cornering in the cockpit
     camS.fov = U.damp(camS.fov, 70 + U.clamp((spd - 20) / 60, 0, 1) * 5, 3, dt);
   }
   // near plane: far enough out in the chase view for good depth precision (no z-fighting
@@ -385,6 +540,18 @@ bindRange('sens', 'sens', v => v / 100, v => (v / 100).toFixed(2) + '×');      
 bindRange('kbSens', 'kbSens', v => v / 100, v => (v / 100).toFixed(2) + '×');   // keyboard
 setKbStyle('control');   // keyboard steering: always "Max control" (the older "classic" preset stays in physics.js, unused)
 bindRange('vol', 'vol', v => v / 100, v => v + '%');
+{ // drop-downs: mirror quality, speed units, driver side
+  const pick = (id, get, set) => { const el = $id(id); el.value = get(); el.addEventListener('change', () => { set(el.value); saveSettings(); }); };
+  pick('mirrorQ', () => Settings.mirrors, v => { Settings.mirrors = v; MIRRORS.setQuality(v); });
+  pick('units', () => Settings.units, v => { Settings.units = v; });
+  pick('rhd', () => (Settings.rhd ? 'right' : 'left'), v => { Settings.rhd = v === 'right'; MIRRORS.setSide(Settings.rhd); });
+}
+{ // motion blur 0..100 (stored as 0..100)
+  const el = $id('blur'), lab = $id('blurV');
+  el.value = Settings.blur || 0;
+  const upd = () => { Settings.blur = +el.value; lab.textContent = +el.value === 0 ? 'Off' : el.value; saveSettings(); };
+  el.addEventListener('input', upd); upd();
+}
 const tcEl = $id('tc'), manEl = $id('manual'), mmEl = $id('minimapOn');
 tcEl.checked = Settings.tc; manEl.checked = Settings.manual; mmEl.checked = Settings.minimap;
 tcEl.addEventListener('change', () => { Settings.tc = car.tc = tcEl.checked; saveSettings(); });
@@ -449,7 +616,8 @@ function renderAccount() {
   for (const el of nameIns) { el.disabled = Account.signedIn; el.value = Account.signedIn ? Account.user.name : (Settings.mpName || ''); }
   for (const n of document.querySelectorAll('.acctNote')) {
     const on = !!Account.clientId;
-    n.textContent = !on ? '' : Account.signedIn ? 'Scored runs go on the leaderboard under this name.' : 'Not signed in: scored runs won\'t go on the leaderboard. Sign in on the main menu.';
+    const sp = !!n.closest('#scrSP');   // (singleplayer: no note when signed in)
+    n.textContent = !on ? '' : Account.signedIn ? (sp ? '' : 'Scored runs go on the leaderboard under this name.') : 'Not signed in: scored runs won\'t go on the leaderboard. Sign in on the main menu.';
     n.classList.toggle('warn', on && !Account.signedIn);
   }
 }
@@ -840,10 +1008,17 @@ function updatePlayerVisual(dt) {
     const axc = U.clamp(car.ax, -15, 12), pitchT = axc < 0 ? axc * 0.002 : axc * 0.0007;
     bm.pv += ((pitchT - bm.pitch) * 120 - bm.pv * 18) * dt; bm.pitch += bm.pv * dt;
   }
-  playerVis.root.rotation.x = bm.pitch;
-  playerVis.root.rotation.z = bm.roll;
+  // (body pitch / roll only shows from outside: in the cockpit the car stays level around you)
+  const level = camMode === 1 && !menuOpen;
+  playerVis.root.rotation.x = level ? 0 : bm.pitch;
+  playerVis.root.rotation.z = level ? 0 : bm.roll;
   animateWheels(playerVis, car.u * dt, car.steer);
   swMesh.rotation.z = -car.steer * M4.ratio / Settings.sens;
+  // cockpit camera: the detailed interior + mirrors replace the simple one (which is only seen through the glass)
+  const inCockpit = camMode === 1 && !menuOpen;
+  cockpit.visible = cockpitWheel.visible = inCockpit; interior.visible = swMesh.visible = !inCockpit;
+  cockpitWheel.rotation.z = swMesh.rotation.z;
+  if (inCockpit) MIRRORS.drawGauge(dt);
   playerVis.brake.visible = car.brakeOn && car.gear >= 0;
   playerGlass.opacity = camMode === 1 && !menuOpen ? 0.14 : 0.78;
 }
@@ -953,16 +1128,56 @@ function setFx(mode, silent) {
   realisticScene(mode === 2);
   if (!silent) hud.message(FX_NAMES[mode]);
 }
+// Motion blur (Settings slider): the faster you go, the more the scenery streaks toward the middle of the
+// screen. Things close to the camera (your own car, the dashboard) stay sharp.
+const BLUR = (() => {
+  const size = renderer.getDrawingBufferSize(new THREE.Vector2());
+  const rtPost = new THREE.WebGLRenderTarget(size.x, size.y);    // (styles 1/2: their finished picture, blurred after)
+  const mat = new THREE.ShaderMaterial({
+    uniforms: { tColor: { value: null }, tDepth: { value: FX.rtScene.depthTexture }, amount: { value: 0 }, center: { value: new THREE.Vector2(0.5, 0.52) },
+      near: { value: 0.25 }, far: { value: 2000 }, toSRGB: { value: 1 } },
+    vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+    fragmentShader: `
+      varying vec2 vUv; uniform sampler2D tColor, tDepth; uniform float amount, near, far, toSRGB; uniform vec2 center;
+      float lin(vec2 uv){ float z = texture2D(tDepth, uv).r * 2.0 - 1.0; return 2.0 * near * far / (far + near - z * (far - near)); }
+      void main(){
+        float k = amount * smoothstep(8.0, 22.0, lin(vUv));
+        vec2 dir = (center - vUv) * k;
+        vec3 c = vec3(0.0);
+        for (int i = 0; i < 12; i++) c += texture2D(tColor, vUv + dir * (float(i) / 11.0)).rgb;
+        c /= 12.0;
+        gl_FragColor = toSRGB > 0.5 ? LinearTosRGB(vec4(c, 1.0)) : vec4(c, 1.0);
+      }`,
+    depthTest: false, depthWrite: false,
+  });
+  const s = new THREE.Scene(); s.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat));
+  addEventListener('resize', () => { const z = renderer.getDrawingBufferSize(new THREE.Vector2()); rtPost.setSize(z.x, z.y); });
+  return { rtPost, mat, scene: s };
+})();
+function blurAmount() {
+  if (menuOpen || !(Settings.blur > 0)) return 0;
+  return Settings.blur / 100 * 0.07 * U.smooth(70, 260, Math.abs(car.u) * 3.6);
+}
 function renderFrame() {
-  if (FX.mode === 0) { renderer.render(scene, camera); return; }
+  renderMirrors();
+  const blur = blurAmount();
+  if (FX.mode === 0 && blur < 0.001) { renderer.render(scene, camera); return; }
   renderer.setRenderTarget(FX.rtScene);
   renderer.render(scene, camera);
+  const U2 = BLUR.mat.uniforms;
+  U2.amount.value = blur; U2.near.value = camera.near; U2.far.value = camera.far;
+  if (FX.mode === 0) {                                      // plain look: blur straight from the scene picture
+    U2.tColor.value = FX.rtScene.texture; U2.toSRGB.value = 1;
+    renderer.setRenderTarget(null); renderer.render(BLUR.scene, FX.cam);
+    return;
+  }
   FX.look.uniforms.near.value = camera.near; FX.look.uniforms.far.value = camera.far;
   FX.look.uniforms.mode.value = FX.mode;
   renderer.setRenderTarget(FX.rtLook);
   renderer.render(FX.lookScene, FX.cam);
-  renderer.setRenderTarget(null);
+  renderer.setRenderTarget(blur > 0.001 ? BLUR.rtPost : null);
   renderer.render(FX.fxaaScene, FX.cam);
+  if (blur > 0.001) { U2.tColor.value = BLUR.rtPost.texture; U2.toSRGB.value = 0; renderer.setRenderTarget(null); renderer.render(BLUR.scene, FX.cam); }
 }
 
 // ---------- one step of driving: physics, traffic, collisions, scoring ----------
@@ -993,6 +1208,8 @@ function driveStep(dt, ctl, paused) {
 
   // ---- traffic, collisions, scoring ----
   Net.tick(dt, netState());
+  // shared traffic is drawn at "now" like friends are: its 0.15 s buffer + the trip from the server
+  traffic.lead = traffic.remote ? 0.15 + (Net.rtt || 60) / 2000 : 0;
   traffic.update(dt, proxy, game.density);
   const impact = traffic.collide(car, trafficHull);
   // friends: light bumps just push you around, a hard hit (> ~11 km/h difference) costs your streak
@@ -1073,10 +1290,7 @@ function frame(now) {
   }
   if (Input.hit('Escape') || Input.hit('KeyP')) { openMenu('scrPause'); Input.endFrame(); return; }
   time += dt;
-  if (Input.tap('camera') || ctl.camBtn) {   // chase -> far chase -> cockpit -> chase
-    camMode = camMode === 0 ? 2 : camMode === 2 ? 1 : 0;
-    hud.message(['CHASE CAMERA', 'COCKPIT CAMERA', 'FAR CHASE CAMERA'][camMode]);
-  }
+  if (Input.tap('camera') || ctl.camBtn) camMode ^= 1;   // chase <-> cockpit
   if (Input.tap('style')) setFx((FX.mode + 1) % 3);   // normal -> toon -> realistic -> normal
   if (Input.tap('reset') || ctl.reset) resetCar();
   if (game.mode === 'sp' && !game.scored && (Input.hit('BracketLeft') || Input.hit('BracketRight'))) { // [ ] traffic (free drive only)
