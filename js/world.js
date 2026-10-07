@@ -149,6 +149,23 @@ class World {
     return true;
   }
 
+  // Loop start area road markings, shared by the highway chunks and the lot:
+  //  - edgeC: centre of the highway's right edge line
+  //  - onC / offC: centre of the on-ramp's / off-ramp's left line; it never goes inside the edge line, so it
+  //    runs into it exactly where the ramp joins (onC) or leaves (offC) the highway
+  //  - tipOn / tipOff: where each ramp line meets the edge line (the point of the striped gore)
+  //  - dash: lot-s ranges where the edge line is dashed (beside the deceleration / acceleration lanes)
+  rampGeom() {
+    if (this._rg) return this._rg;
+    const edgeC = 2 * ROAD.LW + 0.16;
+    const onC = s => Math.max(edgeC, ROAD.rampD(s) - ROAD.rampHW(s) + 0.125);
+    const offC = s => Math.max(edgeC, ROAD.offD(s) - ROAD.offHW(s) + 0.125);
+    let tipOn = LOOP.ACC0; while (tipOn > LOOP.LOT_S1 && onC(tipOn) <= edgeC + 1e-3) tipOn -= 0.25;
+    let tipOff = LOOP.DEC1; while (tipOff < LOOP.LOT_S0 && offC(tipOff) <= edgeC + 1e-3) tipOff += 0.25;
+    return (this._rg = { edgeC, onC, offC, tipOn, tipOff,
+      dash: [[LOOP.OFF0 + 20, Math.round(tipOff)], [Math.round(tipOn), LOOP.RAIL_OPEN1 - 6]] });
+  }
+
   // drop everything (switching between the endless road and the loop circuit)
   reset() {
     for (const c of [...this.chunks.values(), ...this.dying.values()]) { this.scene.remove(c); c.traverse(x => { if (x.geometry) x.geometry.dispose(); }); }
@@ -176,19 +193,32 @@ class World {
     strip(road, 2 * LW + 0.05, eR + 0.6, 0.03, 0.02, WC.shoulder);
     strip(road, eR + 0.6, eR + 2.4, 0.02, 0.0, WC.gravel);
     // loop: the acceleration / deceleration lane beside the start area is paved like a real lane
-    if (ROAD.loop) for (let j = 0; j < n; j++) {
-      const a = s0 + j * this.STEP, b = a + this.STEP, oa = ROAD.auxOuter(a), ob = ROAD.auxOuter(b);
+    const RG = ROAD.loop ? this.rampGeom() : null;
+    if (RG) for (let j = 0; j < n * 5; j++) {
+      const a = s0 + j * 1, b = a + 1, oa = ROAD.auxOuter(a), ob = ROAD.auxOuter(b);
       if (oa === null || ob === null) continue;
-      road.quad(P(a, 2 * LW + 0.2, 0.036), P(b, 2 * LW + 0.2, 0.036), P(b, ob, 0.036), P(a, oa, 0.036), WC.asphalt);
-      road.quad(P(a, oa - 0.2, 0.046), P(b, ob - 0.2, 0.046), P(b, ob - 0.05, 0.046), P(a, oa - 0.05, 0.046), WC.line);
+      const ia = Math.min(2 * LW + 0.05, oa), ib = Math.min(2 * LW + 0.05, ob);   // (covers the shoulder's edge: no pale seam)
+      road.quad(P(a, ia, 0.036), P(b, ib, 0.036), P(b, ob, 0.036), P(a, oa, 0.036), WC.asphalt);
+      // its outer line runs into the highway's edge line exactly where the lane tapers in / out
+      const ca = Math.max(RG.edgeC, oa - 0.125), cb = Math.max(RG.edgeC, ob - 0.125);
+      if (ca > RG.edgeC + 0.01 || cb > RG.edgeC + 0.01)
+        road.quad(P(a, ca - 0.075, 0.046), P(b, cb - 0.075, 0.046), P(b, cb + 0.075, 0.046), P(a, ca + 0.075, 0.046), WC.line);
     }
-    // edge lines (loop: the right one is dashed along the on-ramp's acceleration lane)
+    // edge lines. Loop: the right one is dashed (5 m on, 7 m off) beside the deceleration / acceleration lanes
     strip(road, -2 * LW - 0.25, -2 * LW - 0.07, 0.045, 0.045, WC.yline);
-    for (let j = 0; j < n; j++) {
-      const a = s0 + j * this.STEP, b = a + this.STEP, ls = ROAD.lotS(a);
-      const auxLane = (ls > LOOP.ACC0 - 15 && ls < LOOP.RAIL_OPEN1) || (ls > LOOP.OFF0 + 20 && ls < LOOP.DEC1 + 15);   // accel / decel lane
-      if (auxLane && ((ls % 12) + 12) % 12 >= 5) continue;
-      road.quad(P(a, 2 * LW + 0.07, 0.045), P(b, 2 * LW + 0.07, 0.045), P(b, 2 * LW + 0.25, 0.045), P(a, 2 * LW + 0.25, 0.045), WC.line);
+    {
+      const onAt = s => {
+        if (!RG) return true;
+        const ls = ROAD.lotS(s), r = RG.dash.find(([a, b]) => ls >= a && ls < b);
+        return !r || (ls - r[0]) % 12 < 5;
+      };
+      const edgeQuad = (a, b) => road.quad(P(a, 2 * LW + 0.07, 0.045), P(b, 2 * LW + 0.07, 0.045), P(b, 2 * LW + 0.25, 0.045), P(a, 2 * LW + 0.25, 0.045), WC.line);
+      let runA = null;
+      for (let m = s0; m < s0 + this.CH; m += 0.5) {
+        if (onAt(m + 0.25)) { if (runA === null) runA = m; if (m + 0.5 - runA >= this.STEP) { edgeQuad(runA, m + 0.5); runA = null; } }
+        else if (runA !== null) { edgeQuad(runA, m); runA = null; }
+      }
+      if (runA !== null) edgeQuad(runA, s0 + this.CH);
     }
     // dashed lane lines: 4 m dash, 10 m gap
     for (let i = -1; i <= 1; i++) {
@@ -230,16 +260,18 @@ class World {
       for (const q of [a, b]) sc.geom(this.G.box, this.xf(q[0], 3.6, q[2], 0, yaw, 0.35, 7.2, 0.35), WC.pole);
       const c = P(m, (eL + eR) / 2, 0);
       sc.geom(this.G.box, this.xf(c[0], 6.9, c[2], 0, yaw, eR - eL + 2.3, 0.5, 0.5), WC.pole);
-      for (const [d, w] of [[-3.7, 6], [4.6, 7]]) {
+      [[-3.7, 6], [4.6, 7]].forEach(([d, w], si) => {
         const q = P(m - 0.4, d, 0);
         sc.geom(this.G.box, this.xf(q[0], 6.3, q[2], 0, yaw, w, 2.4, 0.12), WC.sign);
-        // white text lines, laid flat on the sign's face (offsets follow the sign's angle on curves)
+        // white text lines, laid flat on the sign's face (offsets follow the sign's angle on curves).
+        // Half the signs have 3 lines (two on top, one below), half have 2 (upper-left, lower-right, near the middle).
         const rx = Math.cos(yaw), rz = -Math.sin(yaw), nx = Math.sin(yaw), nz = Math.cos(yaw);   // sign's sideways / facing directions
-        for (let t = 0; t < 3; t++) {
-          const o = (t - 1) * 1.2;
-          sc.geom(this.G.box, this.xf(q[0] + rx * o + nx * 0.07, 6.6 - (t % 2) * 0.5, q[2] + rz * o + nz * 0.07, 0, yaw, w * 0.22, 0.22, 0.04), WC.signW);
-        }
-      }
+        const twoLines = (Math.abs(Math.sin(kk * 12.9898 + si * 78.233) * 43758.5453) % 1) < 0.5;   // fixed per sign
+        const lines = twoLines ? [[-0.55, 6.6, 0.34], [0.55, 6.1, 0.34]]                         // [sideways, height, width share]
+                               : [[-1.2, 6.6, 0.22], [0, 6.1, 0.22], [1.2, 6.6, 0.22]];
+        for (const [o, y, ws] of lines)
+          sc.geom(this.G.box, this.xf(q[0] + rx * o + nx * 0.07, y, q[2] + rz * o + nz * 0.07, 0, yaw, w * ws, 0.22, 0.04), WC.signW);
+      });
     }
     // construction zones (lane closures)
     for (const z of ZONES.near(s0, s0 + this.CH)) this.buildZone(z, s0, sc, P);
@@ -382,34 +414,45 @@ class World {
     // The ramps narrow to exactly one lane where they meet the deceleration / acceleration lane, so their
     // edges line up with it. Between a ramp and the highway's edge line there's a striped gore that ends
     // in a point; the ramp's inner line stops there. Kerbs only near the pad.
-    const edge = 2 * ROAD.LW + 0.25;
-    // gore between a ramp and the highway: paved like the road, with long thin diagonal stripes that
-    // point along the traffic (like real merge markings), ending in the point where the two meet
-    const gore = (from, to, inner, dir) => {             // dir +1: gore widens with s (off-ramp), -1: narrows (on-ramp)
-      area(gb, from, to, edge - 0.05, s => Math.max(edge, inner(s) - 0.05), 0.034, WC.asphalt, 2);
-      for (let s = from; s < to; s += 9) {
-        const s2 = s + 12 * dir, d2 = inner(s2) - 0.25;     // each stripe leans with the traffic, ~12 m long
-        if (d2 < edge + 0.5 || (dir < 0 ? s2 < from - 12 : s2 > to + 12)) continue;
-        lines.quad(P(s, edge, 0.05), P(s + 0.35 * dir, edge, 0.05), P(s2 + 0.35 * dir, d2, 0.05), P(s2, d2, 0.05), WC.line);
+    const RG = this.rampGeom(), edge = RG.edgeC + 0.09;     // edge: outer side of the highway's edge line
+    const lineAlong = (s0, s1, c) => area(lines, s0, s1, s => c(s) - 0.075, s => c(s) + 0.075, 0.055, WC.line, 1);
+    // Striped gore between the highway's edge line and a ramp's left line: paved, with evenly spaced
+    // stripes at one angle that run the way traffic moves (peeling off / merging in), all kept inside the
+    // two lines. It starts at the point where the lines meet and ends where the ramp is clear of the
+    // highway's gravel verge (or where the guard rail starts again).
+    const gore = (tip, c, dir) => {             // dir +1: widens with s (off-ramp), -1: widens against s (on-ramp)
+      const inner = s => c(s) - 0.075;          // inside edge of the ramp's line
+      let end = tip; while (Math.abs(end - tip) < 140 && c(end) < ROAD.edgeR + 2.4 && ROAD.railOpen(1, end + dir)) end += dir * 0.5;
+      const a = Math.min(tip, end), b = Math.max(tip, end);
+      area(gb, a, b, edge - 0.05, s => Math.max(edge, inner(s) + 0.02), 0.034, WC.asphalt, 1);
+      // a solid line across the wide end closes the painted area off neatly
+      const ec = end - dir * 0.2;
+      lines.quad(P(ec - 0.2, edge - 0.05, 0.05), P(ec + 0.2, edge - 0.05, 0.05), P(ec + 0.2, inner(ec + 0.2), 0.05), P(ec - 0.2, inner(ec - 0.2), 0.05), WC.line);
+      const lean = 1.6;                        // stripe length along the road per metre of gore width (~32 deg)
+      for (let k = 3; k < Math.abs(end - tip); k += 5) {
+        const sr = tip + dir * k, w = inner(sr) - edge;   // stripe end on the ramp line
+        if (w < 0.45) continue;
+        const se = sr - dir * lean * w;                   // ...and on the highway's edge line (back toward the point)
+        if (dir > 0 ? se < tip : se > tip) continue;
+        const t = 0.4 * dir;                              // stripe width (along the road)
+        lines.quad(P(se, edge, 0.05), P(se + t, edge, 0.05), P(sr + t, inner(sr + t), 0.05), P(sr, inner(sr), 0.05), WC.line);
       }
     };
     // off-ramp (entrance): leaves the deceleration lane and curves onto the pad's back edge
     const oA = s => ROAD.offD(s) - ROAD.offHW(s), oB = s => ROAD.offD(s) + ROAD.offHW(s);
-    let tipOff = D.DEC1; while (tipOff < D.LOT_S0 && oA(tipOff) < edge + 0.3) tipOff++;
     area(gb, D.DEC1, D.LOT_S0, oA, oB, 0.04, WC.asphalt, 2);
-    area(lines, tipOff, D.LOT_S0, s => oA(s) + 0.05, s => oA(s) + 0.2, 0.055, WC.line, 2);
-    area(lines, D.DEC1, D.LOT_S0, s => oB(s) - 0.2, s => oB(s) - 0.05, 0.055, WC.line, 2);
-    gore(tipOff, tipOff + 70, oA, 1);
+    lineAlong(RG.tipOff - 0.5, D.LOT_S0, RG.offC);                  // left line: grows out of the edge line
+    lineAlong(D.DEC1, D.LOT_S0, s => oB(s) - 0.125);                 // right line: carries on the decel lane's
+    gore(RG.tipOff, RG.offC, 1);
     area(gb, D.LOT_S0 - 50, D.LOT_S0, s => oA(s) - 0.35, oA, 0.12, curb, 2);
     area(gb, D.LOT_S0 - 50, D.LOT_S0, oB, s => oB(s) + 0.35, 0.12, curb, 2);
     arrow(D.LOT_S0 - 20, ROAD.offD(D.LOT_S0 - 20));
     // on-ramp (exit): from the pad's front edge down into the acceleration lane
     const rA = s => ROAD.rampD(s) - ROAD.rampHW(s), rB = s => ROAD.rampD(s) + ROAD.rampHW(s);
-    let tipOn = D.ACC0; while (tipOn > D.LOT_S1 && rA(tipOn) < edge + 0.3) tipOn--;
     area(gb, D.LOT_S1, D.ACC0, rA, rB, 0.04, WC.asphalt, 2);
-    area(lines, D.LOT_S1, tipOn, s => rA(s) + 0.05, s => rA(s) + 0.2, 0.055, WC.line, 2);
-    area(lines, D.LOT_S1, D.ACC0, s => rB(s) - 0.2, s => rB(s) - 0.05, 0.055, WC.line, 2);
-    gore(tipOn - 70, tipOn, rA, -1);
+    lineAlong(D.LOT_S1, RG.tipOn + 0.5, RG.onC);                    // left line: runs into the edge line
+    lineAlong(D.LOT_S1, D.ACC0, s => rB(s) - 0.125);                 // right line: becomes the accel lane's
+    gore(RG.tipOn, RG.onC, -1);
     area(gb, D.LOT_S1, D.LOT_S1 + 50, s => rA(s) - 0.35, rA, 0.12, curb, 2);
     area(gb, D.LOT_S1, D.LOT_S1 + 50, rB, s => rB(s) + 0.35, 0.12, curb, 2);
     arrow(D.LOT_S1 + 12, ROAD.rampD(D.LOT_S1 + 12));

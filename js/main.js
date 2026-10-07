@@ -4,7 +4,7 @@
 // =====================================================================
 
 // ---------- settings ----------
-const DEFAULTS = { density: 0.55, assist: 0, sens: 1.0, kbSens: 1.0, kbStyle: 'control', vol: 0.6, tc: true, manual: false, color: '#a6b0b8', mpDensity: 0.55, minimap: true };
+const DEFAULTS = { density: 0.55, assist: 0, sens: 1.0, kbSens: 1.0, vol: 0.6, tc: true, manual: false, color: '#a6b0b8', mpDensity: 0.55, minimap: true };
 const SCORED_DENSITY = 0.6;               // scored (leaderboard) runs always use this much traffic
 const Settings = Object.assign({}, DEFAULTS);
 try { Object.assign(Settings, JSON.parse(localStorage.getItem('tw_settings2') || '{}')); } catch (e) { /* ignore */ }
@@ -346,11 +346,7 @@ bindRange('mpDens', 'mpDensity', v => v / 100, v => v + '%');      // free drive
 bindRange('la', 'assist', v => v / 100, v => (v === 0 ? 'Off' : v + '%'));
 bindRange('sens', 'sens', v => v / 100, v => (v / 100).toFixed(2) + '×');       // wheel / controller
 bindRange('kbSens', 'kbSens', v => v / 100, v => (v / 100).toFixed(2) + '×');   // keyboard
-{ // keyboard steering preset: Max control (new) or Previous (the tuning before it)
-  const el = $id('kbStyle');
-  el.value = KB_PRESETS[Settings.kbStyle] ? Settings.kbStyle : 'control'; setKbStyle(el.value);
-  el.addEventListener('change', () => { Settings.kbStyle = el.value; setKbStyle(el.value); saveSettings(); });
-}
+setKbStyle('control');   // keyboard steering: always "Max control" (the older "classic" preset stays in physics.js, unused)
 bindRange('vol', 'vol', v => v / 100, v => v + '%');
 const tcEl = $id('tc'), manEl = $id('manual'), mmEl = $id('minimapOn');
 tcEl.checked = Settings.tc; manEl.checked = Settings.manual; mmEl.checked = Settings.minimap;
@@ -473,21 +469,22 @@ document.querySelectorAll('[data-lb]').forEach(b => b.addEventListener('click', 
   document.querySelectorAll('[data-lb]').forEach(o => o.classList.toggle('sel', o === b));
   loadLeaderboard();
 }));
+let lbReq = 0;   // only the newest load draws (two quick loads would otherwise both add their rows)
 async function loadLeaderboard() {
-  const mode = lbTab, list = $id('lbList'), note = $id('lbNote');
+  const mode = lbTab, list = $id('lbList'), note = $id('lbNote'), my = ++lbReq;
   note.textContent = 'Loading…'; list.innerHTML = '';
   const base = await Net.findBase();
   if (!base) { note.textContent = 'Leaderboards live on the online server: open the game from its website link.'; return; }
   let j;
   try { j = await (await fetch(base + '/api/leaderboard?mode=' + mode, { cache: 'no-store' })).json(); }
   catch (e) { note.textContent = 'Could not load the leaderboard. Check your internet connection.'; return; }
-  if (mode !== lbTab) return;
+  if (mode !== lbTab || my !== lbReq) return;
   const rows = j.list || [];
   note.textContent = (mode === 'sp' ? 'Best scored singleplayer drive of each driver (60% traffic).' : 'Best drive of each driver on public and scored servers.')
     + (j.persistent ? '' : ' (Not saved permanently yet: they reset when the server restarts.)')
     + (j.accounts ? (Account.signedIn ? '' : ' Sign in with Google to get on it.') : ' (Sign-in isn\'t set up on this server yet, so no drives can be saved.)');
-  // run length as m:ss (h:mm:ss for very long runs)
-  const time = s => { s = Math.max(0, Math.round(s || 0)); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, ss = String(s % 60).padStart(2, '0'); return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`; };
+  // when the drive was set, e.g. "Oct 7" (with the year if it's from an earlier year)
+  const time = t => { if (!t) return '—'; const d = new Date(t); return d.toLocaleDateString(undefined, d.getFullYear() === new Date().getFullYear() ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' }); };
   const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt !== undefined) e.textContent = txt; return e; };
   const me = Account.signedIn ? Account.user.name : null;
   // podium: 2nd | 1st | 3rd
@@ -495,7 +492,7 @@ async function loadLeaderboard() {
     const pod = el('div', 'podium');
     for (const i of [1, 0, 2]) {
       const e = rows[i], p = el('div', 'pod p' + (i + 1) + (e ? '' : ' empty') + (e && e.name === me ? ' me' : ''));
-      if (e) { p.append(el('div', 'pname', e.name), el('div', 'pscore', U.fmt(e.score)), el('div', 'ptime', time(e.dur))); }
+      if (e) { p.append(el('div', 'pname', e.name), el('div', 'pscore', U.fmt(e.score)), el('div', 'ptime', time(e.t))); }
       else p.append(el('div', 'pname', '—'));
       const block = el('div', 'block'); block.append(el('span', '', String(i + 1))); p.appendChild(block);
       pod.appendChild(p);
@@ -509,7 +506,7 @@ async function loadLeaderboard() {
     tbl.appendChild(head);
     rows.slice(3).forEach((e, k) => {
       const row = el('div', 'lbRow' + (e.name === me ? ' me' : ''));
-      row.append(el('span', 'rk', String(k + 4)), el('span', 'nm', e.name), el('span', 'sc', U.fmt(e.score)), el('span', 'tm', time(e.dur)));
+      row.append(el('span', 'rk', String(k + 4)), el('span', 'nm', e.name), el('span', 'sc', U.fmt(e.score)), el('span', 'tm', time(e.t)));
       tbl.appendChild(row);
     });
     list.appendChild(tbl);
