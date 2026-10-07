@@ -12,6 +12,8 @@ const M4 = {
   mass: 1725, Iz: 2950, wheelbase: 2.857, a: 1.343, b: 1.514, hcg: 0.49, rw: 0.345,
   mu: 1.08, muX: 1.38, Bf: 15, Br: 16.5, C: 1.4, // lateral / longitudinal peak friction (performance tyres)
   cdA: 0.34 * 2.2, rho: 1.225, crr: 0.014, eff: 0.88,
+  assistBack: 0.6,   // lane assist eases back in over this long once you stop steering (it lets go instantly)
+  coastExtra: 0.5,   // off both pedals the car slows 50% quicker than engine braking + drag alone
   gears: [0, 5.00, 3.20, 2.143, 1.72, 1.314, 1.00, 0.822, 0.64], rev: 3.46, fd: 3.154,
   idle: 850, redline: 7200, vmax: 290 / 3.6,
   torque: [[0, 300], [1000, 360], [2000, 520], [2750, 650], [5500, 650], [6250, 573], [7000, 490], [7300, 440], [8000, 300]],
@@ -36,14 +38,47 @@ const M4 = {
   // 5-10 deg of wheel: double the previous response, blending back to the old curve by ~20 deg
   turnMultKeys: [[0, 2.446], [10.5, 2.446], [20, 1.35], [25, 1.223], [45, 1.14], [60, 1.279], [90, 0.727], [450, 1.0]],
   turnG: 2.52,// max cornering (g) at full lock - soft limit (high, so you can flick through gaps)
-  // Keyboard steering (Assetto Corsa model), in full-lock per second:
-  keySpeed: 5.5,    // steering speed toward the pressed side (~0.18 s to full)
-  keyOpposite: 22,  // opposite lock speed when switching sides
-  keyReturn: 7.0,   // return rate to centre when released
-  keyFilter: 40,    // light smoothing so it stays smooth, not jerky
+  // Keyboard steering: keys ask for a turn (sideways g), not a wheel angle (see SteerController)
+  kbFirst: 0.5,     // a press goes straight to this much of the full turn...
+  kbBuild: 0.6,     // ...then keeps tightening toward the full turn while held (~1 s; per second)
+  kbSmooth: 18,     // how quickly the steering follows a press (starts at once, eases in: ~63% in 1/18 s)
+  kbReturn: 10,     // ...letting go (straightens up smoothly)...
+  kbReturnTail: 3,  // ...except the last bit, which slides gently back to centre...
+  kbTailAt: 0.1,    // ...(roughly the last 10% of the turn)
+  kbFlipSmooth: 12, // ...switching sides (car starts changing direction ~0.02 s after the switch, 90% over in ~0.12 s)
+  kbFlipBoost: 1.2, // switching sides pulls this much harder for a moment, so the car changes direction sooner
+  kbFlipTime: 0.12, // (how long that extra pull lasts after the switch)
+  kbGrace: 0.12,    // releasing one key and pressing the other within this long still counts as a switch
+  kbLowLock: 0.5,   // front wheel angle limit at walking pace (parking lot manoeuvring)
+  // full-key turn (sideways g) vs speed (km/h); Settings > Keyboard sensitivity scales it
+  // (highway speed: ~1.4 g the moment you press, tightening to ~2.3 g after holding ~1 s)
+  kbTurnG: [[0, 4.35], [40, 4.05], [100, 3.9], [300, 3.7]],
+  kbAlign: 0,       // with no key pressed, steer the car back in line with the road (0 = off, 1 = full)
+  kbAlignTau: 0.6,  // ...taking about this long to line up
+  kbAlignMax: 0.35, // ...using at most this much of a full turn
+  // (the keyboard values above are overwritten by the preset picked in Settings - see KB_PRESETS)
   ratio: 14.5,    // steering ratio (wheel deg : road-wheel deg)
   brakeGrip: 1.23, // braking grip multiplier on top of the tyre grip (stronger, shorter stops)
 };
+
+// Keyboard steering presets (Settings > Keyboard steering). "classic" is the tuning as it was before
+// "Max control" was added - kept exactly so it can be switched back to.
+const KB_PRESETS = {
+  classic: {
+    kbFirst: 0.5, kbBuild: 0.6, kbSmooth: 18, kbReturn: 10, kbReturnTail: 3, kbTailAt: 0.1,
+    kbFlipSmooth: 12, kbFlipBoost: 1.2, kbFlipTime: 0.12, kbGrace: 0.12,
+    kbTurnG: [[0, 4.35], [40, 4.05], [100, 3.9], [300, 3.7]], kbAlign: 0,
+  },
+  // Max control: letting go lines the car back up with the road by itself (no counter-steering
+  // needed to straighten out), and the steering comes back to centre crisply - no lingering turn.
+  control: {
+    kbFirst: 0.5, kbBuild: 0.6, kbSmooth: 18, kbReturn: 14, kbReturnTail: 14, kbTailAt: 0.1,
+    kbFlipSmooth: 12, kbFlipBoost: 1.2, kbFlipTime: 0.12, kbGrace: 0.12,
+    kbTurnG: [[0, 4.35], [40, 4.05], [100, 3.9], [300, 3.7]], kbAlign: 1,
+  },
+};
+function setKbStyle(name) { Object.assign(M4, KB_PRESETS[name] || KB_PRESETS.control); }
+setKbStyle('control');
 
 function engineTorque(rpm) {
   const t = M4.torque;
@@ -218,7 +253,11 @@ class PlayerCar {
     const drag = 0.5 * M4.rho * M4.cdA;
     const roll = M4.crr * m * g * (Math.abs(this.u) > 0.1 ? sgnU : this.u / 0.1);
     const corner = 0.02 * m * Math.min(Math.abs(ayNow), 10) * sgnU; // small cornering drag
-    const Fx = Fxr + Fxf - drag * this.u * spd - roll - corner;
+    // off both pedals: slow down more (engine braking + drag + rolling resistance scaled up by coastExtra)
+    let coastX = 0;
+    if (this.gear > 0 && this.u > 1 && throttle < 0.02 && brake < 0.02)
+      coastX = M4.coastExtra * (Math.max(0, -Fdrive) + drag * this.u * spd + roll);
+    const Fx = Fxr + Fxf - drag * this.u * spd - roll - corner - coastX;
     const u0 = this.u;
     this.u += Fx / m * dt;
     // braking never reverses direction by itself
@@ -263,7 +302,7 @@ const WHEEL_CURVE = mcurve([[0, 0], [10, 4.6], [20, 14.1], [45, 72], [60, 112], 
 //  Steering controller: keyboard smoothing, wheel mapping, lane assist
 // =====================================================================
 class SteerController {
-  constructor() { this.key = 0; this.k1 = 0; this.wheelF = 0; this.laLane = -1; this.assistActive = 0; }
+  constructor() { this.key = 0; this.k1 = 0; this.kbSide = 0; this.kbSwitchT = 0; this.wheelF = 0; this.laLane = -1; this.assistActive = 0; }
 
   update(dt, car, ctl, settings) {
     const sens = settings.sens, spd = Math.abs(car.u);
@@ -295,49 +334,82 @@ class SteerController {
       this.wheelF = this.wheelF + (drv - this.wheelF) * (1 - Math.exp(-dt * M4.wheelFilter));
       drv = this.wheelF;
     } else {
-      // ---- Keyboard: Assetto Corsa keyboard steering model ----
-      // Steering speed ramps toward the key, opposite-lock speed is faster when switching sides,
-      // and return rate re-centres when released. Speed sensitivity (~60%) scales max lock
-      // with speed, then a light filter (~40%) rounds it off.
+      // ---- Keyboard ----
+      // A key asks for a TURN (sideways g), not a wheel angle, so it feels the same at any speed.
+      // A press goes straight to a strong turn, which keeps building to the full turn while held.
+      // Switching sides carries how hard you were turning across to the other side.
+      // The steering moves toward its target at once - fastest at the very start, then easing gently in
+      // (no wind-up delay, no rush through the middle), so changes are instant AND smooth.
       const t = ctl.steer;
-      let rate;
-      if (t === 0) rate = M4.keyReturn;
-      else if (this.key !== 0 && Math.sign(t) !== Math.sign(this.key)) rate = M4.keyOpposite;
-      else rate = M4.keySpeed;
-      this.key += U.clamp(t - this.key, -rate * dt, rate * dt);
-      this.k1 += (this.key - this.k1) * (1 - Math.exp(-dt * M4.keyFilter));
-      const ms = 0.55 / (1 + spd * 0.025) * sens;  // only mild speed reduction of max lock
-      drv = this.k1 * ms;
+      if (t === 0) {
+        this.kbIdle = (this.kbIdle || 0) + dt;
+        if (this.kbIdle > M4.kbGrace) this.key = 0;          // (a quick A->D change with a gap still counts as a switch)
+      } else {
+        this.kbIdle = 0;
+        if (this.key === 0) this.key = M4.kbFirst;            // fresh press: strong turn straight away
+        this.key = Math.min(1, this.key + M4.kbBuild * dt);   // ...building to the full turn while held
+        if (Math.sign(t) !== this.kbSide) {
+          this.kbSide = Math.sign(t); this.kbSwitchT = 0;
+          this.kbFlip = Math.abs(this.k1) > 0.05 && Math.sign(this.k1) !== Math.sign(t);   // a real switch (was turning the other way)
+        } else this.kbSwitchT = (this.kbSwitchT || 0) + dt;
+      }
+      // just switched sides (still swinging over): pull a bit harder so the car changes direction sooner
+      const flipping = t !== 0 && this.kbFlip && (Math.sign(this.k1) !== Math.sign(t) || this.kbSwitchT < M4.kbFlipTime);
+      const target = t === 0 ? 0 : t * this.key * (flipping ? M4.kbFlipBoost : 1);
+      // letting go: drops away quickly, then the last little bit of turn slides gently back to centre
+      const wRet = U.lerp(M4.kbReturnTail, M4.kbReturn, U.smooth(0, M4.kbTailAt * 2, Math.abs(this.k1)));
+      const w = t === 0 ? wRet : flipping ? M4.kbFlipSmooth : M4.kbSmooth;
+      this.k1 += (target - this.k1) * (1 - Math.exp(-dt * w));
+      if (this._kbKeys !== M4.kbTurnG) { this._kbKeys = M4.kbTurnG; this._kbG = mcurve(M4.kbTurnG); }
+      const kbSens = settings.kbSens || 1;   // keyboard has its own sensitivity (the wheel's slider doesn't touch it)
+      const v = Math.max(spd, 1), turn = this._kbG(spd * 3.6) * 9.81 * kbSens;   // full-key sideways accel (m/s^2)
+      const full = Math.min(M4.kbLowLock, Math.atan(M4.wheelbase * turn / (v * v)));   // wheel angle that gives it
+      // straighten-out help (Max control): with no key held the car steers itself back in line with the
+      // road's curve, so after a lane change or a swerve you don't have to counter-steer to recover.
+      // Pressing any key hands control straight back.
+      let alignT = 0;
+      if (t === 0 && M4.kbAlign > 0 && car.u > 9) {
+        const p = ROAD.project(car.x, car.z), eYaw = U.wrap(car.yaw - ROAD.yaw(p.s));
+        if (Math.abs(eYaw) < 0.6 && p.d > ROAD.edgeL - 3 && p.d < ROAD.edgeR + 3) {
+          const us = 1 + M4.usK * car.u * car.u;
+          const ang = Math.atan(M4.wheelbase * ROAD.kappa(p.s) * us) - M4.wheelbase * us * eYaw / (M4.kbAlignTau * car.u);
+          alignT = M4.kbAlign * U.clamp(ang, -M4.kbAlignMax * full, M4.kbAlignMax * full);
+        }
+      }
+      this.kAl = (this.kAl || 0) + (alignT - (this.kAl || 0)) * (1 - Math.exp(-dt * (t === 0 ? M4.kbReturn : M4.kbSmooth * 2)));
+      drv = this.k1 * full + this.kAl;
       intent = Math.abs(t);
     }
     drv = U.clamp(drv, -M4.maxLock, M4.maxLock);
 
     // ---- lane assist ----
+    // Keeps the car lined up with the road's curve (wherever you are across it - it does NOT pull you
+    // into a lane). The moment you steer it lets go completely, and it only eases back in once your
+    // steering has settled, so it never fights a turn or a quick left-right weave.
+    // (settings.laneCentre: also holds the nearest lane - only used while the menu is open on a server)
     const S = settings.assist;
     let out = drv;
     this.assistActive = 0;
-    if (S > 0 && car.u > 9) {
+    const steering = intent > 0.01 || (!wheel && Math.abs(this.k1) > 0.03);
+    this.assistGate = steering ? 0 : Math.min(1, (this.assistGate ?? 1) + dt / M4.assistBack);
+    if (S > 0 && car.u > 9 && this.assistGate > 0) {
       const p = ROAD.project(car.x, car.z);
       const ry = ROAD.yaw(p.s), kap = ROAD.kappa(p.s);
       const eYaw = U.wrap(car.yaw - ry);
       if (Math.abs(eYaw) < 0.45 && p.d > ROAD.edgeL - 1 && p.d < ROAD.edgeR + 1) {
-        // Lane keeping: steer toward the centre of the nearest lane and follow the road's curve.
-        // It takes over smoothly while the driver's input is small and hands back control
-        // as soon as the driver clearly steers (e.g. to change lanes).
-        const vlat = car.u * Math.sin(eYaw) + car.v * Math.cos(eYaw);
-        const pred = p.d + vlat * 0.6;
-        let lane = ROAD.nearestLane(pred);
-        // never hold the car in a lane that's closed by roadworks just ahead
-        if (ZONES.closedAhead(lane, p.s, 150)) lane += lane === 0 ? 1 : -1;
-        const err = p.d - ROAD.lane(lane);
-        const vdes = U.clamp(-err * 1.8, -4, 4);                     // m/s back toward lane centre (firm)
-        const eDes = Math.asin(U.clamp(vdes / car.u, -0.3, 0.3));       // heading that achieves it
+        let eDes = 0;                                                   // heading: along the road
+        if (settings.laneCentre) {
+          const vlat = car.u * Math.sin(eYaw) + car.v * Math.cos(eYaw);
+          let lane = ROAD.nearestLane(p.d + vlat * 0.6);
+          if (ZONES.closedAhead(lane, p.s, 150)) lane += lane === 0 ? 1 : -1;   // never a lane closed just ahead
+          const vdes = U.clamp(-(p.d - ROAD.lane(lane)) * 1.8, -4, 4);  // m/s back toward lane centre
+          eDes = Math.asin(U.clamp(vdes / car.u, -0.3, 0.3));
+        }
         const us = 1 + M4.usK * car.u * car.u;                          // match the car's understeer
         const ff = Math.atan(M4.wheelbase * kap * us);                  // follow the curve
         // steering that corrects the heading error over ~0.7 s, scaled for speed
         const la = U.clamp(ff + M4.wheelbase * us * (eDes - eYaw) / (0.4 * car.u), -0.15, 0.15);
-        const fade = 1 - U.smooth(0, 1, intent); // driver steering -> assist lets go completely
-        const w = (1 - (1 - S) * (1 - S)) * fade;   // strong even at low slider values (50% -> 75% authority)
+        const g = this.assistGate, w = (1 - (1 - S) * (1 - S)) * g * g * (3 - 2 * g);   // eases back in smoothly
         out = drv + w * (la - drv);
         this.assistActive = w;
       }

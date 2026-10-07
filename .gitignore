@@ -1,2 +1,4 @@
 node_modules/
 leaderboard.json
+accounts.json
+accounts.json.tmp

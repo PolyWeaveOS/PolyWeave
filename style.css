@@ -237,6 +237,9 @@ button:disabled { opacity: .45; cursor: default; }
 #mpCode { width: 104px; text-transform: uppercase; letter-spacing: 2px; font-weight: 800; }
 input[type=text] { font-family: var(--font); font-size: 14px; padding: 7px 9px; border-radius: 6px; border: 1px solid rgba(255,255,255,.22); background: rgba(0,0,0,.25); color: #fff; outline: none; user-select: text; }
 input[type=text]:focus { border-color: var(--accent); }
+select { font-family: var(--font); font-size: 13px; padding: 5px 8px; border-radius: 6px; border: 1px solid rgba(255,255,255,.22); background: rgba(0,0,0,.25); color: #fff; outline: none; cursor: pointer; }
+select:focus { border-color: var(--accent); }
+select option { background: #1d2733; color: #fff; }
 #mpHost { background: var(--accent); color: #1a1f28; border: none; }
 #mpHost:hover { background: #ffe37a; }
 .mpOr { opacity: .55; font-size: 12px; }

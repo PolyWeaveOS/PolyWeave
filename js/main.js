@@ -4,11 +4,16 @@
 // =====================================================================
 
 // ---------- settings ----------
-const DEFAULTS = { density: 0.55, assist: 0, sens: 1.0, vol: 0.6, tc: true, manual: false, color: '#a6b0b8', mpDensity: 0.55, minimap: true };
+const DEFAULTS = { density: 0.55, assist: 0, sens: 1.0, kbSens: 1.0, kbStyle: 'control', vol: 0.6, tc: true, manual: false, color: '#a6b0b8', mpDensity: 0.55, minimap: true };
 const SCORED_DENSITY = 0.6;               // scored (leaderboard) runs always use this much traffic
 const Settings = Object.assign({}, DEFAULTS);
 try { Object.assign(Settings, JSON.parse(localStorage.getItem('tw_settings2') || '{}')); } catch (e) { /* ignore */ }
 const saveSettings = () => { try { localStorage.setItem('tw_settings2', JSON.stringify(Settings)); } catch (e) { /* ignore */ } };
+// keyboard sensitivity was rescaled (old 2.0x is the new 1.0x): carry a saved value over so the feel doesn't change
+if (Settings.kbV !== 2) {
+  try { const saved = JSON.parse(localStorage.getItem('tw_settings2') || '{}'); if (saved.kbSens) Settings.kbSens = U.clamp(saved.kbSens / 2, 0.3, 2); } catch (e) { /* ignore */ }
+  Settings.kbV = 2; saveSettings();
+}
 
 // ---------- renderer / scene ----------
 const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
@@ -115,7 +120,7 @@ function startPosition() {
   car.place(40, ROAD.lane(2), 100 / 3.6);
   car.tc = Settings.tc; car.manual = Settings.manual; car.hitT = 0;
   camS.yaw = car.yaw; camS.shift = 0;
-  steerCtl.key = 0; steerCtl.k1 = 0; steerCtl.wheelF = 0;
+  steerCtl.key = 0; steerCtl.k1 = 0; steerCtl.wheelF = 0; steerCtl.kAl = 0;
   traffic.clear();
   const p = ROAD.project(car.x, car.z); car.s = p.s; car.d = p.d; ROAD.hintS = car.s;
   Object.assign(proxy, { s: car.s, d: car.d, v: car.u });
@@ -130,7 +135,7 @@ function resetCar() {
   car.place(p.s, ROAD.lane(2), 100 / 3.6);
   car.tc = Settings.tc; car.manual = Settings.manual; car.hitT = 0;
   car.s = p.s; car.d = ROAD.lane(2); ROAD.hintS = car.s;
-  steerCtl.key = 0; steerCtl.k1 = 0; steerCtl.wheelF = 0;
+  steerCtl.key = 0; steerCtl.k1 = 0; steerCtl.wheelF = 0; steerCtl.kAl = 0;
   camS.yaw = car.yaw; camS.shift = 0;
   Object.assign(proxy, { s: car.s, d: car.d, v: car.u });
   if (!traffic.remote) { traffic.clear(); traffic.maintain(proxy, game.density); }   // (online the traffic is shared)
@@ -216,7 +221,7 @@ function spawnInLot(slot) {
   car.place(sp.s, sp.d, 0);
   car.tc = Settings.tc; car.manual = Settings.manual; car.hitT = 0;
   car.s = sp.s; car.d = sp.d; ROAD.hintS = sp.s; lastGoodS = sp.s;
-  steerCtl.key = 0; steerCtl.k1 = 0; steerCtl.wheelF = 0;
+  steerCtl.key = 0; steerCtl.k1 = 0; steerCtl.wheelF = 0; steerCtl.kAl = 0;
   camS.yaw = car.yaw; camS.shift = 0;
   world.fillAll(car.s);
   Object.assign(proxy, { s: car.s, d: car.d, v: 0 });
@@ -339,7 +344,13 @@ const bindRange = (id, key, toVal, fmt) => {
 bindRange('fdDens', 'density', v => v / 100, v => v + '%');        // singleplayer free drive traffic
 bindRange('mpDens', 'mpDensity', v => v / 100, v => v + '%');      // free drive server traffic
 bindRange('la', 'assist', v => v / 100, v => (v === 0 ? 'Off' : v + '%'));
-bindRange('sens', 'sens', v => v / 100, v => (v / 100).toFixed(2) + '×');
+bindRange('sens', 'sens', v => v / 100, v => (v / 100).toFixed(2) + '×');       // wheel / controller
+bindRange('kbSens', 'kbSens', v => v / 100, v => (v / 100).toFixed(2) + '×');   // keyboard
+{ // keyboard steering preset: Max control (new) or Previous (the tuning before it)
+  const el = $id('kbStyle');
+  el.value = KB_PRESETS[Settings.kbStyle] ? Settings.kbStyle : 'control'; setKbStyle(el.value);
+  el.addEventListener('change', () => { Settings.kbStyle = el.value; setKbStyle(el.value); saveSettings(); });
+}
 bindRange('vol', 'vol', v => v / 100, v => v + '%');
 const tcEl = $id('tc'), manEl = $id('manual'), mmEl = $id('minimapOn');
 tcEl.checked = Settings.tc; manEl.checked = Settings.manual; mmEl.checked = Settings.minimap;
@@ -898,7 +909,7 @@ const COAST = { steer: 0, throttle: 0, brake: 0, handbrake: 0, source: 'keys' };
 function driveStep(dt, ctl, paused) {
   // ---- physics (fixed-size substeps that exactly cover the frame) ----
   const n = Math.max(1, Math.ceil(dt / SUB)), h = dt / n;
-  const steerSet = paused ? Object.assign({}, Settings, { assist: 1 }) : Settings;
+  const steerSet = paused ? Object.assign({}, Settings, { assist: 1, laneCentre: true }) : Settings;
   let wallHit = 0;
   ROAD.hintS = car.s;      // (loop circuit: road lookups pick the lap you're on)
   for (let i = 0; i < n; i++) {
@@ -909,7 +920,7 @@ function driveStep(dt, ctl, paused) {
   // safety net: if the car state ever becomes invalid (NaN), put it back on the road
   if (![car.x, car.z, car.u, car.v, car.r, car.yaw, car.steer].every(Number.isFinite)) {
     car.place(Number.isFinite(lastGoodS) ? lastGoodS : 40, ROAD.lane(2), 100 / 3.6);
-    car.wImp = 0; car.rK = 0; steerCtl.key = steerCtl.k1 = steerCtl.wheelF = 0;
+    car.wImp = 0; car.rK = 0; steerCtl.key = steerCtl.k1 = steerCtl.wheelF = 0; steerCtl.kAl = 0;
   }
   const pr = ROAD.project(car.x, car.z);
   car.s = pr.s; car.d = pr.d; lastGoodS = pr.s;

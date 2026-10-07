@@ -122,7 +122,10 @@ const Input = {
         this.prevSt = st;
         const th = this.pedal(p, c.throttle), br = this.pedal(p, c.brake);
         if (th > 0.03 || br > 0.03) this.wheelUsed = true;
-        if (this.wheelUsed && !ks) { o.steer = st; o.source = 'wheel'; }
+        // After steering with the keys, stay on the keyboard until the wheel is actually moved again
+        // (a wheel resting slightly off centre must not take over the moment a key is released).
+        if (ks) this.lastKeySteer = now;
+        if (this.wheelUsed && !ks && this.lastWheelMove > (this.lastKeySteer || -1e9)) { o.steer = st; o.source = 'wheel'; }
         o.throttle = Math.max(o.throttle, th);
         o.brake = Math.max(o.brake, br);
         o.camBtn = this.btnEdge(p, c.cam); o.up = this.btnEdge(p, c.up); o.down = this.btnEdge(p, c.down); o.reset = this.btnEdge(p, c.reset);

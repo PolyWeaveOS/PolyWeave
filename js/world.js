@@ -35,13 +35,13 @@ const WC = {
   asphalt: COL(0x474c55), shoulder: COL(0x51565f), line: COL(0xf2f2ee), yline: COL(0xf5c842),
   gravel: COL(0x9b9484), verge: COL(0x7fae55), rail: COL(0xc2c9d0), post: COL(0x878e97),
   trunk: COL(0x7a5536), leafA: COL(0x4f9a3c), leafB: COL(0x3f8a45), pine: COL(0x2f7a4a), leafC: COL(0x86b43f),
-  rock: COL(0x9aa0a6), hill: COL(0x78ad4f), hill2: COL(0x6a9e4a), mtn: COL(0x8d98a6), snow: COL(0xf4f7fa),
+  rock: COL(0x9aa0a6), hill: COL(0x6f9f4a), hill2: COL(0x67984a), mtn: COL(0x8d98a6), snow: COL(0xf4f7fa),
   pole: COL(0x9aa2ab), sign: COL(0x1f7a46), signW: COL(0xf1f4f2), cloud: COL(0xffffff), concrete: COL(0xb7b6ae),
   orange: COL(0xff6a14), wwhite: COL(0xf6f6f2), black: COL(0x1c1d21), yellow: COL(0xffd41c), jersey: COL(0xd9d6ce),
   jersey2: COL(0xcfcbc1), orangeB: COL(0xff5e0a),
   signO: COL(0xff5a00).multiplyScalar(1.6), // over-bright on purpose: reads as a vivid, saturated work sign
   rock2: COL(0x80868d), rock3: COL(0xaea89c), water: COL(0x3d8fc9), waterDeep: COL(0x2c74ad), sand: COL(0xcdbf8f),
-  gmtn: COL(0x5f9a45), gmtn2: COL(0x6fa84c), gmtn3: COL(0x528c3f),
+  gmtn: COL(0x6a9a47), gmtn2: COL(0x6f9f4a), gmtn3: COL(0x62924a), // same greens as the grass
 
 };
 
@@ -80,7 +80,7 @@ class World {
       if (k < ci - 3 || k > ci + 12) {
         // fade the far scenery out first (removed by fadeChunks)
         this.chunks.delete(k); c.userData.t0 = performance.now() / 1000;
-        const f = c.userData.far; if (f) { f.material.transparent = true; f.material.needsUpdate = true; }
+        for (const f of c.userData.far) { f.material.transparent = true; f.material.needsUpdate = true; }
         this.dying.set(k + '_' + c.id, c); c.userData.k = k;
       } else c.position.z = this.zbase(k);
     }
@@ -109,16 +109,17 @@ class World {
   fadeChunks() {
     const now = performance.now() / 1000;
     for (const [k, c] of this.dying) {
-      const f = c.userData.far, o = 1 - (now - c.userData.t0) / 1.2;
-      if (o <= 0 || !f) { this.scene.remove(c); c.traverse(x => x.geometry && x.geometry.dispose()); if (f) f.material.dispose(); this.dying.delete(k); }
-      else f.material.opacity = o;
+      const fs = c.userData.far, o = 1 - (now - c.userData.t0) / 1.2;
+      if (o <= 0 || !fs.length) { this.scene.remove(c); c.traverse(x => x.geometry && x.geometry.dispose()); for (const f of fs) f.material.dispose(); this.dying.delete(k); }
+      else for (const f of fs) f.material.opacity = o;
     }
     for (const c of this.chunks.values()) {
-      const f = c.userData.far;
-      if (!f || f.userData.done) continue;
-      const o = Math.min(1, (now - c.userData.t0) / 2.5);
-      f.material.opacity = o * o * (3 - 2 * o);
-      if (o >= 1) { f.material.transparent = false; f.material.depthWrite = true; f.material.needsUpdate = true; f.userData.done = true; }
+      for (const f of c.userData.far) {
+        if (f.userData.done) continue;
+        const o = Math.min(1, (now - c.userData.t0) / 2.5);
+        f.material.opacity = o * o * (3 - 2 * o);
+        if (o >= 1) { f.material.transparent = false; f.material.depthWrite = true; f.material.needsUpdate = true; f.userData.done = true; }
+      }
     }
   }
 
@@ -135,6 +136,17 @@ class World {
     const ls = ROAD.lotS(s);
     if (d > 0 && ls > LOOP.OFF0 - r - 15 && ls < LOOP.RAIL_OPEN1 + r + 10 && d < ROAD.edgeR + LOOP.LOT_D1 + r + 12) return true;
     return !ROAD.clearOfLoop(p[0], p[2], r, s);
+  }
+
+  // A hill set out sideways from the road can still land next to the same road further along a tight bend:
+  // check the road's own stretch either side (blocked() only covers other parts of the loop).
+  clearOfBend(s, d, r) {
+    const c = ROAD.pos(s, d), lim = r + 6;      // (r = hill reach + gap; +6 ~ half the road)
+    for (let k = -Math.min(2500, r * 4 + 300); k <= Math.min(2500, r * 4 + 300); k += 20) {
+      const q = ROAD.pos(s + k, 0);
+      if (Math.hypot(q.x - c.x, q.z - c.z) < lim) return false;
+    }
+    return true;
   }
 
   // drop everything (switching between the endless road and the loop circuit)
@@ -229,7 +241,7 @@ class World {
     // lakes (built by the chunk holding the lake's centre; trees / rocks / hills keep clear of them)
     for (const L of this.lakesNear(s0, s0 + this.CH)) if (L.s >= s0 && L.s < s0 + this.CH) this.buildLake(L, sc, P, rnd);
     // trees, bushes, rocks
-    const near = sc, far = new CGB();
+    const near = sc, far = new CGB(), hills = new CGB();
     // same number near the road as before, plus extra trees spread far out into the fields
     const trees = 16 + Math.floor(rnd() * 10), farTrees = 10 + Math.floor(rnd() * 8);
     for (let i = 0; i < trees + farTrees; i++) {
@@ -268,45 +280,49 @@ class World {
         sc.geom(rnd() < 0.5 ? this.G.dode : this.G.ico0, this.xf(p[0], sz * 0.25, p[2], rnd(), rnd() * 3, sz * (1 + rnd() * 0.5), sz * (0.55 + rnd() * 0.35), sz * (0.8 + rnd() * 0.5)), col, rnd, 0.12);
       }
     }
-    // rolling hills
-    if (rnd() < 0.6) {
-      const side = rnd() < 0.5 ? -1 : 1, edge = side < 0 ? -eL : eR;
-      const rad = 50 + rnd() * 110, hh = 18 + rnd() * 50;
-      const d = side * (edge + 40 + rad + rnd() * 250);
-      const m = s0 + rnd() * this.CH, p = P(m, d, 0);
-      if (!this.inLake(m, d, rad) && !this.blocked(m, d, rad, p)) far.geom(this.G.ico1, this.xf(p[0], -hh * 0.25, p[2], 0, rnd() * 3, rad, hh, rad * (0.7 + rnd() * 0.6)), rnd() < 0.5 ? WC.hill : WC.hill2, rnd, 0.08);
-    }
-    // big grassy mountains in the background (sometimes a smaller shoulder peak beside them)
-    if (rnd() < 0.75) {
-      const side = rnd() < 0.5 ? -1 : 1, rad = 140 + rnd() * 170, hh = 70 + rnd() * 110;
-      const d = side * ((side < 0 ? -eL : eR) + 300 + rad * 0.5 + rnd() * 420);
-      const m = s0 + rnd() * this.CH, p = P(m, d, 0);
-      const col = [WC.gmtn, WC.gmtn2, WC.gmtn3][Math.floor(rnd() * 3)];
-      if (!this.blocked(m, d, rad * 1.3, p)) far.geom(this.G.ico1, this.xf(p[0], -hh * 0.18, p[2], 0, rnd() * 3, rad, hh, rad * (0.7 + rnd() * 0.5)), col, rnd, 0.09);
-      if (rnd() < 0.5 && !this.blocked(m, d, rad * 1.6, p)) {
-        const q = P(m + (rnd() - 0.5) * rad * 1.6, d + side * rad * 0.3, 0), r2 = rad * (0.45 + rnd() * 0.3), h2 = hh * (0.45 + rnd() * 0.35);
-        far.geom(this.G.ico1, this.xf(q[0], -h2 * 0.2, q[2], 0, rnd() * 3, r2, h2, r2 * 0.9), col === WC.gmtn ? WC.gmtn2 : WC.gmtn, rnd, 0.09);
+    // Hills: every chunk puts a row on BOTH sides (so there are no bare stretches), and each one keeps a
+    // clear gap to the road measured from its widest point (they're stretched and turned at random).
+    // A spot that's blocked (lake, lot, another part of the loop) is retried a little farther out.
+    const GREENS = [WC.gmtn, WC.gmtn2, WC.gmtn3];
+    const hill = (side, gap, spread, radA, radB, hA, hB, sink, col, jitter) => {
+      const edge = side < 0 ? -eL : eR;
+      for (let tries = 0; tries < 4; tries++) {
+        const rad = radA + rnd() * (radB - radA), hh = hA + rnd() * (hB - hA), zs = 0.75 + rnd() * 0.45;
+        const ext = rad * Math.max(1, zs);                                  // widest reach on the ground
+        const d = side * (edge + gap + ext + rnd() * spread + tries * 60);
+        const m = s0 + rnd() * this.CH, p = P(m, d, 0);
+        if (this.inLake(m, d, ext) || this.blocked(m, d, ext + gap * 0.8, p) || !this.clearOfBend(m, d, ext + gap)) continue;
+        hills.geom(this.G.ico1, this.xf(p[0], -hh * sink, p[2], 0, rnd() * 3, rad, hh, rad * zs), col, rnd, jitter);
+        return { m, d, rad, hh, ext };
       }
-    }
-    // distant hills: big and green like the nearer ones (no grey / snowy peaks)
-    if (rnd() < 0.35) {
-      const side = rnd() < 0.5 ? -1 : 1, rad = 180 + rnd() * 200, hh = 120 + rnd() * 160;
-      const d = side * (650 + rnd() * 400), m = s0 + rnd() * this.CH;
-      const p = P(m, d, 0), col = [WC.gmtn, WC.gmtn2, WC.gmtn3][Math.floor(rnd() * 3)];
-      if (!this.blocked(m, d, rad * 1.2, p)) far.geom(this.G.ico1, this.xf(p[0], -hh * 0.15, p[2], 0, rnd() * 3, rad, hh, rad * 0.8), col, rnd, 0.1);
+      return null;
+    };
+    for (const side of [-1, 1]) {
+      // low rolling hills: at least 90 m of open field before them
+      if (rnd() < 0.85) hill(side, 90, 220, 45, 110, 14, 38, 0.25, rnd() < 0.5 ? WC.hill : WC.hill2, 0.08);
+      // big grassy mountains: at least 230 m out, sometimes with a smaller shoulder peak behind
+      const col = GREENS[Math.floor(rnd() * 3)];
+      const big = hill(side, 230, 380, 140, 290, 70, 170, 0.18, col, 0.09);
+      if (big && rnd() < 0.5) {
+        const q = P(big.m + (rnd() - 0.5) * big.rad * 1.6, big.d + side * big.rad * 0.6, 0), r2 = big.rad * (0.45 + rnd() * 0.3), h2 = big.hh * (0.45 + rnd() * 0.35);
+        if (!this.blocked(big.m, big.d + side * big.rad * 0.6, r2, q)) hills.geom(this.G.ico1, this.xf(q[0], -h2 * 0.2, q[2], 0, rnd() * 3, r2, h2, r2 * 0.9), col === WC.gmtn ? WC.gmtn2 : WC.gmtn, rnd, 0.09);
+      }
+      // distant hills filling in the horizon
+      if (rnd() < 0.5) hill(side, 650, 350, 180, 360, 120, 260, 0.15, GREENS[Math.floor(rnd() * 3)], 0.1);
     }
     const grp = new THREE.Group();
     const rm = new THREE.Mesh(road.build(), this.roadMat); rm.receiveShadow = true;
     const sm = new THREE.Mesh(sc.build(), this.mat); sm.castShadow = true; sm.receiveShadow = true;
     grp.add(rm, sm);
-    if (far.p.length) {
-      // Far hills skip the distance fog (it washed them out to near-white); instead they get a light,
-      // fixed blend toward the sky colour so they still read as far away but stay clearly green.
-      const hz = { r: 0.66, g: 0.81, b: 0.9 };
-      for (let i = 0; i < far.c.length; i += 3) { far.c[i] += (hz.r - far.c[i]) * 0.22; far.c[i + 1] += (hz.g - far.c[i + 1]) * 0.22; far.c[i + 2] += (hz.b - far.c[i + 2]) * 0.22; }
-      const fm = new THREE.Mesh(far.build(), Object.assign(this.mat.clone(), { transparent: true, opacity: 0, fog: false }));
+    grp.userData.far = [];
+    for (const [cg, lightHaze] of [[far, false], [hills, true]]) {
+      if (!cg.p.length) continue;
+      const fmat = Object.assign(this.mat.clone(), { transparent: true, opacity: 0 });
+      // hills only (not the far trees): full fog washes them pale out there, so give them a lighter haze to stay grass green
+      if (lightHaze) fmat.onBeforeCompile = sh => { sh.fragmentShader = sh.fragmentShader.replace('#include <fog_fragment>', '#ifdef USE_FOG\n gl_FragColor.rgb = mix(gl_FragColor.rgb, fogColor, 0.35 * smoothstep(fogNear, fogFar, vFogDepth));\n#endif'); };
+      const fm = new THREE.Mesh(cg.build(), fmat);
       fm.castShadow = true; fm.receiveShadow = true;
-      grp.add(fm); grp.userData.far = fm;
+      grp.add(fm); grp.userData.far.push(fm);
     }
     grp.userData.t0 = performance.now() / 1000;
     grp.position.z = zb;
