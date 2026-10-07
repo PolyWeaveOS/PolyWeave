@@ -35,13 +35,13 @@ const WC = {
   asphalt: COL(0x474c55), shoulder: COL(0x51565f), line: COL(0xf2f2ee), yline: COL(0xf5c842),
   gravel: COL(0x9b9484), verge: COL(0x7fae55), rail: COL(0xc2c9d0), post: COL(0x878e97),
   trunk: COL(0x7a5536), leafA: COL(0x4f9a3c), leafB: COL(0x3f8a45), pine: COL(0x2f7a4a), leafC: COL(0x86b43f),
-  rock: COL(0x9aa0a6), hill: COL(0x6f9f4a), hill2: COL(0x67984a), mtn: COL(0x8d98a6), snow: COL(0xf4f7fa),
+  rock: COL(0x9aa0a6), hill: COL(0x78ad4f), hill2: COL(0x6a9e4a), mtn: COL(0x8d98a6), snow: COL(0xf4f7fa),
   pole: COL(0x9aa2ab), sign: COL(0x1f7a46), signW: COL(0xf1f4f2), cloud: COL(0xffffff), concrete: COL(0xb7b6ae),
   orange: COL(0xff6a14), wwhite: COL(0xf6f6f2), black: COL(0x1c1d21), yellow: COL(0xffd41c), jersey: COL(0xd9d6ce),
   jersey2: COL(0xcfcbc1), orangeB: COL(0xff5e0a),
   signO: COL(0xff5a00).multiplyScalar(1.6), // over-bright on purpose: reads as a vivid, saturated work sign
   rock2: COL(0x80868d), rock3: COL(0xaea89c), water: COL(0x3d8fc9), waterDeep: COL(0x2c74ad), sand: COL(0xcdbf8f),
-  gmtn: COL(0x6a9a47), gmtn2: COL(0x6f9f4a), gmtn3: COL(0x62924a), // same greens as the grass
+  gmtn: COL(0x5f9a45), gmtn2: COL(0x6fa84c), gmtn3: COL(0x528c3f),
 
 };
 
@@ -233,7 +233,12 @@ class World {
       for (const [d, w] of [[-3.7, 6], [4.6, 7]]) {
         const q = P(m - 0.4, d, 0);
         sc.geom(this.G.box, this.xf(q[0], 6.3, q[2], 0, yaw, w, 2.4, 0.12), WC.sign);
-        for (let t = 0; t < 3; t++) sc.geom(this.G.box, this.xf(q[0] + Math.cos(yaw) * (t - 1) * 1.2, 6.6 - (t % 2) * 0.5, q[2] + 0.07, 0, yaw, w * 0.22, 0.22, 0.04), WC.signW);
+        // white text lines, laid flat on the sign's face (offsets follow the sign's angle on curves)
+        const rx = Math.cos(yaw), rz = -Math.sin(yaw), nx = Math.sin(yaw), nz = Math.cos(yaw);   // sign's sideways / facing directions
+        for (let t = 0; t < 3; t++) {
+          const o = (t - 1) * 1.2;
+          sc.geom(this.G.box, this.xf(q[0] + rx * o + nx * 0.07, 6.6 - (t % 2) * 0.5, q[2] + rz * o + nz * 0.07, 0, yaw, w * 0.22, 0.22, 0.04), WC.signW);
+        }
       }
     }
     // construction zones (lane closures)
@@ -284,7 +289,7 @@ class World {
     // clear gap to the road measured from its widest point (they're stretched and turned at random).
     // A spot that's blocked (lake, lot, another part of the loop) is retried a little farther out.
     const GREENS = [WC.gmtn, WC.gmtn2, WC.gmtn3];
-    const hill = (side, gap, spread, radA, radB, hA, hB, sink, col, jitter) => {
+    const hill = (side, gap, spread, radA, radB, hA, hB, sink, col, jitter, colFn) => {
       const edge = side < 0 ? -eL : eR;
       for (let tries = 0; tries < 4; tries++) {
         const rad = radA + rnd() * (radB - radA), hh = hA + rnd() * (hB - hA), zs = 0.75 + rnd() * 0.45;
@@ -292,7 +297,7 @@ class World {
         const d = side * (edge + gap + ext + rnd() * spread + tries * 60);
         const m = s0 + rnd() * this.CH, p = P(m, d, 0);
         if (this.inLake(m, d, ext) || this.blocked(m, d, ext + gap * 0.8, p) || !this.clearOfBend(m, d, ext + gap)) continue;
-        hills.geom(this.G.ico1, this.xf(p[0], -hh * sink, p[2], 0, rnd() * 3, rad, hh, rad * zs), col, rnd, jitter);
+        hills.geom(this.G.ico1, this.xf(p[0], -hh * sink, p[2], 0, rnd() * 3, rad, hh, rad * zs), col, rnd, jitter, colFn);
         return { m, d, rad, hh, ext };
       }
       return null;
@@ -307,19 +312,17 @@ class World {
         const q = P(big.m + (rnd() - 0.5) * big.rad * 1.6, big.d + side * big.rad * 0.6, 0), r2 = big.rad * (0.45 + rnd() * 0.3), h2 = big.hh * (0.45 + rnd() * 0.35);
         if (!this.blocked(big.m, big.d + side * big.rad * 0.6, r2, q)) hills.geom(this.G.ico1, this.xf(q[0], -h2 * 0.2, q[2], 0, rnd() * 3, r2, h2, r2 * 0.9), col === WC.gmtn ? WC.gmtn2 : WC.gmtn, rnd, 0.09);
       }
-      // distant hills filling in the horizon
-      if (rnd() < 0.5) hill(side, 650, 350, 180, 360, 120, 260, 0.15, GREENS[Math.floor(rnd() * 3)], 0.1);
+      // distant mountains on the horizon (grey, with snowy tops)
+      if (rnd() < 0.5) hill(side, 650, 350, 180, 360, 120, 260, 0.15, WC.mtn, 0.1, v => (v.y > 0.8 ? WC.snow : null));
     }
     const grp = new THREE.Group();
     const rm = new THREE.Mesh(road.build(), this.roadMat); rm.receiveShadow = true;
     const sm = new THREE.Mesh(sc.build(), this.mat); sm.castShadow = true; sm.receiveShadow = true;
     grp.add(rm, sm);
     grp.userData.far = [];
-    for (const [cg, lightHaze] of [[far, false], [hills, true]]) {
+    for (const cg of [far, hills]) {
       if (!cg.p.length) continue;
       const fmat = Object.assign(this.mat.clone(), { transparent: true, opacity: 0 });
-      // hills only (not the far trees): full fog washes them pale out there, so give them a lighter haze to stay grass green
-      if (lightHaze) fmat.onBeforeCompile = sh => { sh.fragmentShader = sh.fragmentShader.replace('#include <fog_fragment>', '#ifdef USE_FOG\n gl_FragColor.rgb = mix(gl_FragColor.rgb, fogColor, 0.35 * smoothstep(fogNear, fogFar, vFogDepth));\n#endif'); };
       const fm = new THREE.Mesh(cg.build(), fmat);
       fm.castShadow = true; fm.receiveShadow = true;
       grp.add(fm); grp.userData.far.push(fm);

@@ -59,28 +59,8 @@ systemctl daemon-reload
 systemctl enable --now polyweave
 
 # --- pw-https: point the web address at the game (run again after attaching a static IP / adding a domain) ---
-cat > /usr/local/bin/pw-https <<'EOF'
-#!/bin/bash
-# usage:  sudo pw-https               -> free address based on this server's IP (e.g. 3-15-20-7.sslip.io)
-#         sudo pw-https mygame.com    -> your own domain (point its DNS "A record" at the static IP first)
-set -e
-HOST="$1"
-if [ -z "$HOST" ]; then
-  IP=$(curl -s https://checkip.amazonaws.com)
-  HOST="${IP//./-}.sslip.io"
-fi
-cat > /etc/caddy/Caddyfile <<EOC
-$HOST {
-	encode gzip
-	reverse_proxy 127.0.0.1:3000
-}
-EOC
-systemctl reload caddy || systemctl restart caddy
-echo
-echo "PolyWeave is at:  https://$HOST"
-echo "(the HTTPS certificate can take up to a minute the first time)"
-EOF
-chmod +x /usr/local/bin/pw-https
+#     (the script lives in the repo: pw-https.sh - main address first, extra addresses redirect to it)
+install -m 755 "$APP/pw-https.sh" /usr/local/bin/pw-https
 
 # --- pw-update: get the newest version from GitHub (restarts only when something changed) ---
 cat > /usr/local/bin/pw-update <<'EOF'
