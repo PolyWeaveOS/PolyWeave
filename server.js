@@ -82,6 +82,7 @@ function cleanState(st) {
   return {
     t: num(st.t, 0, 1e9), s: num(st.s, -1e9, 1e9), d: num(st.d, -200, 200), ry: num(st.ry, -7, 7), v: num(st.v, -100, 150), steer: num(st.steer, -1, 1),
     brake: !!st.brake, kmh: Math.round(num(st.kmh, 0, 600)), score: Math.round(num(st.score, 0, 1e12)), rt: Math.round(num(st.rt, 0, 1e6)),
+    rtt: Math.round(num(st.rtt, 0, 2000)),   // sender's round trip to the server (ms): friends use it to draw them where they are NOW
   };
 }
 
@@ -191,6 +192,13 @@ wss.on('connection', ws => {
     if (++p.msgs > 80) return;                          // flood guard (reset every second)
     let m; try { m = JSON.parse(raw); } catch (e) { return; }
     if (!m || typeof m !== 'object') return;
+    if (m.t === 'ping') { if (Number.isFinite(m.c)) send(ws, { t: 'pong', c: m.c }); return; }   // round-trip time check
+    // two players collided hard: the one who noticed tells the other, so BOTH streaks end
+    if (m.t === 'bump') {
+      const room = p.room; if (!room) return;
+      for (const q of room.players.values()) if (q.id === m.id && q !== p) send(q.ws, { t: 'bumped', from: p.id, v: num(m.v, 0, 80) });
+      return;
+    }
     if (m.t === 'state') {                               // forward right away (no waiting for a tick = smoother)
       const room = p.room; if (!room) return;
       const st = cleanState(m.st); if (!st) return;

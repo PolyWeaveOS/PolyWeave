@@ -62,6 +62,10 @@ const Input = {
     });
     addEventListener('keyup', e => { this.keys[e.code] = false; });
     addEventListener('blur', () => { this.keys = {}; });
+    // last time the player did anything at all (keys, wheel, pedals, pad, mouse in the menus): AFK check
+    this.lastActive = performance.now();
+    const act = () => { this.lastActive = performance.now(); };
+    addEventListener('keydown', act); addEventListener('pointerdown', act); addEventListener('pointermove', act); addEventListener('wheel', act);
   },
   save() { try { localStorage.setItem('tw_pad', JSON.stringify(this.cfg)); } catch (e) { /* ignore */ } },
   hit(code) { const p = !!this.pressed[code]; return p; },
@@ -130,8 +134,12 @@ const Input = {
         o.brake = Math.max(o.brake, br);
         o.camBtn = this.btnEdge(p, c.cam); o.up = this.btnEdge(p, c.up); o.down = this.btnEdge(p, c.down); o.reset = this.btnEdge(p, c.reset);
       }
+      // (wheel turned, pedal pressed, stick moved or a button held all count as activity)
+      if (this.lastWheelMove === now || o.throttle > 0.05 || o.brake > 0.05 || (this.padKind === 'gamepad' && Math.abs(o.steer) > 0.05)
+        || p.buttons.some(b => b.pressed)) this.lastActive = now;
       this.lastBtns = p.buttons.map(b => b.pressed);
     }
+    if (ks || kt || kb) this.lastActive = now;   // a driving key held down
     return o;
   },
 

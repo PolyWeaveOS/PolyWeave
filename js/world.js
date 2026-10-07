@@ -39,6 +39,7 @@ const WC = {
   pole: COL(0x9aa2ab), sign: COL(0x1f7a46), signW: COL(0xf1f4f2), cloud: COL(0xffffff), concrete: COL(0xb7b6ae),
   orange: COL(0xff6a14), wwhite: COL(0xf6f6f2), black: COL(0x1c1d21), yellow: COL(0xffd41c), jersey: COL(0xd9d6ce),
   jersey2: COL(0xcfcbc1), orangeB: COL(0xff5e0a),
+  lampHead: COL(0x5d646d), lampLens: COL(0xfff4d2),   // street light housing / over-bright lens (reads as lit)
   signO: COL(0xff5a00).multiplyScalar(1.6), // over-bright on purpose: reads as a vivid, saturated work sign
   rock2: COL(0x80868d), rock3: COL(0xaea89c), water: COL(0x3d8fc9), waterDeep: COL(0x2c74ad), sand: COL(0xcdbf8f),
   gmtn: COL(0x5f9a45), gmtn2: COL(0x6fa84c), gmtn3: COL(0x528c3f),
@@ -52,6 +53,7 @@ class World {
     this.chunks = new Map(); this.dying = new Map();
     this.mat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
     this.roadMat = new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide });
+    this.glowMat = new THREE.MeshBasicMaterial({ vertexColors: true });   // unlit (street light lenses)
     // ground
     const g = new THREE.PlaneGeometry(9000, 9000, 1, 1); g.rotateX(-Math.PI / 2);
     this.ground = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: 0x6f9f4a }));
@@ -65,6 +67,8 @@ class World {
       ico1: new THREE.IcosahedronGeometry(1, 1).toNonIndexed(),
       dode: new THREE.DodecahedronGeometry(1, 0).toNonIndexed(),
       cyl5: new THREE.CylinderGeometry(1, 1, 1, 5).toNonIndexed(),
+      cyl8: new THREE.CylinderGeometry(1, 1, 1, 8).toNonIndexed(),
+      taper8: new THREE.CylinderGeometry(0.62, 1, 1, 8).toNonIndexed(),   // narrows toward the top (lamp posts)
       disc: new THREE.CylinderGeometry(1, 1, 1, 24).rotateX(Math.PI / 2).toNonIndexed(),   // round sign face (axis along z)
     };
     this.clouds = this.makeClouds();
@@ -228,36 +232,53 @@ class World {
         road.quad(P(a, d - 0.08, 0.045), P(b, d - 0.08, 0.045), P(b, d + 0.08, 0.045), P(a, d + 0.08, 0.045), WC.line);
       }
     }
-    // guardrails (both sides)
+    // guardrails (both sides): a solid steel beam, closed all round, on posts that stand BEHIND it (so the
+    // light beam is what you see from the road) and go down into the ground. Where a rail stops (loop: around
+    // the ramps) the beam is capped and finishes on a post.
     for (const side of [-1, 1]) {
       const dr = side < 0 ? eL - 0.35 : eR + 0.35;
-      const din = dr - side * 0.0, dout = dr + side * 0.18;
+      const din = dr, dout = dr + side * 0.16, yB = 0.47, yT = 0.83;
+      const open = s => ROAD.railOpen(side, s);
+      const postAt = m => { const p = P(m, dout + side * 0.07, 0); sc.geom(this.G.box, this.xf(p[0], 0.29, p[2], 0, -ROAD.yaw(m), 0.12, 0.98, 0.12), WC.post); };
+      const cap = s => sc.quad(P(s, din, yB), P(s, dout, yB), P(s, dout, yT), P(s, din, yT), WC.rail);
       for (let j = 0; j < n; j++) {
         const a = s0 + j * this.STEP, b = a + this.STEP;
-        if (ROAD.railOpen(side, a + this.STEP / 2)) continue;          // (loop: gap where the on-ramp joins)
-        sc.quad(P(a, din, 0.48), P(b, din, 0.48), P(b, din, 0.82), P(a, din, 0.82), WC.rail);
-        sc.quad(P(a, din, 0.82), P(b, din, 0.82), P(b, dout, 0.84), P(a, dout, 0.84), WC.rail);
-        sc.quad(P(a, din, 0.48), P(b, din, 0.48), P(b, dout, 0.46), P(a, dout, 0.46), WC.post);
+        if (open(a + this.STEP / 2)) continue;                        // (loop: gaps where the ramps join)
+        sc.quad(P(a, din, yB), P(b, din, yB), P(b, din, yT), P(a, din, yT), WC.rail);       // face (road side)
+        sc.quad(P(a, dout, yB), P(b, dout, yB), P(b, dout, yT), P(a, dout, yT), WC.rail);   // back
+        sc.quad(P(a, din, yT), P(b, din, yT), P(b, dout, yT), P(a, dout, yT), WC.rail);     // top
+        sc.quad(P(a, din, yB), P(b, din, yB), P(b, dout, yB), P(a, dout, yB), WC.post);     // underside
+        if (open(a - this.STEP / 2)) { cap(a); postAt(a + 0.1); }      // the rail starts here...
+        if (open(b + this.STEP / 2)) { cap(b); postAt(b - 0.1); }      // ...or ends here
       }
-      for (let m = Math.ceil(s0 / 4) * 4; m < s0 + this.CH; m += 4) {
-        if (ROAD.railOpen(side, m)) continue;
-        const p = P(m, dr + side * 0.25, 0.4);
-        sc.geom(this.G.box, this.xf(p[0], 0.4, p[2], 0, -ROAD.yaw(m), 0.12, 0.8, 0.14), WC.post);
-      }
+      for (let m = Math.ceil(s0 / 4) * 4; m < s0 + this.CH; m += 4) if (!open(m - 1.5) && !open(m + 1.5)) postAt(m);
     }
-    // light poles on the median side every 60 m
+    // street lights on the median side every 60 m: concrete footing, tapered pole, an arm that sweeps up and
+    // out over the fast lane, and a slim lamp head with a glowing lens underneath
+    const glow = new CGB();                      // unlit bits (lamp lenses)
+    const beam = (a, b, w, h, col, gbx = sc) => {   // box from point a to point b (world [x, y, z])
+      const dir = new THREE.Vector3(b[0] - a[0], b[1] - a[1], b[2] - a[2]), len = dir.length();
+      const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir.normalize());
+      const m = new THREE.Matrix4().compose(new THREE.Vector3((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2), q, new THREE.Vector3(w, h, len + 0.02));
+      gbx.geom(this.G.box, m, col);
+    };
     for (let m = Math.ceil(s0 / 60) * 60; m < s0 + this.CH; m += 60) {
-      const yaw = -ROAD.yaw(m), p = P(m, eL - 1.2, 0);
-      sc.geom(this.G.cyl5, this.xf(p[0], 5, p[2], 0, yaw, 0.12, 10, 0.12), WC.pole);
-      const q = P(m, eL + 1.0, 0);
-      sc.geom(this.G.box, this.xf((p[0] + q[0]) / 2, 9.9, (p[2] + q[2]) / 2, 0, yaw, 4.4, 0.12, 0.14), WC.pole);
-      sc.geom(this.G.box, this.xf(q[0] + (q[0] - p[0]) * 0.2, 9.82, q[2], 0, yaw, 0.9, 0.12, 0.35), WC.signW);
+      const yaw = -ROAD.yaw(m), dp = eL - 1.2, p = P(m, dp, 0), at = (d, y) => { const q = P(m, d, 0); return [q[0], y, q[2]]; };
+      sc.geom(this.G.cyl8, this.xf(p[0], 0.22, p[2], 0, yaw, 0.3, 0.65, 0.3), WC.concrete);           // footing
+      sc.geom(this.G.taper8, this.xf(p[0], 5.2, p[2], 0, yaw, 0.15, 9.9, 0.15), WC.pole);            // pole
+      sc.geom(this.G.cyl8, this.xf(p[0], 0.62, p[2], 0, yaw, 0.19, 0.12, 0.19), WC.post);            // base flange
+      const k = [at(dp, 9.95), at(dp + 0.25, 10.25), at(dp + 0.75, 10.42), at(dp + 3.3, 10.52)];     // arm: a smooth sweep
+      for (let i = 0; i < 3; i++) beam(k[i], k[i + 1], 0.11 - i * 0.005, 0.11 - i * 0.005, WC.pole);
+      sc.geom(this.G.cyl8, this.xf(p[0], 10.12, p[2], 0, yaw, 0.1, 0.1, 0.1), WC.pole);               // rounded top of the pole
+      const h0 = at(dp + 2.9, 10.47), h1 = at(dp + 4.15, 10.41);
+      beam(h0, h1, 0.44, 0.17, WC.lampHead);                                                         // lamp head
+      beam([h0[0], h0[1] - 0.1, h0[2]], [h1[0], h1[1] - 0.1, h1[2]], 0.3, 0.05, WC.lampLens, glow);  // lens (unlit: reads as lit)
     }
     // overhead sign gantry
     if (kk % 9 === 4) {
       const m = s0 + 60, yaw = -ROAD.yaw(m);
       const a = P(m, eL - 1.0, 0), b = P(m, eR + 1.0, 0);
-      for (const q of [a, b]) sc.geom(this.G.box, this.xf(q[0], 3.6, q[2], 0, yaw, 0.35, 7.2, 0.35), WC.pole);
+      for (const q of [a, b]) sc.geom(this.G.box, this.xf(q[0], 3.5, q[2], 0, yaw, 0.35, 7.4, 0.35), WC.pole);   // (into the ground)
       const c = P(m, (eL + eR) / 2, 0);
       sc.geom(this.G.box, this.xf(c[0], 6.9, c[2], 0, yaw, eR - eL + 2.3, 0.5, 0.5), WC.pole);
       [[-3.7, 6], [4.6, 7]].forEach(([d, w], si) => {
@@ -291,11 +312,11 @@ class World {
       if (this.inLake(m, d, 4) || this.blocked(m, d, 4, p)) continue;
       const sc = off > 90 ? far : near; // far-out scenery fades in/out with the hills
       if (kind < 0.45) { // pine
-        sc.geom(this.G.cyl5, this.xf(p[0], 1.0 * sz, p[2], 0, 0, 0.22 * sz, 2.0 * sz, 0.22 * sz), WC.trunk, rnd);
+        sc.geom(this.G.cyl5, this.xf(p[0], 1.0 * sz - 0.1, p[2], 0, 0, 0.22 * sz, 2.0 * sz + 0.2, 0.22 * sz), WC.trunk, rnd);
         sc.geom(this.G.cone6, this.xf(p[0], 3.4 * sz, p[2], 0, rnd() * 3, 2.3 * sz, 4.2 * sz, 2.3 * sz), WC.pine, rnd, 0.12);
         sc.geom(this.G.cone6, this.xf(p[0], 5.5 * sz, p[2], 0, rnd() * 3, 1.6 * sz, 3.2 * sz, 1.6 * sz), WC.pine, rnd, 0.12);
       } else if (kind < 0.85) { // round
-        sc.geom(this.G.cyl5, this.xf(p[0], 1.2 * sz, p[2], 0, 0, 0.25 * sz, 2.4 * sz, 0.25 * sz), WC.trunk, rnd);
+        sc.geom(this.G.cyl5, this.xf(p[0], 1.2 * sz - 0.1, p[2], 0, 0, 0.25 * sz, 2.4 * sz + 0.2, 0.25 * sz), WC.trunk, rnd);
         sc.geom(this.G.ico0, this.xf(p[0], 3.6 * sz, p[2], rnd(), rnd() * 3, 2.3 * sz, 2.1 * sz, 2.3 * sz), rnd() < 0.5 ? WC.leafA : WC.leafC, rnd, 0.12);
       } else if (kind < 0.94) { // bush
         sc.geom(this.G.ico0, this.xf(p[0], 0.5 * sz, p[2], rnd(), rnd() * 3, 1.3 * sz, 0.9 * sz, 1.3 * sz), WC.leafB, rnd, 0.12);
@@ -351,6 +372,7 @@ class World {
     const rm = new THREE.Mesh(road.build(), this.roadMat); rm.receiveShadow = true;
     const sm = new THREE.Mesh(sc.build(), this.mat); sm.castShadow = true; sm.receiveShadow = true;
     grp.add(rm, sm);
+    if (glow.p.length) grp.add(new THREE.Mesh(glow.build(), this.glowMat));
     grp.userData.far = [];
     for (const cg of [far, hills]) {
       if (!cg.p.length) continue;
@@ -378,7 +400,18 @@ class World {
         gbx.quad(P(a, fA(a), y), P(b, fA(b), y), P(b, fB(b), y), P(a, fB(a), y), col);
       }
     };
-    const kerbAcross = (s, d0, d1) => { const c = P(s, (d0 + d1) / 2, 0); gb.geom(G.box, this.xf(c[0], 0.07, c[2], 0, -ROAD.yaw(s), d1 - d0, 0.14, 0.4), curb); };
+    const kerbAcross = (s, d0, d1) => { const c = P(s, (d0 + d1) / 2, 0); gb.geom(G.box, this.xf(c[0], 0.03, c[2], 0, -ROAD.yaw(s), d1 - d0, 0.16, 0.4), curb); };
+    // low kerb along the road: a solid strip (top, both sides and ends) standing on the ground, not a floating sheet
+    const curbSide = COL(0xb4b2aa), KT = 0.1, KB = -0.04;
+    const kerb = (s0, s1, dA, dB, step = 2) => {
+      const fA = typeof dA === 'function' ? dA : () => dA, fB = typeof dB === 'function' ? dB : () => dB;
+      area(gb, s0, s1, fA, fB, KT, curb, step);
+      for (let a = s0; a < s1 - 1e-6; a += step) {
+        const b = Math.min(a + step, s1);
+        for (const f of [fA, fB]) gb.quad(P(a, f(a), KB), P(b, f(b), KB), P(b, f(b), KT), P(a, f(a), KT), curbSide);
+      }
+      for (const s of [s0, s1]) gb.quad(P(s, fA(s), KB), P(s, fB(s), KB), P(s, fB(s), KT), P(s, fA(s), KT), curbSide);
+    };
     const arrow = (s, d) => {                 // white arrow painted on the ground, pointing with the traffic
       const pt = (f, w) => P(s + f, d + w, 0.06);
       lines.quad(pt(-1.8, -0.22), pt(0.3, -0.22), pt(0.3, 0.22), pt(-1.8, 0.22), WC.line);
@@ -389,7 +422,7 @@ class World {
     // see it), the arrow toward -s (drivers going the right way see it).
     const sign = (s, d) => {
       const yaw = -ROAD.yaw(s), p = P(s, d, 0), y = 2.55;
-      gb.geom(G.box, this.xf(p[0], 1.3, p[2], 0, yaw, 0.1, 2.6, 0.1), WC.pole);
+      gb.geom(G.box, this.xf(p[0], 1.2, p[2], 0, yaw, 0.1, 2.8, 0.1), WC.pole);   // (into the ground)
       gb.geom(G.box, this.xf(p[0], y, p[2], 0, yaw, 0.98, 0.98, 0.05), COL(0x3a3f48));            // backing plate
       const red = P(s + 0.05, d, 0), bar = P(s + 0.075, d, 0);
       gb.geom(G.disc, this.xf(red[0], y, red[2], 0, yaw, 0.46, 0.46, 0.02), COL(0xd0222b).multiplyScalar(1.25));
@@ -404,8 +437,8 @@ class World {
     // the pad: plain asphalt (same as the road), a low kerb all round (open at the entrance and the exit)
     const d0 = eR + D.LOT_D0, d1 = eR + D.LOT_D1;
     area(gb, D.LOT_S0, D.LOT_S1, d0, d1, 0.035, WC.asphalt);
-    area(gb, D.LOT_S0, D.LOT_S1, d0 - 0.4, d0, 0.12, curb);
-    area(gb, D.LOT_S0, D.LOT_S1, d1, d1 + 0.4, 0.12, curb);
+    kerb(D.LOT_S0, D.LOT_S1, d0 - 0.4, d0, 5);
+    kerb(D.LOT_S0, D.LOT_S1, d1, d1 + 0.4, 5);
     const inA = ROAD.offD(D.LOT_S0) - ROAD.offHW(D.LOT_S0), inB = ROAD.offD(D.LOT_S0) + ROAD.offHW(D.LOT_S0);
     const outA = ROAD.rampD(D.LOT_S1) - ROAD.rampHW(D.LOT_S1), outB = ROAD.rampD(D.LOT_S1) + ROAD.rampHW(D.LOT_S1);
     kerbAcross(D.LOT_S0, d0 - 0.4, inA); kerbAcross(D.LOT_S0, inB, d1 + 0.4);
@@ -444,8 +477,8 @@ class World {
     lineAlong(RG.tipOff - 0.5, D.LOT_S0, RG.offC);                  // left line: grows out of the edge line
     lineAlong(D.DEC1, D.LOT_S0, s => oB(s) - 0.125);                 // right line: carries on the decel lane's
     gore(RG.tipOff, RG.offC, 1);
-    area(gb, D.LOT_S0 - 50, D.LOT_S0, s => oA(s) - 0.35, oA, 0.12, curb, 2);
-    area(gb, D.LOT_S0 - 50, D.LOT_S0, oB, s => oB(s) + 0.35, 0.12, curb, 2);
+    kerb(D.LOT_S0 - 50, D.LOT_S0, s => oA(s) - 0.35, oA);
+    kerb(D.LOT_S0 - 50, D.LOT_S0, oB, s => oB(s) + 0.35);
     arrow(D.LOT_S0 - 20, ROAD.offD(D.LOT_S0 - 20));
     // on-ramp (exit): from the pad's front edge down into the acceleration lane
     const rA = s => ROAD.rampD(s) - ROAD.rampHW(s), rB = s => ROAD.rampD(s) + ROAD.rampHW(s);
@@ -453,8 +486,8 @@ class World {
     lineAlong(D.LOT_S1, RG.tipOn + 0.5, RG.onC);                    // left line: runs into the edge line
     lineAlong(D.LOT_S1, D.ACC0, s => rB(s) - 0.125);                 // right line: becomes the accel lane's
     gore(RG.tipOn, RG.onC, -1);
-    area(gb, D.LOT_S1, D.LOT_S1 + 50, s => rA(s) - 0.35, rA, 0.12, curb, 2);
-    area(gb, D.LOT_S1, D.LOT_S1 + 50, rB, s => rB(s) + 0.35, 0.12, curb, 2);
+    kerb(D.LOT_S1, D.LOT_S1 + 50, s => rA(s) - 0.35, rA);
+    kerb(D.LOT_S1, D.LOT_S1 + 50, rB, s => rB(s) + 0.35);
     arrow(D.LOT_S1 + 12, ROAD.rampD(D.LOT_S1 + 12));
     // signs either side of both openings
     for (const k of [-1, 1]) {
@@ -462,16 +495,19 @@ class World {
       sign(D.LOT_S1 - 1.5, ROAD.rampD(D.LOT_S1) + k * 5.4);     // exit: arrow toward the pad, "do not enter" toward the ramp
     }
 
-    // fence along the outside of the whole start area (same steel rail as the highway)
+    // fence along the outside of the whole start area (same steel rail as the highway): a solid beam with
+    // its posts standing behind it (outside) and down into the ground, and a post right at each end
     const rail = (pts) => {
       for (let i = 0; i < pts.length - 1; i++) {
         const [a, b] = [pts[i], pts[i + 1]];
-        const pa = P(a[0], a[1], 0), pb = P(b[0], b[1], 0);
+        const pa = P(a[0], a[1] + 0.08, 0), pb = P(b[0], b[1] + 0.08, 0);
         const dx = pb[0] - pa[0], dz = pb[2] - pa[2], len = Math.hypot(dx, dz); if (len < 0.01) continue;
         const yaw = Math.atan2(dx, dz), mx = (pa[0] + pb[0]) / 2, mz = (pa[2] + pb[2]) / 2;
-        gb.geom(G.box, this.xf(mx, 0.66, mz, 0, yaw, 0.08, 0.34, len + 0.02), WC.rail);
+        gb.geom(G.box, this.xf(mx, 0.65, mz, 0, yaw, 0.16, 0.36, len + 0.02), WC.rail);
       }
-      for (let i = 0; i < pts.length; i += 2) { const p = P(pts[i][0], pts[i][1], 0); gb.geom(G.box, this.xf(p[0], 0.4, p[2], 0, 0, 0.13, 0.8, 0.13), WC.post); }
+      const post = i => { const [s, d] = pts[i], p = P(s, d + 0.23, 0); gb.geom(G.box, this.xf(p[0], 0.29, p[2], 0, -ROAD.yaw(s), 0.12, 0.98, 0.12), WC.post); };
+      for (let i = 0; i < pts.length - 1; i += 2) post(i);
+      post(pts.length - 1);
     };
     const outer = [];
     for (let s = D.OFF0; s <= D.RAIL_OPEN1; s += 2) outer.push([s, ROAD.lotOuter(s) + 0.1]);

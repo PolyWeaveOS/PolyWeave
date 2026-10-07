@@ -68,11 +68,12 @@ class Score {
     this.hud.showResult(this.score, this.peakMult || this.mult, this.score > (this.bestBefore ?? 0) + 0.5);
     if (this.onStreakEnd) this.onStreakEnd(Math.round(this.score), this.peakMult || this.mult, Math.round(this.runTime || 0));   // (scored runs -> leaderboard)
   }
-  crash() {
-    const had = this.score > 0 || this.pot > 1;
+  crash() { this.lose(this.score > 0 || this.pot > 1 ? 'CRASH, STREAK LOST' : 'CRASH'); }
+  // the streak ends (crash, too long on the shoulder): show its result, back to zero
+  lose(msg) {
     this.endStreak();
     this.score = 0; this.pot = 0; this.mult = 1; this.timer = 0;
-    this.hud.message(had ? 'CRASH, STREAK LOST' : 'CRASH', true);
+    this.hud.message(msg, true);
     this.hud.potHide();
   }
   reset() {

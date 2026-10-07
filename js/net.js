@@ -71,7 +71,12 @@ const Net = {
         ws.onerror = () => { clearTimeout(t); bad(new Error('Could not connect to the multiplayer server.')); };
       });
       ws.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch (x) { return; } this.onData(m); };
+      // round trip to the server every 2 s (friends' cars are drawn ahead by the delay it implies)
+      clearInterval(this._pingT);
+      this._pingT = setInterval(() => this.send({ t: 'ping', c: performance.now() }), 2000);
+      this.send({ t: 'ping', c: performance.now() });
       ws.onclose = () => {
+        clearInterval(this._pingT);
         if (this.ws !== ws) return;
         this.ws = null;
         if (this.room) { this.left(); this.status('Disconnected from the server. Join again to keep playing together.', 'err'); }
@@ -123,11 +128,15 @@ const Net = {
   // that car got going again (back in lane `lane` at speed v) / couldn't and disappeared
   reportRecover(c) { this.send({ t: 'recover', id: c.id, s: +c.s.toFixed(2), lane: c.lane, v: +c.v.toFixed(2) }); },
   reportGone(c) { this.send({ t: 'gone', id: c.id }); },
+  // I hit a friend hard: tell them so their streak ends too (they may not have seen it on their side)
+  reportBump(v) { if (this.lastBumpId) this.send({ t: 'bump', id: this.lastBumpId, v: +v.toFixed(1) }); },
 
   onData(m) {
     if (!m || typeof m !== 'object') return;
     if (m.t === 'st') { const p = this.players.get(m.id); if (p) this.pushState(p, m.st); }
     else if (m.t === 'traffic') { if (this.room && this.onTraffic) this.onTraffic(m); }
+    else if (m.t === 'pong') { const r = performance.now() - m.c; if (r >= 0 && r < 3000) this.rtt = this.rtt === undefined ? r : this.rtt * 0.8 + r * 0.2; }
+    else if (m.t === 'bumped') { if (this.room && this.onBumped) this.onBumped(m.v || 0); }   // a friend hit me hard (they saw it)
     else if (m.t === 'hello') this.myId = m.id;
     else if (m.t === 'joined') {
       this.clearRoom();
@@ -209,7 +218,15 @@ const Net = {
     const a = b[i - 1], c = b[i];
     const k = U.clamp((t - a.t) / Math.max(c.t - a.t, 1e-3), 0, 2);   // (k > 1: briefly extrapolate a late update)
     const L = (x, y) => x + (y - x) * k;
-    return Object.assign({}, c, { s: L(a.s, c.s), d: L(a.d, c.d), ry: a.ry + U.wrap(c.ry - a.ry) * k, v: L(a.v, c.v), steer: L(a.steer, c.steer) });
+    const st = Object.assign({}, c, { s: L(a.s, c.s), d: L(a.d, c.d), ry: a.ry + U.wrap(c.ry - a.ry) * k, v: L(a.v, c.v), steer: L(a.steer, c.steer) });
+    // That is where they were a moment ago (network delay + the smoothing buffer): ~8 m behind at 200 km/h.
+    // Carry them forward by that time, so a friend touching your bumper is drawn touching it (and the
+    // proxy gap and bumps use where they really are).
+    const lag = U.clamp(p.delay + ((this.rtt || 60) + (c.rtt || this.rtt || 60)) / 2000, 0, 0.45);
+    const dd = U.clamp((c.d - a.d) / Math.max(c.t - a.t, 1e-3), -6, 6);   // sideways speed (m/s)
+    st.s += (st.v || 0) * lag;
+    st.d += dd * lag * 0.8;
+    return st;
   },
 
   // ---------------------------------------------------------------- per frame (called by main.js)
@@ -248,6 +265,7 @@ const Net = {
   collide(player, hull) {
     if (!this.room) return 0;
     let impact = 0;
+    this.lastBumpId = null;
     for (const p of this.players.values()) {
       if (!p.now || p.x === undefined) continue;
       const dx = p.x - player.x, dz = p.z - player.z;
@@ -258,7 +276,8 @@ const Net = {
       if (!col) continue;
       const v = p.now.v || 0;
       const other = { x: p.x, z: p.z, vx: v * Math.sin(p.yaw), vz: -v * Math.cos(p.yaw), w: 0, im: 1 / M4.mass, ii: 1 / M4.Iz };
-      impact = Math.max(impact, resolveImpulse(pb, other, col, 0.15, 0.35));
+      const hit = resolveImpulse(pb, other, col, 0.15, 0.35);
+      if (hit > impact) { impact = hit; this.lastBumpId = p.id; }
       player.fromBody(pb);
     }
     return impact;

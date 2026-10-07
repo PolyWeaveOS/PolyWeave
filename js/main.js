@@ -109,7 +109,7 @@ setPaint(Settings.color);
 
 // ---------- state ----------
 let camMode = 0, menuOpen = true, started = false, time = 0, lastCrash = -9, last = performance.now();
-let lastShoulder = -9, shoulderLost = 0;
+let lastShoulder = -9, shoulderLost = 0, shoulderT = 0;
 const camS = { off: new THREE.Vector3(0, 1.8, 6), yaw: 0, fov: 62, look: new THREE.Vector3(), orbit: 0 };
 const proxy = { s: 0, d: 0, v: 0, front: M4_EXT.front, rear: M4_EXT.rear, hw: M4_EXT.hw, isPlayer: true, crashed: false };
 const _hp = [];
@@ -256,6 +256,23 @@ function inStartArea(s, d) {
   return ls > LOOP.OFF0 - 5 && ls < LOOP.RAIL_OPEN1 + 5;
 }
 
+// Too long on the shoulder: streak lost, car put back into the nearest lane on that side that has room
+// (same spot along the road, same speed, pointing straight down the road)
+function backOnRoad() {
+  const order = car.d > 0 ? [3, 2, 1, 0] : [0, 1, 2, 3];
+  const others = traffic.cars.concat(Net.agents(M4_EXT));
+  const free = l => !others.some(c => !c.crashed && Math.abs(ROAD.lane(l) - c.d) < 2.4 && Math.abs(c.s - car.s) < 18);
+  const lane = order.find(free) ?? order[0];
+  const u = Math.max(0, car.u);
+  car.place(car.s, ROAD.lane(lane), u); car.hitT = 0;
+  car.d = ROAD.lane(lane);
+  steerCtl.key = 0; steerCtl.k1 = 0; steerCtl.wheelF = 0; steerCtl.kAl = 0;
+  camS.yaw = car.yaw; camS.shift = 0;
+  Object.assign(proxy, { s: car.s, d: car.d, v: u, ry: 0 });
+  score.lose('SHOULDER, STREAK LOST');
+  lastCrash = time;
+}
+
 function crashEvent(strength) {
   sound.thump(0.3 + strength / 12);
   if (time - lastCrash > 1.2) score.crash();
@@ -273,9 +290,11 @@ function updateCamera(dt) {
     camera.fov = 50; camera.near = 0.25; camera.updateProjectionMatrix();
     return;
   }
-  if (camMode === 0) {
-    // camera follows the direction of travel smoothly (like "Low Poly Traffic Racer"),
+  if (camMode !== 1) {
+    // chase cameras (0: close, 2: far - pulled back a little and only slightly higher).
+    // The camera follows the direction of travel smoothly (like "Low Poly Traffic Racer"),
     // so you see the car rotate into the turn instead of the whole world swinging
+    const far = camMode === 2;
     const travel = car.u > 4 ? car.yaw + Math.atan2(car.v, Math.max(car.u, 0.1)) : car.yaw;
     camS.yaw = U.dampAngle(camS.yaw, travel, 5, dt);
     // ...and slides slightly sideways toward the turn instead of orbiting
@@ -284,12 +303,15 @@ function updateCamera(dt) {
     const sp = U.clamp(spd / 80, 0, 1);
     // camera has inertia: it lags back when accelerating and surges toward the car under braking
     const brk = U.clamp(-car.ax / 13, 0, 1);
-    const dist = 5.7 + sp * 0.9 + U.clamp(car.ax, -15, 9) * 0.05;
-    const hgt = 1.72 + sp * 0.12;
+    const dist = (far ? 8.1 : 5.7) + sp * 0.9 + U.clamp(car.ax, -15, 9) * 0.05;
+    const hgt = (far ? 2.3 : 1.72) + sp * 0.12;
     const cyw = Math.cos(camS.yaw), syw = Math.sin(camS.yaw);
     const ox = -syw * dist + cyw * camS.shift, oz = cyw * dist + syw * camS.shift;
     camS.off.x = U.damp(camS.off.x, ox, 14, dt);
     camS.off.z = U.damp(camS.off.z, oz, 14, dt);
+    // a friend right on your tail would put the camera inside their car: rise smoothly over their roof
+    // instead, so they stay in view behind you
+    camS.lift = U.damp(camS.lift || 0, tailgateLift(car.x + camS.off.x, car.z + camS.off.z, camS.off.y), 6, dt);
     camS.off.y = U.damp(camS.off.y, hgt, 5, dt);
     let shx = 0, shy = 0;
     if (spd > 45) { const k = (spd - 45) * 0.00035; shx = Math.sin(time * 37) * k; shy = Math.sin(time * 53 + 1) * k; }
@@ -297,7 +319,7 @@ function updateCamera(dt) {
       const k = (brk - 0.3) * Math.min(spd / 40, 1) * 0.03;
       shx += Math.sin(time * 61) * k; shy += Math.sin(time * 47 + 2) * k;
     }
-    camera.position.set(car.x + camS.off.x + shx, camS.off.y + shy, car.z + camS.off.z);
+    camera.position.set(car.x + camS.off.x + shx, camS.off.y + camS.lift + shy, car.z + camS.off.z);
     const la = 3.2, lx = camS.shift * 0.6;
     camS.dip = U.damp(camS.dip || 0, brk * 0.35, 8, dt); // view tips forward with the nose
     camera.lookAt(car.x + syw * la + cyw * lx, 0.95 - camS.dip, car.z - cyw * la + syw * lx);
@@ -314,8 +336,23 @@ function updateCamera(dt) {
   }
   // near plane: far enough out in the chase view for good depth precision (no z-fighting
   // flicker on lights/trim), close in the cockpit so the dashboard isn't clipped
-  camera.near = camMode === 1 ? 0.05 : 0.25;
+  camera.near = camMode === 1 ? 0.05 : (camS.lift > 0.05 ? 0.1 : 0.25);
   camera.fov = camS.fov; camera.updateProjectionMatrix();
+}
+// how far to raise the chase camera so it isn't inside a friend's car (0 when nobody is that close)
+function tailgateLift(cx, cz, cy) {
+  if (!Net.active()) return 0;
+  let lift = 0;
+  for (const p of Net.players.values()) {
+    if (!p.now || p.x === undefined || !p.g || !p.g.visible) continue;
+    const dx = cx - p.x, dz = cz - p.z;
+    if (dx * dx + dz * dz > 64) continue;
+    const along = dx * Math.sin(p.yaw) - dz * Math.cos(p.yaw), lat = dx * Math.cos(p.yaw) + dz * Math.sin(p.yaw);
+    // their body (with a bit of room around it): how deep the camera is inside it, 0..1
+    const inside = Math.min(1 - U.smooth(2.4, 3.2, along), U.smooth(-3.6, -2.8, along), 1 - U.smooth(0.9, 1.6, Math.abs(lat)));
+    lift = Math.max(lift, inside * Math.max(0, 1.75 - cy + 0.25));       // up to just over their roof
+  }
+  return lift;
 }
 
 // ---------- menus ----------
@@ -580,6 +617,7 @@ traffic.onRecover = c => Net.reportRecover(c);
 traffic.onGone = c => Net.reportGone(c);
 Net.onJoined = (room, slot) => {
   Net.slot = slot; bigMap = false;
+  Input.lastActive = performance.now();   // (the AFK clock starts fresh)
   score.reset();
   game.mode = 'mp'; game.scored = !!room.scored; game.density = room.density;
   enterServer(slot);
@@ -589,6 +627,28 @@ Net.onJoined = (room, slot) => {
 };
 // left the server (or lost it): endless road again, back to the menu
 Net.onRank = r => hud.message(`LEADERBOARD #${r}`);
+// AFK on a server: no input for 20 s out on the road (60 s parked in the start lot) and you're removed,
+// so an empty car doesn't sit in everyone's traffic. A warning shows 10 s before.
+const AFK_ROAD = 20, AFK_LOT = 60;
+let afkWarned = false;
+function inLotPad(s, d) {
+  if (!ROAD.loop) return false;
+  const ls = ROAD.lotS(s);
+  return ls > LOOP.LOT_S0 - 2 && ls < LOOP.LOT_S1 + 2 && d > ROAD.edgeR + LOOP.LOT_D0 - 2 && d < ROAD.edgeR + LOOP.LOT_D1 + 2;
+}
+function afkCheck(now) {
+  if (game.mode !== 'mp' || !Net.active()) { afkWarned = false; return; }
+  const idle = (now - Input.lastActive) / 1000, limit = inLotPad(car.s, car.d) ? AFK_LOT : AFK_ROAD;
+  if (idle < limit - 10) { afkWarned = false; return; }
+  if (!afkWarned) { afkWarned = true; hud.message('AFK? MOVE OR YOU\'LL BE REMOVED', true); }
+  if (idle >= limit) {
+    afkWarned = false;
+    Net.leave();
+    Net.status('You were removed from the server for being AFK (no input for ' + limit + ' seconds).', 'err');
+  }
+}
+// a friend hit me hard (they noticed it on their side): my streak ends as well
+Net.onBumped = v => { if (game.mode === 'mp') crashEvent(Math.max(3, v)); };
 Net.onLeft = () => {
   exitServer();
   game.mode = 'menu'; game.scored = false; game.density = SCORED_DENSITY;
@@ -609,22 +669,28 @@ function updateMpHud(dt) {
 function netState() {
   return { t: +(performance.now() / 1000).toFixed(3), s: +car.s.toFixed(2), d: +car.d.toFixed(3), ry: +(proxy.ry || 0).toFixed(4), v: +proxy.v.toFixed(2),
     steer: +car.steer.toFixed(3), brake: !!(car.brakeOn && car.gear >= 0), kmh: Math.round(Math.abs(car.u) * 3.6), score: Math.round(score.score),
-    rt: Math.round(score.runTime || 0) };
+    rt: Math.round(score.runTime || 0), rtt: Math.round(Net.rtt || 0) };
 }
 
-// ---------- proximity multiplier (multiplayer): drive close to another player for up to x10 ----------
-// gap between the two cars' outlines (m): ~10 ft (3 m) = x2, ~1 ft (0.3 m) = x10, nothing beyond 9 m
-const PROX_CURVE = mcurve([[0.3, 10], [0.6, 7], [1, 5], [2, 3], [3.05, 2], [5, 1.5], [7, 1.25], [9, 1.1]]);
-const _po = { s: 0, d: 0, relYaw: 0, front: M4_EXT.front, rear: M4_EXT.rear, hw: M4_EXT.hw };
+// ---------- proxy multiplier (multiplayer): drive close to another player for up to x10 ----------
+// Gap between the two cars (m, bumper to bumper / side to side): one car length (~4.8 m) = x5, a metre = ~x8.6,
+// half a metre and closer = ~x10, nothing past 25 m. Side by side counts for less than nose-to-tail, and the
+// bonus grows with speed: almost nothing at 60 km/h, half at ~105, the full amount from 160 km/h.
+const PROX_CURVE = mcurve([[0.3, 10], [1, 8.6], [2, 7.2], [3, 6.1], [4.8, 5], [7, 3.8], [10, 2.7], [14, 1.9], [19, 1.35], [25, 1]]);
 function proximity(kmh) {
-  if (game.mode !== 'mp' || kmh < 60) return 1;
-  let g = Infinity;
+  if (game.mode !== 'mp' || kmh < 50) return 1;
+  const len = M4_EXT.front - M4_EXT.rear;
+  let best = 1;
   for (const p of Net.players.values()) {
-    const n = p.now; if (!n || Math.abs(n.s - car.s) > 25) continue;
-    Object.assign(_po, { s: n.s, d: n.d, relYaw: n.ry || 0 });
-    g = Math.min(g, traffic.outlineGap(proxy, _po));
+    const n = p.now; if (!n || Math.abs(n.s - car.s) > 40) continue;
+    const gs = Math.max(0, Math.abs(n.s - car.s) - len);             // gap along the road
+    const gd = Math.max(0, Math.abs(n.d - car.d) - 2 * M4_EXT.hw);   // gap across it
+    const gap = Math.hypot(gs, gd);
+    if (gap > 25) continue;
+    const side = (1 - U.smooth(0, 3, gs)) * U.smooth(1, 2.5, Math.abs(n.d - car.d));   // 1 = side by side (other lane, level with you)
+    best = Math.max(best, 1 + (PROX_CURVE(Math.max(0.3, gap)) - 1) * (1 - 0.6 * side));
   }
-  return g <= 9 ? PROX_CURVE(Math.max(0.3, g)) : 1;
+  return 1 + (best - 1) * U.smooth(50, 160, kmh);
 }
 
 // ---------- minimap (multiplayer) ----------
@@ -932,7 +998,7 @@ function driveStep(dt, ctl, paused) {
   // friends: light bumps just push you around, a hard hit (> ~11 km/h difference) costs your streak
   const bump = Net.collide(car, trafficHull);
   if (bump > 0.45) sound.thump(0.2 + bump / 12);
-  if (bump > 3) crashEvent(bump);
+  if (bump > 3) { crashEvent(bump); Net.reportBump(bump); }   // (their streak ends too)
   // cones / barrels: knocked flying (no streak loss), with a little thud and a small speed scrub
   const coneHits = zoneProps.update(dt, car, car.s, M4_EXT);
   if (coneHits) { sound.thump(0.15 * coneHits); car.u *= Math.pow(0.985, coneHits); }
@@ -958,6 +1024,9 @@ function driveStep(dt, ctl, paused) {
     shoulderLost += score.shoulder(dt);
     lastShoulder = time;
   }
+  // more than 3 s on the shoulder in one go: the streak is over and you're put back on the road
+  shoulderT = onShoulder ? shoulderT + dt : 0;
+  if (shoulderT > 3) { shoulderT = 0; backOnRoad(); hud.shoulderWarn(false, 0); return; }
   hud.shoulderWarn(onShoulder, shoulderLost);
   score.update(dt);
 
@@ -978,6 +1047,7 @@ function frame(now) {
   requestAnimationFrame(frame);
   const dt = U.clamp((now - last) / 1000, 0, 0.05); last = Math.max(last, now);
   const ctl = Input.update(now, dt);
+  afkCheck(now);
 
   if (menuOpen) {
     // Esc: pause -> back to driving; settings -> where you came from; other screens -> main menu
@@ -1003,7 +1073,10 @@ function frame(now) {
   }
   if (Input.hit('Escape') || Input.hit('KeyP')) { openMenu('scrPause'); Input.endFrame(); return; }
   time += dt;
-  if (Input.tap('camera') || ctl.camBtn) camMode ^= 1;
+  if (Input.tap('camera') || ctl.camBtn) {   // chase -> far chase -> cockpit -> chase
+    camMode = camMode === 0 ? 2 : camMode === 2 ? 1 : 0;
+    hud.message(['CHASE CAMERA', 'COCKPIT CAMERA', 'FAR CHASE CAMERA'][camMode]);
+  }
   if (Input.tap('style')) setFx((FX.mode + 1) % 3);   // normal -> toon -> realistic -> normal
   if (Input.tap('reset') || ctl.reset) resetCar();
   if (game.mode === 'sp' && !game.scored && (Input.hit('BracketLeft') || Input.hit('BracketRight'))) { // [ ] traffic (free drive only)
