@@ -201,10 +201,14 @@ const MIRRORS = (() => {
               medium: { rear: [384, 110], side: [192, 92], samples: 0, every: [1, 3], far: 320 },
               high: { rear: [512, 148], side: [256, 124], samples: 2, every: [1, 2], far: 450 } };
   let q = Q.medium;
+  let off = false;
   const setQuality = name => {
+    off = name === 'off';                                   // off: plain dark glass, nothing extra drawn (fastest)
     q = Q[name] || Q.medium;
     for (const m of list) {
-      if (m.target) m.target.dispose();
+      if (m.target) { m.target.dispose(); m.target = null; }
+      if (off) { m.mat.map = null; m.mat.color.set(0x1a2028); m.mat.needsUpdate = true; continue; }
+      m.mat.color.set(0xffffff);
       const [w, h] = m.key === 'rear' ? q.rear : q.side;
       m.target = new THREE.WebGLRenderTarget(w, h, { samples: q.samples });
       m.mat.map = m.target.texture; m.mat.needsUpdate = true;
@@ -233,12 +237,12 @@ const MIRRORS = (() => {
     g.textAlign = 'right'; g.font = '700 17px Segoe UI, Arial'; g.fillStyle = 'rgba(255,255,255,.55)'; g.fillText(car.manual ? 'MANUAL' : 'AUTO', 478, 84);
     gTex.needsUpdate = true;
   };
-  return { list, drawGauge, setQuality, setSide, frame: 0, every: () => q.every };
+  return { list, drawGauge, setQuality, setSide, frame: 0, every: () => q.every, off: () => off };
 })();
 // the mirrors' cameras follow the car (each redrawn every few frames, depending on quality)
 const _mp = new THREE.Vector3(), _md = new THREE.Vector3();
 function renderMirrors() {
-  if (!cockpit.visible) return;
+  if (!cockpit.visible || MIRRORS.off()) return;
   playerVis.root.updateMatrixWorld(true);
   const was = renderer.shadowMap.autoUpdate, rtWas = renderer.getRenderTarget();
   renderer.shadowMap.autoUpdate = false;                 // (reuse this frame's shadows)

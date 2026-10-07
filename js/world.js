@@ -253,7 +253,7 @@ class World {
       }
       for (let m = Math.ceil(s0 / 4) * 4; m < s0 + this.CH; m += 4) if (!open(m - 1.5) && !open(m + 1.5)) postAt(m);
     }
-    // street lights on the median side every 60 m: concrete footing, tapered pole, an arm that sweeps up and
+    // street lights on the median side every 120 m: concrete footing, tapered pole, an arm that sweeps up and
     // out over the fast lane, and a slim lamp head with a glowing lens underneath
     const glow = new CGB();                      // unlit bits (lamp lenses)
     const beam = (a, b, w, h, col, gbx = sc) => {   // box from point a to point b (world [x, y, z])
@@ -262,7 +262,7 @@ class World {
       const m = new THREE.Matrix4().compose(new THREE.Vector3((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2), q, new THREE.Vector3(w, h, len + 0.02));
       gbx.geom(this.G.box, m, col);
     };
-    for (let m = Math.ceil(s0 / 60) * 60; m < s0 + this.CH; m += 60) {
+    for (let m = Math.ceil(s0 / 120) * 120; m < s0 + this.CH; m += 120) {
       const yaw = -ROAD.yaw(m), dp = eL - 1.2, p = P(m, dp, 0), at = (d, y) => { const q = P(m, d, 0); return [q[0], y, q[2]]; };
       sc.geom(this.G.cyl8, this.xf(p[0], 0.22, p[2], 0, yaw, 0.3, 0.65, 0.3), WC.concrete);           // footing
       sc.geom(this.G.taper8, this.xf(p[0], 5.2, p[2], 0, yaw, 0.15, 9.9, 0.15), WC.pole);            // pole
