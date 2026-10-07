@@ -4,7 +4,7 @@
 // =====================================================================
 
 // ---------- settings ----------
-const DEFAULTS = { density: 0.55, assist: 0, sens: 1.0, kbSens: 1.0, blur: 0, mirrors: 'medium', units: 'mph', rhd: false, vol: 0.6, tc: true, manual: false, color: '#a6b0b8', mpDensity: 0.55, minimap: true };
+const DEFAULTS = { density: 0.55, assist: 0, sens: 1.0, kbSens: 1.0, blur: 0, world: 'grass', tod: 'day', hostVis: 'public', hostWorld: 'grass', hostTod: 'day', hostName: '', mirrors: 'medium', units: 'mph', rhd: false, vol: 0.6, tc: true, manual: false, color: '#a6b0b8', mpDensity: 0.55, minimap: true };
 const SCORED_DENSITY = 0.6;               // scored (leaderboard) runs always use this much traffic
 const Settings = Object.assign({}, DEFAULTS);
 try { Object.assign(Settings, JSON.parse(localStorage.getItem('tw_settings2') || '{}')); } catch (e) { /* ignore */ }
@@ -390,8 +390,9 @@ function spawnInLot(slot) {
   lastCrash = -9;
 }
 // joined a server: switch to the loop circuit + shared traffic, start in the lot
-function enterServer(slot) {
+function enterServer(slot, room) {
   ROAD.setLoop(true); ZONES.setLoop(ROAD.loop.L);
+  setWorld(room && room.theme, room && room.tod);     // the server's world type and time of day
   world.reset(); zoneProps.reset();
   traffic.clear(); traffic.remote = true;
   spawnInLot(slot);
@@ -399,6 +400,7 @@ function enterServer(slot) {
 // left / lost the server: back to the endless single-player highway
 function exitServer() {
   ROAD.setLoop(false); ZONES.setLoop(0);
+  setWorld(Settings.world, Settings.tod);             // back to your own world
   world.reset(); zoneProps.reset();
   traffic.remote = false; traffic.clear();
   startPosition();
@@ -547,8 +549,7 @@ bindRange('vol', 'vol', v => v / 100, v => v + '%');
 { // drop-downs: mirror quality, speed units, driver side
   const pick = (id, get, set) => { const el = $id(id); el.value = get(); el.addEventListener('change', () => { set(el.value); saveSettings(); }); };
   pick('mirrorQ', () => Settings.mirrors, v => { Settings.mirrors = v; MIRRORS.setQuality(v); });
-  pick('units', () => Settings.units, v => { Settings.units = v; });
-  pick('rhd', () => (Settings.rhd ? 'right' : 'left'), v => { Settings.rhd = v === 'right'; MIRRORS.setSide(Settings.rhd); });
+  pick('units', () => Settings.units, v => { Settings.units = v; });  pick('rhd', () => (Settings.rhd ? 'right' : 'left'), v => { Settings.rhd = v === 'right'; MIRRORS.setSide(Settings.rhd); });
 }
 { // motion blur 0..100 (stored as 0..100)
   const el = $id('blur'), lab = $id('blurV');
@@ -642,6 +643,7 @@ $id('spFree').onclick = () => startSingle(false);
 function startSingle(scored) {
   score.reset();                                       // (ends anything left over first)
   game.mode = 'sp'; game.scored = scored; game.density = scored ? SCORED_DENSITY : Settings.density;
+  setWorld(Settings.world, Settings.tod);              // the world type / time of day picked on the singleplayer screen
   startPosition(); score.reset();
   closeMenu();
   hud.message(scored ? 'SCORED RUN' : 'FREE DRIVE');
@@ -664,6 +666,7 @@ function quitToTitle() {
   if (game.mode === 'mp') { quitting = true; Net.leave(); quitting = false; }   // (onLeft puts the endless road back)
   else score.reset();
   game.mode = 'menu'; game.scored = false; game.density = SCORED_DENSITY;
+  setWorld(Settings.world, Settings.tod);              // (the title screen shows your chosen world again)
   startPosition(); score.reset();
   show('scrTitle');
 }
@@ -728,19 +731,47 @@ Net.init(scene);
 renderAccount(); Account.init();
 const mpEl = $id;
 const mpCode = mpEl('mpCode');
-mpEl('mpHostScored').onclick = () => Net.host(myName(), Settings.color, { scored: true });
-mpEl('mpHostFree').onclick = () => Net.host(myName(), Settings.color, { scored: false, density: Settings.mpDensity });
+// segmented pickers: one button lit; remembered in Settings
+function segPicker(id, key, onPick) {
+  const el = $id(id), btns = [...el.querySelectorAll('button')];
+  const mark = () => btns.forEach(b => b.classList.toggle('sel', b.dataset.v === Settings[key]));
+  for (const b of btns) b.onclick = () => { Settings[key] = b.dataset.v; saveSettings(); mark(); if (onPick) onPick(b.dataset.v); };
+  if (!btns.some(b => b.dataset.v === Settings[key])) Settings[key] = btns[0].dataset.v;
+  mark();
+}
+// singleplayer: world type + time of day (the menu background shows it straight away)
+segPicker('spWorld', 'world', () => { if (game.mode === 'menu') setWorld(Settings.world, Settings.tod); });
+segPicker('spTod', 'tod', () => { if (game.mode === 'menu') setWorld(Settings.world, Settings.tod); });
+// hosting: name, public (listed + code) or private (code only), world, time of day
+const WORLD_NAMES = { grass: 'Grassy', desert: 'Desert', snow: 'Snowy' }, TOD_NAMES = { day: 'Day', sunset: 'Evening', night: 'Night' };
+segPicker('hostVis', 'hostVis'); segPicker('hostWorld', 'hostWorld'); segPicker('hostTod', 'hostTod');
+$id('hostName').value = Settings.hostName || '';
+$id('hostName').addEventListener('input', e => { Settings.hostName = e.target.value; saveSettings(); });
+const hostOpts = extra => Object.assign({ listed: Settings.hostVis !== 'private', roomName: ($id('hostName').value || '').trim() || `${myName()}'s server`,
+  theme: Settings.hostWorld, tod: Settings.hostTod }, extra);
+mpEl('mpHostScored').onclick = () => Net.host(myName(), Settings.color, hostOpts({ scored: true }));
+mpEl('mpHostFree').onclick = () => Net.host(myName(), Settings.color, hostOpts({ scored: false, density: Settings.mpDensity }));
+// server list tabs
+let mpTab = 'official', mpLast = null;
+document.querySelectorAll('[data-mptab]').forEach(b => b.addEventListener('click', () => {
+  mpTab = b.dataset.mptab;
+  document.querySelectorAll('[data-mptab]').forEach(o => o.classList.toggle('sel', o === b));
+  if (mpLast) Net.onList(mpLast);
+}));
 mpEl('mpJoin').onclick = () => Net.joinCode(mpCode.value, myName(), Settings.color);
 mpCode.addEventListener('keydown', e => { if (e.key === 'Enter') Net.joinCode(mpCode.value, myName(), Settings.color); });
 mpEl('mpRefresh').onclick = () => Net.refreshList();
 Net.onList = j => {
+  mpLast = j;
   mpEl('mpOnline').textContent = j.online ? `· ${j.online} online` : '';
   const box = mpEl('mpServers'); box.innerHTML = '';
-  for (const s of j.servers) {
+  const list = mpTab === 'public' ? (j.public || []) : (j.official || j.servers || []);
+  for (const s of list) {
     const row = document.createElement('div'), here = Net.room && Net.room.id === s.id;
     row.className = 'mpSrv' + (here ? ' here' : '');
-    row.innerHTML = '<span class="nm"></span><span class="ct"></span>';
-    row.querySelector('.nm').textContent = s.name;
+    row.innerHTML = '<span class="nmBox"><span class="nm"></span><span class="sub"></span></span><span class="ct"></span>';
+    row.querySelector('.nm').textContent = s.name;                       // (names as text, never HTML)
+    row.querySelector('.sub').textContent = [s.scored ? 'Scored' : 'Free drive', (WORLD_NAMES[s.theme] || 'Grassy') + ' world', TOD_NAMES[s.tod] || 'Day'].join(' · ');
     row.querySelector('.ct').textContent = `${s.players}/${s.max} players`;
     const b = document.createElement('button');
     b.textContent = here ? 'JOINED' : s.players >= s.max ? 'FULL' : 'JOIN';
@@ -748,7 +779,7 @@ Net.onList = j => {
     b.onclick = () => Net.joinServer(s.id, myName(), Settings.color);
     row.appendChild(b); box.appendChild(row);
   }
-  if (!j.servers.length) box.innerHTML = '<div class="mpEmpty">No public servers.</div>';
+  if (!list.length) box.innerHTML = mpTab === 'public' ? '<div class="mpEmpty">No public servers right now. Host one and pick Public!</div>' : '<div class="mpEmpty">No official servers.</div>';
 };
 setInterval(() => { if (menuOpen && screen === 'scrMP' && !document.hidden) Net.refreshList(); }, 6000);
 // "Install app" button (Chrome / Edge offer it when the game is opened from its website)
@@ -770,10 +801,10 @@ Net.onRoster = () => {
   mpEl('mpLive').classList.toggle('hidden', !on);
   mpEl('mpLot').classList.toggle('hidden', !on);
   mpEl('mpHud').classList.toggle('hidden', !on);
-  mpEl('mpWhere').textContent = r ? (r.pub ? r.name : 'Private server') : '';
+  mpEl('mpWhere').textContent = r ? (r.official ? r.name : r.name + (r.listed ? ' (public)' : ' (private)')) : '';
   mpEl('mpCodeWrap').classList.toggle('hidden', !(r && r.code));
   mpEl('mpCodeShow').textContent = Net.code;
-  mpEl('mpHudCode').textContent = r ? (r.pub ? r.name.toUpperCase() : 'PRIVATE · ' + r.code) + (r.scored ? ' · SCORED' : ' · FREE DRIVE') : '';
+  mpEl('mpHudCode').textContent = r ? (r.official ? r.name.toUpperCase() : r.name.toUpperCase() + ' · ' + r.code) + (r.scored ? ' · SCORED' : ' · FREE DRIVE') : '';
   const list = mpEl('mpList'); list.innerHTML = '';
   for (const p of Net.roster(0)) {
     const sp = document.createElement('span'); sp.style.setProperty('--c', p.color); sp.textContent = p.name + (p.you ? ' (you)' : '');
@@ -792,9 +823,9 @@ Net.onJoined = (room, slot) => {
   Input.lastActive = performance.now();   // (the AFK clock starts fresh)
   score.reset();
   game.mode = 'mp'; game.scored = !!room.scored; game.density = room.density;
-  enterServer(slot);
+  enterServer(slot, room);
   closeMenu();
-  hud.message(room.pub ? 'JOINED ' + room.name.toUpperCase() : 'PRIVATE SERVER ' + room.code);
+  hud.message(room.official ? 'JOINED ' + room.name.toUpperCase() : room.name.toUpperCase() + ' · ' + room.code);
   if (room.scored && Account.clientId && !Account.signedIn) setTimeout(() => hud.message('NOT SIGNED IN · RUNS WON\'T BE SAVED'), 1800);
 };
 // left the server (or lost it): endless road again, back to the menu
@@ -964,7 +995,7 @@ function drawMinimap(dt) {
 function updatePause() {
   const r = Net.room;
   $id('pauseMode').textContent = game.mode === 'mp'
-    ? `${r && r.pub ? r.name : 'Private server'} · ${game.scored ? 'Scored' : 'Free drive'} · ${Math.round(game.density * 100)}% traffic`
+    ? `${r ? r.name : 'Server'} · ${game.scored ? 'Scored' : 'Free drive'} · ${Math.round(game.density * 100)}% traffic`
     : game.scored ? 'Singleplayer · Scored · 60% traffic' : `Singleplayer · Free drive · ${Math.round(game.density * 100)}% traffic`;
 }
 function hintText() {
@@ -1115,9 +1146,51 @@ addEventListener('resize', fxResize);
 
 // scene-side tweaks for the realistic look (stronger sun for the tone curve, crisper shadows,
 // glossier paint, a little more atmospheric haze); everything is restored when leaving it
+// ---------- time of day (day / sunset / night) + world theme ----------
+// Each preset sets the sky, fog, sun (moon at night) and ambient light; the theme tints the ground light
+// and the haze. At night your headlights come on and every car's lights glow brighter.
+const TOD = {
+  day: { sky: ['#4f9fe3', '#9fd0f0', '#d3eaf7'], fog: 0xd3eaf7, sun: 0xfff3e2, sunI: 1.2, hemi: 0xdff0ff, hemiI: 0.72, off: [-55, 95, 40], cloud: 0xffffff, dark: 0 },
+  // "Evening" (stored as 'sunset'): a warm orange sky, only a touch of dusk at the very top
+  sunset: { sky: ['#c4683c', '#ee9a52', '#ffcf8c'], fog: 0xf6c38c, sun: 0xffa452, sunI: 1.08, hemi: 0xffc896, hemiI: 0.58, off: [-120, 30, 70], cloud: 0xffd0a2, dark: 0.3 },
+  night: { sky: ['#050a1a', '#0d1a36', '#1a2948'], fog: 0x15223b, sun: 0x9fb8ff, sunI: 0.42, hemi: 0x5d78b0, hemiI: 0.45, off: [40, 90, -30], cloud: 0x4f5b75, dark: 1 },
+};
+const THEME_LOOK = { grass: { ground: 0x7b9a5c, haze: null }, desert: { ground: 0xc4a274, haze: 0xead8b4 }, snow: { ground: 0xdde5ec, haze: 0xe4eef6 } };
+const look = { theme: 'grass', tod: 'day', realistic: false };
+const headlights = (() => {
+  const g = [];
+  for (const sx of [-0.62, 0.62]) {
+    const l = new THREE.SpotLight(0xfff1d6, 0, 70, 0.42, 0.55, 1.4); l.position.set(sx, 0.75, -2.2);
+    l.target.position.set(sx * 1.4, 0, -22); playerVis.root.add(l, l.target); g.push(l);
+  }
+  return g;
+})();
+const _skyCanvas = scene.background.image;
+function applyLook() {
+  const T = TOD[look.tod] || TOD.day, th = THEME_LOOK[look.theme] || THEME_LOOK.grass, on = look.realistic;
+  { // sky gradient
+    const g = _skyCanvas.getContext('2d'), gr = g.createLinearGradient(0, 0, 0, 256);
+    gr.addColorStop(0, T.sky[0]); gr.addColorStop(0.55, T.sky[1]); gr.addColorStop(1, T.sky[2]);
+    g.fillStyle = gr; g.fillRect(0, 0, 4, 256); scene.background.needsUpdate = true;
+  }
+  const fog = new THREE.Color(T.fog); if (th.haze && T.dark < 0.5) fog.lerp(new THREE.Color(th.haze), 0.35);
+  scene.fog.color.copy(fog);
+  sunLight.color.set(T.sun); sunLight.intensity = T.sunI * (on ? 1.58 : 1);
+  hemi.color.set(T.hemi); hemi.groundColor.set(th.ground).lerp(new THREE.Color(0x1a2230), T.dark * 0.8); hemi.intensity = T.hemiI * (on ? 0.97 : 1);
+  SUN_OFF.set(...T.off);
+  for (const c of world.clouds.children) if (c.material && c.material.color) c.material.color.set(T.cloud);
+  for (const l of headlights) l.intensity = T.dark > 0.5 ? 2.2 : 0;
+  MATS[SLOT.HEAD].emissiveIntensity = T.dark > 0.5 ? 2.2 : 0.55;     // every car's headlights / tail lights glow at night
+  MATS[SLOT.TAIL].emissiveIntensity = T.dark > 0.5 ? 2.4 : 1;
+}
+// the world (scenery theme + time of day) for singleplayer, the title screen or a server
+function setWorld(theme, tod) {
+  look.theme = THEMES[theme] ? theme : 'grass'; look.tod = TOD[tod] ? tod : 'day';
+  world.setTheme(look.theme);
+  applyLook();
+}
 function realisticScene(on) {
-  sunLight.intensity = on ? 1.9 : 1.2;
-  hemi.intensity = on ? 0.7 : 0.72;
+  look.realistic = on; applyLook();
   const ms = on ? 3072 : 2048;
   if (sunLight.shadow.mapSize.x !== ms) {
     sunLight.shadow.mapSize.set(ms, ms);
@@ -1324,4 +1397,5 @@ function frame(now) {
 }
 // restore the last visual style (older saves used a toon on/off flag)
 setFx(Number.isInteger(Settings.fx) ? Settings.fx : (Settings.toon ? 1 : 0), true);
+setWorld(Settings.world, Settings.tod);                // the title screen shows your chosen world
 requestAnimationFrame(frame);

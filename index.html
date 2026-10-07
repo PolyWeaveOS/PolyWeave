@@ -36,8 +36,7 @@
   <canvas id="minimap" class="hidden" width="200" height="200"></canvas>
 
   <div id="tags"><span id="tagLA"></span><span id="tagTC"></span><span id="tagPad"></span></div>
-  <div id="hint"></div>
-</div>
+  <div id="hint"></div></div>
 
 <!-- ======================= menus ======================= -->
 <div id="menu" class="overlay">
@@ -71,8 +70,12 @@
   <!-- singleplayer -->
   <div id="scrSP" class="screen panel hidden">
     <div class="hdr"><button class="back" data-go="scrTitle">← BACK</button><h1>SINGLEPLAYER</h1></div>
-    <label class="mpField">Driver name <input type="text" class="nameIn" maxlength="16" placeholder="Driver" spellcheck="false" autocomplete="off"></label>
+    <label class="mpField"><span class="mpLabel">Driver Name</span><input type="text" class="nameIn" maxlength="16" placeholder="Driver" spellcheck="false" autocomplete="off"></label>
     <div class="acctNote"></div>
+    <div class="picks">
+      <div class="pickRow"><span>World</span><div class="seg" id="spWorld"><button data-v="grass">Grassy</button><button data-v="desert">Desert</button><button data-v="snow">Snowy</button></div></div>
+      <div class="pickRow"><span>Time of day</span><div class="seg" id="spTod"><button data-v="day">Day</button><button data-v="sunset">Evening</button><button data-v="night">Night</button></div></div>
+    </div>
     <div class="modes">
       <div class="mode">
         <h3>SCORED</h3>
@@ -91,20 +94,29 @@
   <!-- multiplayer -->
   <div id="scrMP" class="screen panel hidden">
     <div class="hdr"><button class="back" data-go="scrTitle">← BACK</button><h1>MULTIPLAYER <span id="mpOnline"></span></h1></div>
-    <label class="mpField">Driver name <input type="text" class="nameIn" maxlength="16" placeholder="Driver" spellcheck="false" autocomplete="off"></label>
+    <label class="mpField"><span class="mpLabel">Driver Name</span><input type="text" class="nameIn" maxlength="16" placeholder="Driver" spellcheck="false" autocomplete="off"></label>
     <div class="acctNote"></div>
     <div class="grid mpGrid">
       <div>
-        <div class="mpHead">Public servers · scored <button id="mpRefresh" title="Refresh">↻</button></div>
+        <div class="mpTabs">
+          <button class="tab sel" data-mptab="official">OFFICIAL SCORED SERVERS</button><button class="tab" data-mptab="public">PUBLIC SERVERS</button>
+          <button id="mpRefresh" title="Refresh">↻</button>
+        </div>
         <div id="mpServers"><div class="mpEmpty">Loading servers…</div></div>
-        <div class="mpHead friend" style="margin-top:16px">Join a friend</div>
+        <div class="mpHead" style="margin-top:16px">Join a friend</div>
         <div class="mpRow">
           <input type="text" id="mpCode" maxlength="7" placeholder="K7P-2QX" spellcheck="false" autocomplete="off">
           <button id="mpJoin">JOIN WITH CODE</button>
         </div>
       </div>
       <div>
-        <div class="mpHead host">Host your own server</div>
+        <div class="mpHead">Host your own server</div>
+        <div class="mode small hostOpts">
+          <label class="hostName">Server name <input type="text" id="hostName" maxlength="24" placeholder="My server" spellcheck="false" autocomplete="off"></label>
+          <div class="pickRow"><span>Visibility</span><div class="seg" id="hostVis"><button data-v="public">Public</button><button data-v="private">Private</button></div></div>
+          <div class="pickRow"><span>World</span><div class="seg" id="hostWorld"><button data-v="grass">Grassy</button><button data-v="desert">Desert</button><button data-v="snow">Snowy</button></div></div>
+          <div class="pickRow"><span>Time of day</span><div class="seg" id="hostTod"><button data-v="day">Day</button><button data-v="sunset">Evening</button><button data-v="night">Night</button></div></div>
+        </div>
         <div class="mode small">
           <h3>SCORED SERVER</h3>
           <p>Runs count for the multiplayer leaderboards.</p>

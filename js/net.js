@@ -107,7 +107,8 @@ const Net = {
   },
   // opts.scored: leaderboard server (60% traffic); otherwise free drive with opts.density traffic
   host(name, color, opts = {}) {
-    return this.request({ t: 'create', name, color, ext: this.ext, scored: !!opts.scored, density: opts.density }, 'Creating your private server…');
+    return this.request({ t: 'create', name, color, ext: this.ext, scored: !!opts.scored, density: opts.density,
+      listed: !!opts.listed, roomName: opts.roomName, theme: opts.theme, tod: opts.tod }, opts.listed ? 'Creating your public server…' : 'Creating your private server…');
   },
   leave() {
     if (!this.room) return;
@@ -141,9 +142,11 @@ const Net = {
     else if (m.t === 'joined') {
       this.clearRoom();
       this.myId = m.id;
-      this.room = { id: m.room, name: m.name, pub: !!m.pub, code: m.code || '', scored: !!m.scored, density: Number.isFinite(m.density) ? m.density : 0.6 };
+      // official: one of the game's own servers; listed: a player's public server (also joinable by code)
+      this.room = { id: m.room, name: m.name, pub: !!(m.official ?? m.pub), official: !!(m.official ?? m.pub), listed: !!m.listed, code: m.code || '',
+        scored: !!m.scored, density: Number.isFinite(m.density) ? m.density : 0.6, theme: m.theme || 'grass', tod: m.tod || 'day' };
       this.myBest = m.best || 0;
-      this.status(m.pub ? `Connected to ${m.name}` : `Connected to ${m.name} · code ${m.code}`, 'ok');
+      this.status(this.room.official ? `Connected to ${m.name}` : `Connected to ${m.name} · code ${m.code}`, 'ok');
       this.changed();
       if (this.onJoined) this.onJoined(this.room, m.slot || 0);
     } else if (m.t === 'error') this.status(m.msg, 'err');

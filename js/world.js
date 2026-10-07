@@ -3,29 +3,43 @@
 //  World: endless curved highway built in chunks + low-poly scenery
 // =====================================================================
 
-class CGB { // vertex-coloured, flat-shaded geometry builder
-  constructor() { this.p = []; this.c = []; }
+class CGB { // vertex-coloured geometry builder: flat-shaded faces (low poly), or smooth where asked (cactuses)
+  constructor() { this.p = []; this.c = []; this.n = []; }
+  // one face normal for all three corners = flat shading
+  _flat(i0) {
+    const p = this.p, ax = p[i0 + 3] - p[i0], ay = p[i0 + 4] - p[i0 + 1], az = p[i0 + 5] - p[i0 + 2];
+    const bx = p[i0 + 6] - p[i0], by = p[i0 + 7] - p[i0 + 1], bz = p[i0 + 8] - p[i0 + 2];
+    let nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx; const l = Math.hypot(nx, ny, nz) || 1;
+    nx /= l; ny /= l; nz /= l;
+    for (let i = 0; i < 3; i++) this.n.push(nx, ny, nz);
+  }
   tri(a, b, c, col) {
+    const i0 = this.p.length;
     this.p.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
     for (let i = 0; i < 3; i++) this.c.push(col.r, col.g, col.b);
+    this._flat(i0);
   }
   quad(a, b, c, d, col) { this.tri(a, b, c, col); this.tri(a, c, d, col); }
-  geom(g, m, col, rnd, vary = 0.06, colFn) {
-    const ng = g.index ? g.toNonIndexed() : g, p = ng.attributes.position, v = new THREE.Vector3();
-    const tmp = new THREE.Color();
+  geom(g, m, col, rnd, vary = 0.06, colFn, smooth = false) {
+    const ng = g.index ? g.toNonIndexed() : g, p = ng.attributes.position, nrm = ng.attributes.normal, v = new THREE.Vector3();
+    const tmp = new THREE.Color(), nm = smooth ? new THREE.Matrix3().getNormalMatrix(m) : null;
     for (let i = 0; i < p.count; i += 3) {
       let cc = col;
       if (colFn) { v.fromBufferAttribute(p, i); cc = colFn(v) || col; }
       const k = 1 + (rnd ? (rnd() - 0.5) * 2 * vary : 0);
       tmp.setRGB(cc.r * k, cc.g * k, cc.b * k);
+      const i0 = this.p.length;
       for (let j = 0; j < 3; j++) { v.fromBufferAttribute(p, i + j).applyMatrix4(m); this.p.push(v.x, v.y, v.z); this.c.push(tmp.r, tmp.g, tmp.b); }
+      if (smooth && nrm) for (let j = 0; j < 3; j++) { v.fromBufferAttribute(nrm, i + j).applyMatrix3(nm).normalize(); this.n.push(v.x, v.y, v.z); }
+      else this._flat(i0);
     }
   }
   build() {
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(this.p, 3));
     g.setAttribute('color', new THREE.Float32BufferAttribute(this.c, 3));
-    g.computeVertexNormals(); g.computeBoundingSphere();
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(this.n, 3));
+    g.computeBoundingSphere();
     return g;
   }
 }
@@ -44,6 +58,23 @@ const WC = {
   rock2: COL(0x80868d), rock3: COL(0xaea89c), water: COL(0x3d8fc9), waterDeep: COL(0x2c74ad), sand: COL(0xcdbf8f),
   gmtn: COL(0x5f9a45), gmtn2: COL(0x6fa84c), gmtn3: COL(0x528c3f),
 
+};
+
+// World themes: grassy (the original), desert (low sandy hills, cactuses - some with pink flowers - dead
+// bushes, sandy rocks, no lakes) and snowy (white hills, snow-covered pines and trees, capped rocks, frozen lakes)
+const THEMES = {
+  grass: { ground: 0x6f9f4a, gravel: WC.gravel, flora: 'grass', lakes: true, hillH: 1,
+    hill: [WC.hill, WC.hill2], mtn: [WC.gmtn, WC.gmtn2, WC.gmtn3], far: WC.mtn, farTop: WC.snow, rocks: [WC.rock, WC.rock2, WC.rock3] },
+  desert: { ground: 0xd8b67a, gravel: COL(0xc9ab7c), flora: 'desert', lakes: false, hillH: 0.45,
+    hill: [COL(0xdcb877), COL(0xd2aa68)], mtn: [COL(0xc99258), COL(0xd8a566), COL(0xbd8650)], far: COL(0xb97f52), farTop: null,
+    rocks: [COL(0xb4916a), COL(0xa07b55), COL(0xc7a57c)] },
+  snow: { ground: 0xedf2f6, gravel: COL(0xbfc4c9), flora: 'snow', lakes: true, ice: true, hillH: 1,
+    hill: [COL(0xf3f6f9), COL(0xe6ecf1)], mtn: [COL(0xf1f4f7), COL(0xe4eaf0), COL(0xd9e1e9)], far: COL(0xc9d2dc), farTop: COL(0xf6f9fb),
+    rocks: [COL(0x8d949b), COL(0x7a8188), COL(0x9da3a9)] },
+};
+const FLORA = {
+  cactus: COL(0x5d8c45), cactus2: COL(0x6e9b4f), flower: COL(0xff6fae), deadwood: COL(0x8b6b47), deadwood2: COL(0x9c7c55),
+  snowPine: COL(0x2f6448), snowCap: COL(0xf1f5f8), snowLeaf: COL(0xe7edf2), ice: COL(0xbcd7e6), iceDeep: COL(0xa6c6d9),
 };
 
 class World {
@@ -68,10 +99,21 @@ class World {
       dode: new THREE.DodecahedronGeometry(1, 0).toNonIndexed(),
       cyl5: new THREE.CylinderGeometry(1, 1, 1, 5).toNonIndexed(),
       cyl8: new THREE.CylinderGeometry(1, 1, 1, 8).toNonIndexed(),
+      cylS: new THREE.CylinderGeometry(1, 1, 1, 8, 1, true).toNonIndexed(),    // cactuses: 8-sided, flat faces
+      sphS: new THREE.SphereGeometry(1, 8, 5).toNonIndexed(),
       taper8: new THREE.CylinderGeometry(0.62, 1, 1, 8).toNonIndexed(),   // narrows toward the top (lamp posts)
       disc: new THREE.CylinderGeometry(1, 1, 1, 24).rotateX(Math.PI / 2).toNonIndexed(),   // round sign face (axis along z)
     };
     this.clouds = this.makeClouds();
+    this.th = THEMES.grass; this.theme = 'grass';
+  }
+  // switch world theme (rebuilds the scenery)
+  setTheme(name) {
+    const t = THEMES[name] ? name : 'grass';
+    if (t === this.theme) return;
+    this.theme = t; this.th = THEMES[t];
+    this.ground.material.color.set(this.th.ground);
+    this.reset();
   }
 
   update(ps, cam) {
@@ -191,11 +233,12 @@ class World {
       }
     };
     // road surface
-    strip(road, eL - 2.2, eL - 0.6, 0.0, 0.02, WC.gravel);
+    const TH = this.th;
+    strip(road, eL - 2.2, eL - 0.6, 0.0, 0.02, TH.gravel);
     strip(road, eL - 0.6, -2 * LW - 0.05, 0.02, 0.03, WC.shoulder);
     strip(road, -2 * LW - 0.05, 2 * LW + 0.05, 0.03, 0.03, WC.asphalt);
     strip(road, 2 * LW + 0.05, eR + 0.6, 0.03, 0.02, WC.shoulder);
-    strip(road, eR + 0.6, eR + 2.4, 0.02, 0.0, WC.gravel);
+    strip(road, eR + 0.6, eR + 2.4, 0.02, 0.0, TH.gravel);
     // loop: the acceleration / deceleration lane beside the start area is paved like a real lane
     const RG = ROAD.loop ? this.rampGeom() : null;
     if (RG) for (let j = 0; j < n * 5; j++) {
@@ -311,6 +354,7 @@ class World {
       const kind = rnd();
       if (this.inLake(m, d, 4) || this.blocked(m, d, 4, p)) continue;
       const sc = off > 90 ? far : near; // far-out scenery fades in/out with the hills
+      if (TH.flora !== 'grass') { this.themedPlant(TH, sc, p, sz, kind, rnd); continue; }
       if (kind < 0.45) { // pine
         sc.geom(this.G.cyl5, this.xf(p[0], 1.0 * sz - 0.1, p[2], 0, 0, 0.22 * sz, 2.0 * sz + 0.2, 0.22 * sz), WC.trunk, rnd);
         sc.geom(this.G.cone6, this.xf(p[0], 3.4 * sz, p[2], 0, rnd() * 3, 2.3 * sz, 4.2 * sz, 2.3 * sz), WC.pine, rnd, 0.12);
@@ -334,14 +378,16 @@ class World {
       for (let j = 0; j < n; j++) {
         const p = P(m + (rnd() - 0.5) * 4, d + side * (rnd() - 0.3) * 3, 0);
         const sz = big ? 1.8 + rnd() * 1.6 : 0.35 + rnd() * (j === 0 ? 1.1 : 0.6);
-        const col = [WC.rock, WC.rock2, WC.rock3][Math.floor(rnd() * 3)];
-        sc.geom(rnd() < 0.5 ? this.G.dode : this.G.ico0, this.xf(p[0], sz * 0.25, p[2], rnd(), rnd() * 3, sz * (1 + rnd() * 0.5), sz * (0.55 + rnd() * 0.35), sz * (0.8 + rnd() * 0.5)), col, rnd, 0.12);
+        const col = TH.rocks[Math.floor(rnd() * 3)];
+        const sx = sz * (1 + rnd() * 0.5), sy = sz * (0.55 + rnd() * 0.35), sz2 = sz * (0.8 + rnd() * 0.5);
+        sc.geom(rnd() < 0.5 ? this.G.dode : this.G.ico0, this.xf(p[0], sz * 0.25, p[2], rnd(), rnd() * 3, sx, sy, sz2), col, rnd, 0.12);
+        if (TH.flora === 'snow') sc.geom(this.G.ico0, this.xf(p[0], sz * 0.25 + sy * 0.55, p[2], 0, rnd() * 3, sx * 0.8, sy * 0.35, sz2 * 0.8), FLORA.snowCap, rnd, 0.04);   // snow on top
       }
     }
     // Hills: every chunk puts a row on BOTH sides (so there are no bare stretches), and each one keeps a
     // clear gap to the road measured from its widest point (they're stretched and turned at random).
     // A spot that's blocked (lake, lot, another part of the loop) is retried a little farther out.
-    const GREENS = [WC.gmtn, WC.gmtn2, WC.gmtn3];
+    const GREENS = TH.mtn, HH = TH.hillH;   // (theme colours; desert hills are much lower)
     const hill = (side, gap, spread, radA, radB, hA, hB, sink, col, jitter, colFn) => {
       const edge = side < 0 ? -eL : eR;
       for (let tries = 0; tries < 4; tries++) {
@@ -357,16 +403,16 @@ class World {
     };
     for (const side of [-1, 1]) {
       // low rolling hills: at least 90 m of open field before them
-      if (rnd() < 0.85) hill(side, 90, 220, 45, 110, 14, 38, 0.25, rnd() < 0.5 ? WC.hill : WC.hill2, 0.08);
+      if (rnd() < 0.85) hill(side, 90, 220, 45, 110, 14 * HH, 38 * HH, 0.25, TH.hill[rnd() < 0.5 ? 0 : 1], 0.08);
       // big grassy mountains: at least 230 m out, sometimes with a smaller shoulder peak behind
       const col = GREENS[Math.floor(rnd() * 3)];
-      const big = hill(side, 230, 380, 140, 290, 70, 170, 0.18, col, 0.09);
+      const big = hill(side, 230, 380, 140, 290, 70 * HH, 170 * HH, 0.18, col, 0.09);
       if (big && rnd() < 0.5) {
         const q = P(big.m + (rnd() - 0.5) * big.rad * 1.6, big.d + side * big.rad * 0.6, 0), r2 = big.rad * (0.45 + rnd() * 0.3), h2 = big.hh * (0.45 + rnd() * 0.35);
-        if (!this.blocked(big.m, big.d + side * big.rad * 0.6, r2, q)) hills.geom(this.G.ico1, this.xf(q[0], -h2 * 0.2, q[2], 0, rnd() * 3, r2, h2, r2 * 0.9), col === WC.gmtn ? WC.gmtn2 : WC.gmtn, rnd, 0.09);
+        if (!this.blocked(big.m, big.d + side * big.rad * 0.6, r2, q)) hills.geom(this.G.ico1, this.xf(q[0], -h2 * 0.2, q[2], 0, rnd() * 3, r2, h2, r2 * 0.9), col === GREENS[0] ? GREENS[1] : GREENS[0], rnd, 0.09);
       }
-      // distant mountains on the horizon (grey, with snowy tops)
-      if (rnd() < 0.5) hill(side, 650, 350, 180, 360, 120, 260, 0.15, WC.mtn, 0.1, v => (v.y > 0.8 ? WC.snow : null));
+      // distant mountains on the horizon (grassy: grey with snowy tops; desert: red-brown; snowy: white tops)
+      if (rnd() < 0.5) hill(side, 650, 350, 180, 360, 120 * HH, 260 * HH, 0.15, TH.far, 0.1, TH.farTop ? v => (v.y > 0.8 ? TH.farTop : null) : undefined);
     }
     const grp = new THREE.Group();
     const rm = new THREE.Mesh(road.build(), this.roadMat); rm.receiveShadow = true;
@@ -630,8 +676,62 @@ class World {
   }
   lakesNear(s0, s1) {
     const out = [];
+    if (!this.th.lakes) return out;                    // (no lakes in the desert)
     for (let i = Math.floor((s0 - 150) / 700); i <= Math.floor((s1 + 150) / 700); i++) { const L = this.lake(i); if (L) out.push(L); }
     return out;
+  }
+  // one plant for the desert / snowy worlds (kind: 0..1 random pick)
+  themedPlant(TH, sc, p, sz, kind, rnd) {
+    const G = this.G, x = p[0], z = p[2];
+    if (TH.flora === 'desert') {
+      if (kind < 0.5) {                     // saguaro cactus: chunky 8-sided trunk with rounded caps, one or two arms, some flowering
+        const h = (3.4 + rnd() * 2.6) * sz, r = 0.42 * sz, col = rnd() < 0.5 ? FLORA.cactus : FLORA.cactus2, flower = rnd() < 0.35;
+        const S = (g, m, c) => sc.geom(g, m, c, rnd, 0.04);   // (flat-shaded facets, like the rest of the world)
+        S(G.cylS, this.xf(x, h / 2 - 0.15, z, 0, 0, r, h + 0.3, r), col);
+        S(G.sphS, this.xf(x, h, z, 0, 0, r, r * 0.95, r), col);                                   // rounded top
+        if (flower) for (let f = 0; f < 3; f++) {                                                   // pink flowers on the crown
+          const fa = rnd() * 6.3;
+          S(G.sphS, this.xf(x + Math.cos(fa) * r * 0.42, h + r * 0.8, z + Math.sin(fa) * r * 0.42, 0, 0, r * 0.42, r * 0.28, r * 0.42), FLORA.flower);
+        }
+        const arms = rnd() < 0.25 ? 0 : rnd() < 0.6 ? 1 : 2, a0 = rnd() * 6;
+        for (let k = 0; k < arms; k++) {
+          const a = a0 + k * Math.PI + (rnd() - 0.5) * 0.6, y0 = h * (0.38 + rnd() * 0.18), ar = r * 0.68, out = r + 0.55 * sz, up = h * (0.28 + rnd() * 0.14);
+          const ca = Math.cos(a), sa = Math.sin(a), ex = x + ca * out, ez = z + sa * out;
+          S(G.cylS, this.xf(x + ca * out / 2, y0, z + sa * out / 2, 0, -a, out, ar, ar).multiply(new THREE.Matrix4().makeRotationZ(Math.PI / 2)), col);   // out from the trunk
+          S(G.sphS, this.xf(ex, y0, ez, 0, 0, ar, ar, ar), col);                                     // rounded elbow
+          S(G.cylS, this.xf(ex, y0 + up / 2, ez, 0, 0, ar, up, ar), col);                            // ...then up
+          S(G.sphS, this.xf(ex, y0 + up, ez, 0, 0, ar, ar * 0.95, ar), col);                         // rounded tip
+          if (flower && rnd() < 0.6) S(G.sphS, this.xf(ex, y0 + up + ar * 0.8, ez, 0, 0, ar * 0.5, ar * 0.32, ar * 0.5), FLORA.flower);
+        }
+      } else if (kind < 0.85) {             // dead bush: bare twigs fanning out from the ground
+        const n = 5 + Math.floor(rnd() * 4), hb = (0.55 + rnd() * 0.5) * sz;
+        for (let k = 0; k < n; k++) {
+          const a = rnd() * 6.3, tilt = 0.35 + rnd() * 0.5, len = hb * (0.7 + rnd() * 0.5);
+          sc.geom(G.box, this.xf(x + Math.cos(a) * len * 0.25, len * 0.45, z + Math.sin(a) * len * 0.25, tilt, a, 0.05 * sz, len, 0.05 * sz), rnd() < 0.5 ? FLORA.deadwood : FLORA.deadwood2, rnd, 0.1);
+        }
+      } else {                              // sandy rock
+        sc.geom(G.dode, this.xf(x, 0.2, z, rnd(), rnd() * 3, 1.2 * sz, 0.75 * sz, 1.0 * sz), TH.rocks[Math.floor(rnd() * 3)], rnd, 0.1);
+      }
+      return;
+    }
+    // snow
+    if (kind < 0.55) {                      // pine with snow on every layer
+      sc.geom(G.cyl5, this.xf(x, 1.0 * sz - 0.1, z, 0, 0, 0.22 * sz, 2.0 * sz + 0.2, 0.22 * sz), WC.trunk, rnd);
+      for (const [y, w, h] of [[3.2, 2.3, 3.6], [5.0, 1.7, 3.0], [6.5, 1.1, 2.2]]) {
+        const ry = rnd() * 3;
+        sc.geom(G.cone6, this.xf(x, y * sz, z, 0, ry, w * sz, h * sz, w * sz), FLORA.snowPine, rnd, 0.1);
+        sc.geom(G.cone6, this.xf(x, (y + h * 0.18) * sz, z, 0, ry, w * 0.86 * sz, h * 0.7 * sz, w * 0.86 * sz), FLORA.snowCap, rnd, 0.04);
+      }
+    } else if (kind < 0.8) {                // round tree under snow
+      sc.geom(G.cyl5, this.xf(x, 1.2 * sz - 0.1, z, 0, 0, 0.25 * sz, 2.4 * sz + 0.2, 0.25 * sz), WC.trunk, rnd);
+      sc.geom(G.ico0, this.xf(x, 3.6 * sz, z, rnd(), rnd() * 3, 2.3 * sz, 2.1 * sz, 2.3 * sz), FLORA.snowLeaf, rnd, 0.06);
+    } else if (kind < 0.9) {                // snowy bush
+      sc.geom(G.ico0, this.xf(x, 0.5 * sz, z, rnd(), rnd() * 3, 1.3 * sz, 0.9 * sz, 1.3 * sz), FLORA.snowLeaf, rnd, 0.06);
+    } else {                                // rock with a snow cap
+      const c = TH.rocks[Math.floor(rnd() * 3)];
+      sc.geom(G.dode, this.xf(x, 0.2, z, rnd(), rnd() * 3, 1.2 * sz, 0.8 * sz, 1.0 * sz), c, rnd, 0.1);
+      sc.geom(G.ico0, this.xf(x, 0.2 + 0.55 * sz, z, 0, rnd() * 3, 0.95 * sz, 0.3 * sz, 0.8 * sz), FLORA.snowCap, rnd, 0.04);
+    }
   }
   inLake(s, d, pad = 0) {
     for (const L of this.lakesNear(s, s)) {
@@ -652,9 +752,10 @@ class World {
     const shore = ring(1.14, 0.02), water = ring(1, 0.045), deep = ring(0.55, 0.05), c = P(L.s, L.d, 0.05);
     for (let i = 0; i < N; i++) {
       const j = (i + 1) % N;
-      sc.quad(shore[i], shore[j], water[j], water[i], WC.sand);
-      sc.quad(water[i], water[j], deep[j], deep[i], WC.water);
-      sc.tri(deep[i], deep[j], c, WC.waterDeep);
+      const ice = this.th.ice;   // (snowy world: frozen lakes)
+      sc.quad(shore[i], shore[j], water[j], water[i], ice ? FLORA.snowLeaf : WC.sand);
+      sc.quad(water[i], water[j], deep[j], deep[i], ice ? FLORA.ice : WC.water);
+      sc.tri(deep[i], deep[j], c, ice ? FLORA.iceDeep : WC.waterDeep);
     }
     // a few rocks and bushes along the shore
     for (let i = 0; i < 7; i++) {

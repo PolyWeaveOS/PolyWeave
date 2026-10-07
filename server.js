@@ -19,7 +19,9 @@ const Accounts = require('./accounts');
 const PORT = +process.env.PORT || 8790;
 const ROOT = __dirname;
 const MAX_PLAYERS = 12;
-const PUBLIC_ROOMS = [['highway-1', 'Highway 1'], ['highway-2', 'Highway 2'], ['highway-3', 'Highway 3']];
+// the game's own (official) scored servers, one per world type
+const OFFICIAL_ROOMS = [['highway-1', 'Grassy Highway', 'grass'], ['highway-2', 'Desert Highway', 'desert'], ['highway-3', 'Snowy Highway', 'snow']];
+const THEMES = ['grass', 'desert', 'snow'], TODS = ['day', 'sunset', 'night'];
 const SIM_DT = 0.1;                 // shared traffic: 10 steps (and snapshots) per second
 const SCORED_DENSITY = 0.6;         // traffic on scored (leaderboard) servers, same as scored singleplayer
 const MIN_RUN = 100;                // smallest drive that goes on a leaderboard
@@ -51,17 +53,21 @@ function serveStatic(req, res) {
 
 // ---------------------------------------------------------------- rooms
 const rooms = new Map();   // id -> room
-// scored rooms (public ones + hosted "scored" servers) use 60% traffic and feed the multiplayer leaderboard
-const makeRoom = (id, name, pub, code, scored = true, density = SCORED_DENSITY) =>
-  ({ id, name, pub, code, scored, density: scored ? SCORED_DENSITY : density, players: new Map(), emptySince: Date.now(), bests: new Map(), traffic: null });
-for (const [id, name] of PUBLIC_ROOMS) rooms.set(id, makeRoom(id, name, true, ''));
+// scored rooms (official ones + hosted "scored" servers) use 60% traffic and feed the multiplayer leaderboard.
+// official: the game's own servers. listed: a player's PUBLIC server (in the public list, and joinable by
+// its code); a private one is joinable by code only. theme: world type, tod: time of day.
+const makeRoom = (id, name, official, code, scored = true, density = SCORED_DENSITY, o = {}) =>
+  ({ id, name, official, listed: !!o.listed, code, scored, density: scored ? SCORED_DENSITY : density, theme: o.theme || 'grass', tod: o.tod || 'day',
+    players: new Map(), emptySince: Date.now(), bests: new Map(), traffic: null });
+for (const [id, name, theme] of OFFICIAL_ROOMS) rooms.set(id, makeRoom(id, name, true, '', true, SCORED_DENSITY, { theme }));
+const roomInfo = r => ({ id: r.id, name: r.name, players: r.players.size, max: MAX_PLAYERS, scored: r.scored, theme: r.theme, tod: r.tod });
 
 // a player's streak on a scored server ended: it goes on the multiplayer leaderboard
 function recordRun(p, room) {
   const pts = p.runPeak || 0; p.runPeak = 0;
   if (!room || !room.scored || pts < MIN_RUN) return;
   if (!p.account || !p.account.name) return;              // leaderboards are for signed-in drivers only
-  LB.add('mp', p.account.name, pts, { uid: p.account.id, dur: p.runDur || 0, server: room.pub ? room.name : 'Private' })
+  LB.add('mp', p.account.name, pts, { uid: p.account.id, dur: p.runDur || 0, server: room.official || room.listed ? room.name : 'Private' })
     .then(r => { if (r.rank) send(p.ws, { t: 'rank', rank: r.rank }); })
     .catch(e => console.log('leaderboard error:', e.message));
 }
@@ -100,7 +106,8 @@ function joinRoom(p, room) {
   p.best = room.bests.get(p.name) || 0;                 // best score on this server comes back if you rejoin
   if (!room.traffic) room.traffic = new RingTraffic();
   p.runPeak = 0;
-  send(p.ws, { t: 'joined', id: p.id, room: room.id, name: room.name, pub: room.pub, code: room.code, slot, best: p.best, scored: room.scored, density: room.density });
+  send(p.ws, { t: 'joined', id: p.id, room: room.id, name: room.name, official: room.official, listed: room.listed, code: room.code, slot, best: p.best,
+    scored: room.scored, density: room.density, theme: room.theme, tod: room.tod });
   broadcast(room, { t: 'roster', list: roster(room) });
 }
 function leaveRoom(p) {
@@ -115,10 +122,13 @@ function leaveRoom(p) {
 let simMs = 0;   // average time one traffic step takes (shown in /api/servers as "load")
 const server = http.createServer((req, res) => {
   if (req.url.startsWith('/api/servers')) {
-    const list = [...rooms.values()].filter(r => r.pub).map(r => ({ id: r.id, name: r.name, players: r.players.size, max: MAX_PLAYERS }));
+    const all = [...rooms.values()];
+    const official = all.filter(r => r.official).map(roomInfo);
+    const pub = all.filter(r => !r.official && r.listed && r.players.size).map(roomInfo)   // (players' public servers while someone's on them)
+      .sort((a, b) => b.players - a.players).slice(0, 50);
     let online = 0; for (const r of rooms.values()) online += r.players.size;
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' });
-    res.end(JSON.stringify({ servers: list, online, load: +(simMs / (SIM_DT * 1000)).toFixed(3) }));
+    res.end(JSON.stringify({ official, public: pub, servers: official, online, load: +(simMs / (SIM_DT * 1000)).toFixed(3) }));
     return;
   }
   const json = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); };
@@ -236,7 +246,9 @@ wss.on('connection', ws => {
       else joinRoom(p, room);
     } else if (m.t === 'create') {
       const code = newCode(), scored = !!m.scored;
-      const room = makeRoom('p-' + code, `${p.name}'s server`, false, code, scored, Number.isFinite(m.density) ? num(m.density, 0, 1) : 0.55);
+      const roomName = String(m.roomName || '').replace(/[^\p{L}\p{N} _.'!\-]/gu, '').trim().slice(0, 24) || `${p.name}'s server`;
+      const room = makeRoom('p-' + code, roomName, false, code, scored, Number.isFinite(m.density) ? num(m.density, 0, 1) : 0.55,
+        { listed: !!m.listed, theme: THEMES.includes(m.theme) ? m.theme : 'grass', tod: TODS.includes(m.tod) ? m.tod : 'day' });
       rooms.set(room.id, room);
       joinRoom(p, room);
     } else if (m.t === 'leave') leaveRoom(p);
@@ -280,7 +292,7 @@ setInterval(() => {
     ws._twDead = true; ws.ping();
   }
   const now = Date.now();
-  for (const [id, r] of rooms) if (!r.pub && !r.players.size && now - r.emptySince > 5 * 60 * 1000) rooms.delete(id);
+  for (const [id, r] of rooms) if (!r.official && !r.players.size && now - r.emptySince > 5 * 60 * 1000) rooms.delete(id);
 }, 20000);
 
 // HOST: on AWS the server only listens to Caddy on the same machine (127.0.0.1); Caddy faces the internet
