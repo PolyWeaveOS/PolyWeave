@@ -3,42 +3,58 @@
 //  World: endless curved highway built in chunks + low-poly scenery
 // =====================================================================
 
-class CGB { // vertex-coloured geometry builder: flat-shaded faces (low poly), or smooth where asked (cactuses)
-  constructor() { this.p = []; this.c = []; this.n = []; }
+// Vertex-coloured geometry builder: flat-shaded faces (low poly), or smooth where asked.
+// Uses growing typed arrays (not plain JS arrays): building a chunk makes almost no garbage, so the browser
+// doesn't pause to clean up memory mid-drive (that was a big source of lag spikes).
+const _cv = new THREE.Vector3(), _cc = new THREE.Color(), _cn = new THREE.Matrix3();
+class CGB {
+  constructor() { this.P = new Float32Array(4608); this.C = new Float32Array(4608); this.N = new Float32Array(4608); this.len = 0; }
+  get p() { return { length: this.len }; }                    // (callers only ever ask p.length)
+  _room(n) {
+    if (this.len + n <= this.P.length) return;
+    let cap = this.P.length * 2; while (cap < this.len + n) cap *= 2;
+    for (const k of ['P', 'C', 'N']) { const a = new Float32Array(cap); a.set(this[k].subarray(0, this.len)); this[k] = a; }
+  }
   // one face normal for all three corners = flat shading
   _flat(i0) {
-    const p = this.p, ax = p[i0 + 3] - p[i0], ay = p[i0 + 4] - p[i0 + 1], az = p[i0 + 5] - p[i0 + 2];
+    const p = this.P, ax = p[i0 + 3] - p[i0], ay = p[i0 + 4] - p[i0 + 1], az = p[i0 + 5] - p[i0 + 2];
     const bx = p[i0 + 6] - p[i0], by = p[i0 + 7] - p[i0 + 1], bz = p[i0 + 8] - p[i0 + 2];
     let nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx; const l = Math.hypot(nx, ny, nz) || 1;
     nx /= l; ny /= l; nz /= l;
-    for (let i = 0; i < 3; i++) this.n.push(nx, ny, nz);
+    const n = this.N; for (let i = 0; i < 9; i += 3) { n[i0 + i] = nx; n[i0 + i + 1] = ny; n[i0 + i + 2] = nz; }
   }
   tri(a, b, c, col) {
-    const i0 = this.p.length;
-    this.p.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2]);
-    for (let i = 0; i < 3; i++) this.c.push(col.r, col.g, col.b);
-    this._flat(i0);
+    this._room(9);
+    const i0 = this.len, P = this.P, C = this.C;
+    P[i0] = a[0]; P[i0 + 1] = a[1]; P[i0 + 2] = a[2]; P[i0 + 3] = b[0]; P[i0 + 4] = b[1]; P[i0 + 5] = b[2]; P[i0 + 6] = c[0]; P[i0 + 7] = c[1]; P[i0 + 8] = c[2];
+    for (let i = 0; i < 9; i += 3) { C[i0 + i] = col.r; C[i0 + i + 1] = col.g; C[i0 + i + 2] = col.b; }
+    this.len += 9; this._flat(i0);
   }
   quad(a, b, c, d, col) { this.tri(a, b, c, col); this.tri(a, c, d, col); }
   geom(g, m, col, rnd, vary = 0.06, colFn, smooth = false) {
-    const ng = g.index ? g.toNonIndexed() : g, p = ng.attributes.position, nrm = ng.attributes.normal, v = new THREE.Vector3();
-    const tmp = new THREE.Color(), nm = smooth ? new THREE.Matrix3().getNormalMatrix(m) : null;
+    if (g.index) g = g.toNonIndexed();                           // (all the shared shapes already are)
+    const p = g.attributes.position, nrm = g.attributes.normal, v = _cv, tmp = _cc, nm = smooth ? _cn.getNormalMatrix(m) : null;
+    this._room(p.count * 3);
     for (let i = 0; i < p.count; i += 3) {
       let cc = col;
       if (colFn) { v.fromBufferAttribute(p, i); cc = colFn(v) || col; }
       const k = 1 + (rnd ? (rnd() - 0.5) * 2 * vary : 0);
       tmp.setRGB(cc.r * k, cc.g * k, cc.b * k);
-      const i0 = this.p.length;
-      for (let j = 0; j < 3; j++) { v.fromBufferAttribute(p, i + j).applyMatrix4(m); this.p.push(v.x, v.y, v.z); this.c.push(tmp.r, tmp.g, tmp.b); }
-      if (smooth && nrm) for (let j = 0; j < 3; j++) { v.fromBufferAttribute(nrm, i + j).applyMatrix3(nm).normalize(); this.n.push(v.x, v.y, v.z); }
+      const i0 = this.len, P = this.P, C = this.C, N = this.N;
+      for (let j = 0; j < 3; j++) {
+        v.fromBufferAttribute(p, i + j).applyMatrix4(m);
+        const o = i0 + j * 3; P[o] = v.x; P[o + 1] = v.y; P[o + 2] = v.z; C[o] = tmp.r; C[o + 1] = tmp.g; C[o + 2] = tmp.b;
+      }
+      this.len += 9;
+      if (smooth && nrm) for (let j = 0; j < 3; j++) { v.fromBufferAttribute(nrm, i + j).applyMatrix3(nm).normalize(); const o = i0 + j * 3; N[o] = v.x; N[o + 1] = v.y; N[o + 2] = v.z; }
       else this._flat(i0);
     }
   }
   build() {
-    const g = new THREE.BufferGeometry();
-    g.setAttribute('position', new THREE.Float32BufferAttribute(this.p, 3));
-    g.setAttribute('color', new THREE.Float32BufferAttribute(this.c, 3));
-    g.setAttribute('normal', new THREE.Float32BufferAttribute(this.n, 3));
+    const g = new THREE.BufferGeometry(), n = this.len;
+    g.setAttribute('position', new THREE.BufferAttribute(this.P.slice(0, n), 3));
+    g.setAttribute('color', new THREE.BufferAttribute(this.C.slice(0, n), 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(this.N.slice(0, n), 3));
     g.computeBoundingSphere();
     return g;
   }
@@ -120,7 +136,7 @@ class World {
     const ci = Math.floor(ps / this.CH);
     let built = 0;
     for (let k = ci - 2; k <= ci + 11; k++) {
-      if (!this.chunks.has(k) && built < 2) { this.chunks.set(k, this.build(k)); built++; }
+      if (!this.chunks.has(k) && built < 1) { this.chunks.set(k, this.build(k)); built++; }   // (one per frame: no hitches)
     }
     for (const [k, c] of this.chunks) {
       if (k < ci - 3 || k > ci + 12) {

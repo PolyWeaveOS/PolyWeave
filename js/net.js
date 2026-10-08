@@ -179,6 +179,7 @@ const Net = {
     p.lastRecv = now;
     const e = Object.assign({}, st);
     e.s = ROAD.near(st.s, this.refS());               // loop: same lap numbering as my own position
+    if (st.w) e.w = st.w.map(([id, s, d, ry, vs, vd, vr]) => [id, ROAD.near(s, e.s), d, ry, vs, vd, vr]);   // (their wrecks too)
     if (p.buf.length && e.t <= p.buf[p.buf.length - 1].t) return;   // out of order / duplicate
     p.buf.push(e);
     if (p.buf.length > 20) p.buf.shift();
@@ -217,7 +218,7 @@ const Net = {
     const t = now - p.off - p.delay;
     let i = b.length - 1;
     while (i > 0 && b[i - 1].t > t) i--;
-    if (i === 0) return b[0];
+    if (i === 0) return Object.assign({}, b[0], { w: null });
     const a = b[i - 1], c = b[i];
     const k = U.clamp((t - a.t) / Math.max(c.t - a.t, 1e-3), 0, 2);   // (k > 1: briefly extrapolate a late update)
     const L = (x, y) => x + (y - x) * k;
@@ -226,10 +227,33 @@ const Net = {
     // Carry them forward by that time, so a friend touching your bumper is drawn touching it (and the
     // proxy gap and bumps use where they really are).
     const lag = U.clamp(p.delay + ((this.rtt || 60) + (c.rtt || this.rtt || 60)) / 2000, 0, 0.45);
-    const dd = U.clamp((c.d - a.d) / Math.max(c.t - a.t, 1e-3), -6, 6);   // sideways speed (m/s)
-    st.s += (st.v || 0) * lag;
+    const span = Math.max(c.t - a.t, 1e-3), dd = U.clamp((c.d - a.d) / span, -6, 6);   // sideways speed (m/s)
+    // carry forward with their braking / accelerating too (a crash stops a car fast: without this it would
+    // overshoot into the car it just hit, then snap back)
+    const v = st.v || 0, acc = U.clamp(((c.v || 0) - (a.v || 0)) / span, -25, 10);
+    st.s += acc < 0 && v + acc * lag < 0 ? v * v / (-2 * acc) : v * lag + 0.5 * acc * lag * lag;
     st.d += dd * lag * 0.8;
+    // wrecks they're simulating: same clock and same carry-forward as their car, so car and wreck line up
+    if (c.w && c.w.length) {
+      const prev = new Map((a.w || []).map(e => [e[0], e]));
+      // (their game sends each wreck's own speed and spin, so it's carried forward exactly, even on the first update)
+      st.w = c.w.map(e => {
+        const o = prev.get(e[0]), vs = U.clamp(e[4] || 0, -60, 90), vd = U.clamp(e[5] || 0, -15, 15), vr = U.clamp(e[6] || 0, -8, 8);
+        let s, d, ry, extra;
+        if (o && k <= 1) { s = o[1] + (e[1] - o[1]) * k; d = o[2] + (e[2] - o[2]) * k; ry = o[3] + U.wrap(e[3] - o[3]) * k; extra = 0; }
+        else { s = e[1]; d = e[2]; ry = e[3]; extra = (k - 1) * span; }   // (new wreck / late update: from the newest pose, by its speed)
+        const L = lag + extra;
+        return { id: e[0], s: s + vs * L, d: d + vd * L, ry: ry + vr * L };
+      });
+    } else st.w = null;
     return st;
+  },
+  // every wreck a friend is simulating, by traffic-car id (drawn from them instead of the server's copy)
+  wreckPoses() {
+    const m = this._wp || (this._wp = new Map()); m.clear();
+    if (!this.room) return m;
+    for (const p of this.players.values()) if (p.now && p.now.w) for (const w of p.now.w) m.set(w.id, w);
+    return m;
   },
 
   // ---------------------------------------------------------------- per frame (called by main.js)

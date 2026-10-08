@@ -40,6 +40,7 @@ const TRUCK_COLORS = [{ w: 6, c: 0xf0f1ef }, { w: 2, c: 0xb22a25 }, { w: 2, c: 0
 const LANE_KMH = [124, 110, 97, 86];
 const TRUCK_LANES = 2;
 const WIN_BACK = 330, WIN_AHEAD = 960;                 // traffic lives in this window around the player
+const DRAW_DIST = 750;                                   // ...but cars further than this are tiny specks in the haze: not drawn
 const TRAFFIC_SCALE = 1.16;                              // overall traffic amount (sets the opening fill)
 // The opening fill keeps the area around you clear, which packs the road ahead (100-600 m) at ~22% more
 // cars than the same total spread evenly. The ongoing fill uses that same density, so traffic
@@ -152,24 +153,32 @@ class Traffic {
         if (c.repT <= 0 && this.onReport) { c.repT = 0.1; this.onReport(c); }
         continue;
       }
-      const st = this.sampleRemote(c, rt);
-      if (!st) continue;
-      // The snapshot is from a moment ago (server delay + the smoothing buffer). Friends' cars are drawn
-      // where they are NOW, so carry the traffic forward by the same time - otherwise a friend appears to
-      // drive straight through the car they're hitting (it's still ~0.2 s behind on your screen). A wreck
-      // being shoved around is carried along with how it was moving and spinning.
-      const L = this.lead || 0;
-      if (L) {
-        if (st.f & 8) { st.s += U.clamp(st.vs, -60, 90) * L; st.d += U.clamp(st.vd, -15, 15) * L; st.ry += U.clamp(st.vr, -6, 6) * L; }
-        else { st.s += st.v * L; st.d += U.clamp(st.vd, -3, 3) * L; }
+      // A wreck a friend is simulating comes straight from that friend (same clock as their car: car and
+      // wreck stay together, exactly as on their screen). Everything else comes from the server's snapshots.
+      const wp = this.wreckPose && this.wreckPose.get(c.id);
+      let st;
+      if (wp) st = { s: wp.s, d: wp.d, ry: wp.ry, v: 0, f: 12 };
+      else {
+        st = this.sampleRemote(c, rt);
+        if (!st) continue;
+        // The snapshot is from a moment ago (server delay + the smoothing buffer). Friends' cars are drawn
+        // where they are NOW, so carry the traffic forward by the same time - otherwise a friend appears to
+        // drive straight through the car they're hitting (it's still ~0.2 s behind on your screen).
+        const L = this.lead || 0;
+        if (L) {
+          if (st.f & 8) { st.s += U.clamp(st.vs, -60, 90) * L; st.d += U.clamp(st.vd, -15, 15) * L; st.ry += U.clamp(st.vr, -6, 6) * L; }
+          else { st.s += st.v * L; st.d += U.clamp(st.vd, -3, 3) * L; }
+        }
       }
       const pd = c.d;
       c.s = st.s; c.d = st.d; c.v = st.v; c.relYaw = st.ry;
       c.crashed = !!(st.f & 8);
       const p = ROAD.pos(c.s, c.d);
       c.x = p.x; c.z = p.z; c.yaw = ROAD.yaw(c.s) + c.relYaw;
+      c.lane = ROAD.nearestLane(c.d); c.tgt = c.lane; c.latV = (c.d - pd) / Math.max(dt, 1e-4);
       const vis = c.vis;
-      vis.root.visible = true;
+      vis.root.visible = Math.abs(c.s - P.s) < DRAW_DIST;   // (far cars are specks in the haze: not drawn)
+      if (!vis.root.visible) continue;
       vis.root.position.set(p.x, 0, p.z);
       vis.root.rotation.y = -c.yaw;
       const near = Math.abs(c.s - P.s) < 160;
@@ -179,7 +188,6 @@ class Traffic {
       vis.brake.visible = near && (c.crashed || !!(st.f & 4));
       vis.indL.visible = near && blink && (c.crashed || ind < 0);
       vis.indR.visible = near && blink && (c.crashed || ind > 0);
-      c.lane = ROAD.nearestLane(c.d); c.tgt = c.lane; c.latV = (c.d - pd) / Math.max(dt, 1e-4);
     }
   }
 
@@ -520,6 +528,8 @@ class Traffic {
       const p = ROAD.pos(c.s, c.d);
       c.x = p.x; c.z = p.z; c.yaw = ROAD.yaw(c.s) + c.relYaw;
       const vis = c.vis;
+      vis.root.visible = Math.abs(c.s - P.s) < DRAW_DIST;   // (far cars are specks in the haze: not drawn)
+      if (!vis.root.visible) continue;
       vis.root.position.set(p.x, 0, p.z);
       vis.root.rotation.y = -c.yaw;
       const near = Math.abs(c.s - P.s) < 160;            // far cars skip wheels and lamp overlays
@@ -531,6 +541,20 @@ class Traffic {
       vis.indL.visible = near && ind < 0 && blink;
       vis.indR.visible = near && ind > 0 && blink;
     }
+  }
+
+  // the wrecks this player is simulating (cars they hit), sent with their position so friends can draw them
+  // on the same clock as their car: [id, s, d, ry, along-road speed, sideways speed, spin] (speeds in m/s, rad/s)
+  localWrecks() {
+    const out = [];
+    for (const c of this.cars) {
+      if (!c.local || !c.crashed || out.length >= 6) continue;
+      const ry = ROAD.yaw(c.s), b = c.body;
+      let vs = c.v || 0, vd = 0, w = 0;
+      if (b && !c.rec) { vs = b.vx * Math.sin(ry) - b.vz * Math.cos(ry); vd = b.vx * Math.cos(ry) + b.vz * Math.sin(ry); w = b.w; }
+      out.push([c.id, +c.s.toFixed(2), +c.d.toFixed(3), +U.wrap(c.yaw - ry).toFixed(3), +vs.toFixed(2), +vd.toFixed(2), +w.toFixed(3)]);
+    }
+    return out.length ? out : undefined;
   }
 
   // ---------------------------------------------------------------- crashes

@@ -184,9 +184,11 @@ button.mini { padding: 2px 8px; font-size: 10px; margin-left: 8px; vertical-alig
 .hostName input { flex: 1; min-width: 0; }
 /* section headings ("Driver Name", "Join a friend", "Host your own server"): one style, nudged a few px
    right so they sit visually in line with the rounded boxes below */
-.mpLabel { display: block; font-size: 12px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; opacity: .75; padding-left: 3px; margin-bottom: 6px; }
+.mpLabel { display: block; font-size: 12px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; opacity: .75; padding-left: 1.5px; margin-bottom: 6px; }
 .mpField .mpLabel + input { margin-top: 0; }
-#scrMP .mpHead { padding-left: 3px; }
+#scrMP .mpHead { padding-left: 1.5px; }
+/* singleplayer pickers: "World" / "Time of day" in the same style as "Driver Name" */
+.picks .pickRow > span { font-size: 12px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; opacity: .75; padding-left: 1.5px; }
 /* round refresh button */
 #mpRefresh { width: 30px; height: 30px; padding: 0; border-radius: 50%; display: grid; place-items: center; font-size: 15px; line-height: 1; }
 /* server list tabs: official scored servers / public (player-hosted) servers */

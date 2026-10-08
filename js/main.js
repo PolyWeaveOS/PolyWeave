@@ -287,7 +287,10 @@ function startPosition() {
   Object.assign(proxy, { s: car.s, d: car.d, v: car.u });
   world.fillAll(car.s);
   traffic.maintain(proxy, game.density);
+  warmUp();
 }
+// get every shader / mesh ready for the GPU now, instead of stuttering the first time each one is drawn
+function warmUp() { try { renderer.compile(scene, camera); } catch (e) { /* (older browsers) */ } }
 startPosition();
 
 // Full reset: fresh traffic, fresh run score, car back in lane at a rolling start
@@ -388,6 +391,7 @@ function spawnInLot(slot) {
   Object.assign(proxy, { s: car.s, d: car.d, v: 0 });
   score.reset();
   lastCrash = -9;
+  warmUp();
 }
 // joined a server: switch to the loop circuit + shared traffic, start in the lot
 function enterServer(slot, room) {
@@ -872,7 +876,7 @@ function updateMpHud(dt) {
 function netState() {
   return { t: +(performance.now() / 1000).toFixed(3), s: +car.s.toFixed(2), d: +car.d.toFixed(3), ry: +(proxy.ry || 0).toFixed(4), v: +proxy.v.toFixed(2),
     steer: +car.steer.toFixed(3), brake: !!(car.brakeOn && car.gear >= 0), kmh: Math.round(Math.abs(car.u) * 3.6), score: Math.round(score.score),
-    rt: Math.round(score.runTime || 0), rtt: Math.round(Net.rtt || 0) };
+    rt: Math.round(score.runTime || 0), rtt: Math.round(Net.rtt || 0), w: traffic.remote ? traffic.localWrecks() : undefined };
 }
 
 // ---------- proxy multiplier (multiplayer): drive close to another player for up to x10 ----------
@@ -1287,6 +1291,7 @@ function driveStep(dt, ctl, paused) {
   Net.tick(dt, netState());
   // shared traffic is drawn at "now" like friends are: its 0.15 s buffer + the trip from the server
   traffic.lead = traffic.remote ? 0.15 + (Net.rtt || 60) / 2000 : 0;
+  traffic.wreckPose = traffic.remote ? Net.wreckPoses() : null;   // (wrecks friends are simulating come from them)
   traffic.update(dt, proxy, game.density);
   const impact = traffic.collide(car, trafficHull);
   // friends: light bumps just push you around, a hard hit (> ~11 km/h difference) costs your streak

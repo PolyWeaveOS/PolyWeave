@@ -89,6 +89,10 @@ function cleanState(st) {
     t: num(st.t, 0, 1e9), s: num(st.s, -1e9, 1e9), d: num(st.d, -200, 200), ry: num(st.ry, -7, 7), v: num(st.v, -100, 150), steer: num(st.steer, -1, 1),
     brake: !!st.brake, kmh: Math.round(num(st.kmh, 0, 600)), score: Math.round(num(st.score, 0, 1e12)), rt: Math.round(num(st.rt, 0, 1e6)),
     rtt: Math.round(num(st.rtt, 0, 2000)),   // sender's round trip to the server (ms): friends use it to draw them where they are NOW
+    // wrecks the sender is simulating right now (cars they hit): [id, s, d, ry]. Friends draw these straight from
+    // here, on the same clock as the sender's own car, so the crash looks the same for everyone
+    w: Array.isArray(st.w) ? st.w.slice(0, 6).filter(e => Array.isArray(e) && Number.isInteger(e[0]) && e.slice(1, 4).every(Number.isFinite))
+      .map(e => [e[0], num(e[1], -1e9, 1e9), num(e[2], -60, 60), num(e[3], -7, 7), num(e[4], -60, 90), num(e[5], -15, 15), num(e[6], -8, 8)]) : undefined,
   };
 }
 
