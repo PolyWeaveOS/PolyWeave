@@ -190,7 +190,9 @@ button.mini { padding: 2px 8px; font-size: 10px; margin-left: 8px; vertical-alig
 /* singleplayer pickers: "World" / "Time of day" in the same style as "Driver Name" */
 .picks .pickRow > span { font-size: 12px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; opacity: .75; padding-left: 1.5px; }
 /* round refresh button */
-#mpRefresh { width: 30px; height: 30px; padding: 0; border-radius: 50%; display: grid; place-items: center; font-size: 15px; line-height: 1; }
+/* (flex: none - in the tabs row it used to get squeezed narrower than it is tall, into an oval) */
+#mpRefresh { flex: none; width: 30px; height: 30px; min-width: 30px; aspect-ratio: 1; padding: 0; border-radius: 50%; display: grid; place-items: center; line-height: 0; }
+#mpRefresh svg { width: 15px; height: 15px; display: block; }
 /* server list tabs: official scored servers / public (player-hosted) servers */
 .mpTabs { display: flex; align-items: center; gap: 6px; margin: 2px 0 8px; }
 .mpTabs .tab { font-size: 11px; letter-spacing: 1px; padding: 6px 10px; }

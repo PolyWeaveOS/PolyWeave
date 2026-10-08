@@ -10,7 +10,7 @@ class Score {
   constructor(hud) {
     this.hud = hud;
     this.score = 0; this.pot = 0; this.mult = 1; this.timer = 0;
-    this.best = +(localStorage.getItem('tw_best') || 0) || 0;
+    this.useBest('sp');
     this.COMBO_TIME = 5.5;
   }
   // Points go straight onto the score (x current multiplier). "pot" just shows what the
@@ -81,8 +81,13 @@ class Score {
     this.score = 0; this.pot = 0; this.mult = 1; this.timer = 0;
     this.hud.potHide(); this.hud.shownScore = 0; this.hud.el.msgs.innerHTML = '';
   }
+  // separate personal bests: singleplayer (kept under the original key) and multiplayer
+  useBest(mode) {
+    this.bestKey = mode === 'mp' ? 'tw_best_mp' : 'tw_best';
+    try { this.best = +(localStorage.getItem(this.bestKey) || 0) || 0; } catch (e) { this.best = 0; }
+  }
   saveBest() {
-    if (this.score > this.best) { this.best = this.score; try { localStorage.setItem('tw_best', this.best); } catch (e) { /* ignore */ } }
+    if (this.score > this.best) { this.best = this.score; try { localStorage.setItem(this.bestKey, this.best); } catch (e) { /* ignore */ } }
   }
 }
 

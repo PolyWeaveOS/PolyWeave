@@ -394,7 +394,21 @@ function spawnInLot(slot) {
   warmUp();
 }
 // joined a server: switch to the loop circuit + shared traffic, start in the lot
+// Personal best shown in the HUD: the higher of what this device has saved and your entry on that mode's
+// leaderboard (signed in), so it's right on a new device or straight after an update.
+async function syncBest(mode) {
+  if (typeof Account === 'undefined' || !Account.signedIn) return;
+  try {
+    const base = await Net.findBase(); if (!base) return;
+    const j = await (await fetch(base + '/api/leaderboard?mode=' + mode, { cache: 'no-store' })).json();
+    const me = (j.list || []).find(e => e.name === Account.user.name);
+    if (me && score.bestKey === (mode === 'mp' ? 'tw_best_mp' : 'tw_best') && me.score > score.best) {
+      score.best = me.score; try { localStorage.setItem(score.bestKey, me.score); } catch (e) { /* ignore */ }
+    }
+  } catch (e) { /* offline: keep the saved one */ }
+}
 function enterServer(slot, room) {
+  score.useBest('mp'); syncBest('mp');                 // (multiplayer has its own personal best)
   ROAD.setLoop(true); ZONES.setLoop(ROAD.loop.L);
   setWorld(room && room.theme, room && room.tod);     // the server's world type and time of day
   world.reset(); zoneProps.reset();
@@ -403,6 +417,7 @@ function enterServer(slot, room) {
 }
 // left / lost the server: back to the endless single-player highway
 function exitServer() {
+  score.useBest('sp'); syncBest('sp');                 // (back to the singleplayer personal best)
   ROAD.setLoop(false); ZONES.setLoop(0);
   setWorld(Settings.world, Settings.tod);             // back to your own world
   world.reset(); zoneProps.reset();
@@ -625,12 +640,11 @@ function renderAccount() {
   for (const el of nameIns) { el.disabled = Account.signedIn; el.value = Account.signedIn ? Account.user.name : (Settings.mpName || ''); }
   for (const n of document.querySelectorAll('.acctNote')) {
     const on = !!Account.clientId;
-    const sp = !!n.closest('#scrSP');   // (singleplayer: no note when signed in)
-    n.textContent = !on ? '' : Account.signedIn ? (sp ? '' : 'Scored runs go on the leaderboard under this name.') : 'Not signed in: scored runs won\'t go on the leaderboard. Sign in on the main menu.';
+    n.textContent = !on || Account.signedIn ? '' : 'Not signed in: scored runs won\'t go on the leaderboard. Sign in on the main menu.';
     n.classList.toggle('warn', on && !Account.signedIn);
   }
 }
-Account.onChange = () => { acctMsg = ''; renderAccount(); };
+Account.onChange = () => { acctMsg = ''; renderAccount(); syncBest(game.mode === 'mp' ? 'mp' : 'sp'); };
 Account.onMsg = t => { acctMsg = t; renderAccount(); };
 Account.onNeedName = () => { $id('acctName').value = ''; $id('acctNameErr').textContent = ''; if (!menuOpen) openMenu('scrName'); else show('scrName'); };
 $id('acctNameSave').onclick = async () => {
