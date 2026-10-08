@@ -46,6 +46,7 @@ const TRAFFIC_SCALE = 1.16;                              // overall traffic amou
 // cars than the same total spread evenly. The ongoing fill uses that same density, so traffic
 // keeps looking like the first group instead of thinning out after it.
 const RUN_DENSITY = 1.23;
+const LANE_SHARE = [0.26, 0.26, 0.25, 0.23];            // share of the cars in each lane
 
 class TrafficCar {
   constructor(type, s, lane, scene) {
@@ -57,35 +58,54 @@ class TrafficCar {
     this.front = M.front; this.rear = M.rear; this.hw = M.W; this.hull = M.hull;
     this.mass = type.mass; this.Iz = type.mass * ((M.front - M.rear) ** 2 + (2 * M.W) ** 2) / 12;
     // personality
-    this.pers = U.rand(-2.5, 2.5);                      // km/h above / below the lane's flow (small, so lanes don't bunch up)
+    this.pers = U.rand(-8, 8);                           // km/h above / below the lane's flow
     this.T = U.rand(0.9, 1.4) * (type.truck ? 1.2 : 1);  // time headway
     this.s0 = type.truck ? 4 : 2.5;                      // standstill gap
     this.bComf = type.truck ? 1.6 : 2.2;
     this.thresh = U.rand(0.15, 0.3);                     // how much better a lane must be to bother
-    this.latMax = type.truck ? U.rand(0.65, 0.95) : U.rand(0.9, 1.35);   // sideways speed when changing lanes (m/s)
+    this.latMax = type.truck ? U.rand(0.85, 1.15) : U.rand(1.15, 1.6);   // sideways speed when changing lanes (m/s)
     this.mergeAt = type.truck ? U.rand(300, 700) : U.rand(150, 650);     // where they leave a closing lane (spread out, not all at the cones)
     this.courteous = Math.random() < 0.5;                // moves out of the lane next to roadworks to make room for mergers
     this.spreads = Math.random() < 0.75;                 // moves back into the reopened lane after roadworks
+    this.seeAt = U.rand(110, 380);                       // how far ahead they notice something stopped / slow and move over
     // state
     this.s = s; this.lane = lane; this.tgt = lane; this.d = ROAD.lane(lane); this.latV = 0;
     this.v0 = this.laneV0(lane); this.v = this.v0; this.acc = 0; this.relYaw = 0;
     this.ind = 0; this.indT = 0; this.indWait = 0; this.forced = false;
-    this.cool = U.rand(2, 10); this.check = U.rand(0, 1);
-    this.wish = 0; this.wishT = U.rand(5, 40);
+    this.cool = U.rand(3, 24); this.check = U.rand(0, 1);
+    this.wish = 0; this.wishT = U.rand(9, 75);
     this.crashed = false; this.body = null; this.yaw = 0; this.crashT = 0;
     this.nm = { active: false, done: false, min: 9 };
     this.x = 0; this.z = 0;
   }
   get changing() { return this.tgt !== this.lane; }
   laneV0(lane) { const t = this.type; return U.clamp(LANE_KMH[lane] * (t.truck ? 0.97 : 1) + this.pers, t.vmin, t.vmax) / 3.6; }
+  // how much the car ahead in `lane` would hold this driver back there, judged at THAT lane's speed
+  // (so a slower lane to the right isn't "worse" just for being slower: no more everyone drifting left)
+  leadDrag(lead, lane) {
+    if (!lead) return 0;
+    const v0 = this.v0; this.v0 = this.laneV0(lane);
+    // (judged with the shorter gap drivers accept for a lane change, like safeIn)
+    const v = Math.min(this.v, this.v0 + 1), r = this.idm(lead, v, 0.5) - this.idm(null, v);
+    this.v0 = v0; return r;
+  }
   // tScale < 1: the shorter gap a driver accepts for a moment when changing lanes (they then drop back)
+  // Car following is the "ACC" version of the IDM (Treiber & Kesting): plain IDM slams on the brakes
+  // whenever someone slots in a bit close, even when easing off slightly is all it takes (which is why
+  // drivers hardly ever found a gap to change lanes). ACC brakes only as hard as the situation needs.
   idm(lead, v = this.v, tScale = 1) {
     const a = this.type.amax;
     let acc = a * (1 - Math.pow(Math.max(v, 0) / Math.max(this.v0, 1), 4));
     if (lead) {
-      const dv = v - lead.v;
+      const dv = v - lead.v, s = Math.max(lead.gap, 0.5);
       const ss = this.s0 + Math.max(0, v * this.T * tScale + v * dv / (2 * Math.sqrt(a * this.bComf)));
-      acc -= a * Math.pow(ss / Math.max(lead.gap, 0.5), 2);
+      acc -= a * Math.pow(ss / s, 2);
+      // constant-acceleration heuristic: the braking that's really needed if the leader keeps its acceleration
+      const al = lead.v < 0.5 ? 0 : Math.min((lead.o && lead.o.acc) || 0, a);
+      let cah;
+      if (al < 0 && lead.v * dv <= -2 * s * al) cah = v * v * al / (lead.v * lead.v - 2 * s * al);
+      else cah = al - (dv > 0 ? dv * dv / (2 * s) : 0);
+      if (acc < cah) acc = 0.01 * acc + 0.99 * (cah + this.bComf * Math.tanh((acc - cah) / this.bComf));
     }
     return U.clamp(acc, -8, a);
   }
@@ -231,11 +251,15 @@ class Traffic {
   // ---------------------------------------------------------------- lane-change safety
   // can car c move into lane l right now? bSafe = how hard the new follower may have to brake
   safeIn(c, l, bSafe, minGap) {
+    // someone from the lane on the far side is moving into the same lane right next to us
+    const far = this.lanes[2 * l - c.lane];
+    if (far) for (const o of far) if (o !== c && o.tgt === l && o.lane !== l && Math.abs(o.s - c.s) < 20) return false;
     const L = this.leadIn(c, l), F = this.followIn(c, l);
     // drivers accept about half their normal following distance for the move, then settle back
-    if (L && (L.gap < minGap || c.idm(L, c.v, 0.45) < -bSafe)) return false;
+    // (but never less than ~0.3 s behind / ahead of anyone)
+    if (L && (L.gap < minGap + 0.3 * c.v || c.idm(L, c.v, 0.45) < -bSafe)) return false;
     if (F) {
-      if (F.gap < minGap) return false;
+      if (F.gap < minGap + 0.3 * Math.max(F.v, 0)) return false;
       if (F.o.isPlayer) { if (F.gap < 6 + Math.max(0, F.v - c.v) * 2.6) return false; }
       else if (F.o.crashed) { if (F.gap < 4) return false; }
       else if (F.o.idm({ gap: F.gap, v: c.v }, F.o.v, 0.45) < -bSafe) return false;
@@ -244,7 +268,9 @@ class Traffic {
   }
 
   // ---------------------------------------------------------------- decisions
-  decide(c, P) {
+  // the car ahead (within this driver's seeing distance) is stopped or far slower than us
+  static slowAhead(c, L) { return !!L && L.gap < c.seeAt && (L.v < 3 || L.v < c.v - 6); }
+  decide(c, P, cooled = true) {
     const z = this.closedLaneAhead(c.lane, c.s, c.mergeAt);
     if (z) { // our lane closes ahead: signal toward the open side and keep trying (forced)
       const nl = c.lane === 0 ? 1 : c.lane === ROAD.LANES - 1 ? c.lane - 1 : c.lane + (z.side === 0 ? 1 : -1);
@@ -254,19 +280,45 @@ class Traffic {
     const cur = this.leadIn(c, c.lane), aCur = c.idm(cur);
     // stuck behind something stopped (a crash, the player, a queue): pull out around it
     if (cur && cur.v < 2 && cur.gap < 30 && c.v < 8) {
+      // signal toward a side that isn't just as stuck - a clear one if there is one - even when there's
+      // no gap yet: courteous drivers in that lane see the signal and leave a gap (see "zipper" in update)
+      // (no gap either side: the side where traffic is going slower, where someone can let them in)
+      let pick = null, pickV = Infinity;
       for (const dir of (Math.random() < 0.5 ? [-1, 1] : [1, -1])) {
         const nl = c.lane + dir;
         if (nl < 0 || nl >= ROAD.LANES || (c.type.truck && nl < TRUCK_LANES)) continue;
         if (this.closedLaneAhead(nl, c.s - 30, 200)) continue;
         const L = this.leadIn(c, nl);
         if (L && L.v < 2 && L.gap < cur.gap + 8) continue;           // that lane is just as stuck
-        if (!this.safeIn(c, nl, 3, 3)) continue;
-        c.blocked = true; c.forced = false; c.pending = nl; c.ind = dir; c.indT = U.rand(1, 1.6); c.indWait = 0;
-        return;
+        if (this.safeIn(c, nl, 3, 3)) { pick = dir; break; }
+        const F = this.followIn(c, nl), fv = F ? F.v : 0;
+        if (fv < pickV) { pickV = fv; pick = dir; }
       }
+      if (pick !== null) { c.blocked = true; c.around = true; c.forced = false; c.pending = c.lane + pick; c.ind = pick; c.indT = U.rand(0.6, 1.2); c.indWait = 0; }
       return;
     }
-    if (c.v < 8) return;                                         // no optional lane changes in a crawl
+    if (c.v < 3) return;
+    const crawl = c.v < 8;                                       // in a crawl: only into the empty road in front of something stopped
+    // Something stopped or much slower ahead (a crash, a stopped player, a queue): drivers see it coming
+    // and move over while still moving, each at their own distance - instead of everyone queueing up
+    // and pulling out at the same spot. Takes whichever side is clearer (random if both are).
+    if (!crawl && Traffic.slowAhead(c, cur)) {
+      const dCur = c.leadDrag(cur, c.lane), ok = [];
+      for (const dir of [-1, 1]) {
+        const nl = c.lane + dir;
+        if (nl < 0 || nl >= ROAD.LANES || (c.type.truck && nl < TRUCK_LANES)) continue;
+        if (this.closedLaneAhead(nl, c.s - 30, 200)) continue;
+        const L = this.leadIn(c, nl);
+        if (L && L.gap < cur.gap + 10 && L.v < cur.v + 3) continue;   // that lane is just as blocked
+        if (c.leadDrag(L, nl) < dCur + 0.2) continue;
+        if (this.safeIn(c, nl, 3.5, 2.5)) ok.push(nl);
+      }
+      if (ok.length) {                                              // (either side, at random)
+        const nl = ok[Math.floor(Math.random() * ok.length)];
+        c.forced = false; c.blocked = false; c.around = true; c.pending = nl; c.ind = nl < c.lane ? -1 : 1; c.indT = U.rand(0.4, 1); c.indWait = 0; c.wish = 0;
+        return;
+      }
+    }
     const post = this.inPostZone(c.s);
     // roadworks: the lane that just reopened (drivers spread back into it), and the lane next to a
     // closure coming up (courteous drivers move one lane further over so the mergers have room)
@@ -276,31 +328,53 @@ class Traffic {
       const next = z.side === 0 ? 1 : 2;
       if (c.lane === next && z.start > c.s && z.start - c.s < 900) awayDir = z.side === 0 ? 1 : -1;
     }
-    let best = -1, bestGain = c.thresh;
+    // Balanced on purpose: the lane to the left is always faster, so judging moves by "how much faster
+    // could I go" pulls every car left. Lanes are judged only by how much the car ahead in them would
+    // hold this driver back (at that lane's own speed), and when more than one lane would do, the side
+    // is picked at random. Reasons to move: a spontaneous wish (left or right equally likely), an
+    // overtake when stuck behind a slower car (then moving back over afterwards), and a wide-open lane
+    // beside them. Only the open-lane move doesn't wait for the driver's cooldown (`cooled`).
+    const dCur = c.leadDrag(cur, c.lane), held = c.v < c.v0 - 4 && dCur < -0.3;
+    const ok = [];
     for (const dir of [-1, 1]) {
       const nl = c.lane + dir;
       if (nl < 0 || nl >= ROAD.LANES) continue;
       if (c.type.truck && nl < TRUCK_LANES) continue;
       if (this.closedLaneAhead(nl, c.s - 30, c.mergeAt + 120)) continue;   // never into a lane about to close
-      if (!this.safeIn(c, nl, 3, 2.5)) continue;
-      // Balanced on purpose: the lane to the left is always faster, so judging moves by "how much faster
-      // could I go" pulled every car left over time and emptied the right lanes. Optional moves are
-      // just a driver's spontaneous wish (left or right equally likely) - as long as the new lane isn't
-      // clearly worse for them - plus real overtakes when someone is stuck behind a slower car.
-      const aNew = c.idm(this.leadIn(c, nl)), held = c.v < c.v0 - 3 && aCur < 0;
-      let gain = -1;
+      const Ln = this.leadIn(c, nl), dNew = c.leadDrag(Ln, nl);
+      if (Traffic.slowAhead(c, Ln)) continue;                          // never into a lane with a queue / something stopped ahead
+      // the empty road in front of something stopped (a car they just went round): drivers move straight
+      // back into it, so that lane doesn't stay empty while the others back up. Otherwise a lane beside
+      // that's wide open is just another reason to move over (after the driver's cooldown).
+      const Fn = this.followIn(c, nl), inFront = Fn && Fn.v < 3 && Fn.gap < 80;
+      if (crawl && !inFront) continue;
+      const open = (inFront || cooled) && cur && cur.gap < 60 && (!Ln || (Ln.gap > (inFront ? 50 : 140) && Ln.gap > cur.gap * 2.5));
+      // a wish only needs room in that lane (the same test either side: the lanes to the right are slower,
+      // so judging by speed made almost every wish to the right fail)
+      const room = !Ln || Ln.gap > 6 + Math.max(Ln.v, 0) * 0.45;
+      let why = null;
       if (!post) {
-        if (c.wish === dir && aNew > aCur - 0.6) gain = 0.5;
-        if (held && aNew > aCur + 0.4) gain = Math.max(gain, aNew - aCur);
-      } else if (held && aNew > aCur + 0.8) gain = aNew - aCur;
-      if (nl === reopened && c.spreads && aNew > aCur - 0.6) gain = Math.max(gain, 0.6);
-      if (dir === awayDir && c.courteous && aNew > aCur - 0.6) gain = Math.max(gain, 0.45);
-      if (gain > bestGain) { bestGain = gain; best = nl; }
+        if (open && dNew > -0.3) why = 'open';
+        else if (cooled && c.wish === dir && room) why = 'wish';
+        else if (cooled && held && dNew > dCur + 0.6) why = 'pass';
+      } else if (cooled && held && dNew > dCur + 0.8) why = 'pass';
+      if (!why && cooled && nl === reopened && c.spreads && dNew > -0.6) why = 'zone';
+      if (!why && cooled && dir === awayDir && c.courteous && dNew > -0.6) why = 'zone';
+      if (why && this.safeIn(c, nl, 3, 2.5)) ok.push({ nl, why });
     }
-    if (best >= 0) { c.forced = false; c.pending = best; c.ind = best < c.lane ? -1 : 1; c.indT = U.rand(2, 4); c.indWait = 0; c.wish = 0; }
+    if (!ok.length) return;
+    const pick = ok[Math.floor(Math.random() * ok.length)], nl = pick.nl, dir = nl - c.lane;
+    c.forced = false; c.pending = nl; c.ind = dir; c.indT = U.rand(pick.why === 'open' ? 0.6 : 1.5, pick.why === 'open' ? 1.4 : 3); c.indWait = 0; c.wish = 0;
+    // after getting past a slower car, they move back over some time later (keeps both sides balanced)
+    c.backT = pick.why === 'pass' ? U.rand(6, 16) : 0; c.backDir = -dir;
   }
 
-  startChange(c, l) { c.tgt = l; c.chg0 = c.d; }
+  // (the car moving in and the one it moves in front of both accept the shorter gap for a while)
+  startChange(c, l) {
+    c.tgt = l; c.chg0 = c.d; c.tK = 0.45;
+    const F = this.followIn(c, l);
+    if (F && F.o instanceof TrafficCar) F.o.tK = Math.min(F.o.tK || 1, 0.5);
+  }
 
   // ---------------------------------------------------------------- spawning
   pickType(lane) {
@@ -308,7 +382,8 @@ class Traffic {
     return U.weighted(pool);
   }
   laneCount(l, P) { let n = 0; for (const c of this.cars) if (!c.crashed && c.tgt === l && c.s > P.s - WIN_BACK && c.s < P.s + WIN_AHEAD) n++; return n; }
-  // biggest empty stretch in lane l inside [a, b]; returns its middle or null
+  // biggest empty stretch in lane l inside [a, b]; returns a random spot in it (not the exact middle:
+  // halving gaps put every lane's cars at the same spots, side by side - rows that block the whole road)
   biggestGap(l, a, b, avoid) {
     const xs = this.cars.filter(c => Math.abs(c.d - ROAD.lane(l)) < 2.6).map(c => c.s).filter(s => s > a && s < b).sort((p, q) => p - q);
     const pts = [a, ...xs, b];
@@ -316,13 +391,23 @@ class Traffic {
     for (let i = 0; i < pts.length - 1; i++) {
       let lo = pts[i], hi = pts[i + 1];
       if (avoid && lo < avoid + 60 && hi > avoid - 60) { if (avoid - 60 - lo > hi - avoid - 60) hi = avoid - 60; else lo = avoid + 60; }
-      if (hi - lo > bl) { bl = hi - lo; best = (lo + hi) / 2 + (hi - lo) * U.rand(-0.12, 0.12); }
+      if (hi - lo > bl) { bl = hi - lo; best = lo + (hi - lo) * U.rand(0.2, 0.8); }
     }
     return bl > 30 ? best : null;
+  }
+  // would a car in lane l at s line up beside cars in ALL the other lanes (a row blocking the road)?
+  wallAt(l, s) {
+    for (let k = 0; k < ROAD.LANES; k++) {
+      if (k === l) continue;
+      const d = ROAD.lane(k);
+      if (!this.cars.some(o => Math.abs(o.d - d) < 1.6 && Math.abs(this.wd ? this.wd(o.s, s) : o.s - s) < 10)) return false;
+    }
+    return true;
   }
   // room = how much clear road the new car needs in front and behind (metres)
   spawnAt(l, s, room = 14) {
     if (this.closedLaneAhead(l, s - 20, 150)) return null;         // never in / just before a closed lane
+    if (this.wallAt(l, s)) return null;
     const type = this.pickType(l), M = getModel(type.key);
     for (const o of this.cars) {
       if (Math.abs(o.d - ROAD.lane(l)) > 2.6) continue;
@@ -342,7 +427,7 @@ class Traffic {
 
   maintain(P, density, dt = 0) {
     const N = this.target(density);
-    const perLane = l => N * [0.26, 0.26, 0.25, 0.23][l];
+    const perLane = l => N * LANE_SHARE[l];
     // density changed: drop the farthest cars, refill evenly
     if (this.lastDensity !== undefined && density !== this.lastDensity) {
       while (this.cars.length > N) {
@@ -363,9 +448,11 @@ class Traffic {
       // fill: every lane gets its share, each car into the biggest gap (even spread, nothing on top of you)
       let guard = 0;
       for (let l = 0; l < ROAD.LANES; l++) {
-        while (this.laneCount(l, P) < perLane(l) && guard++ < 600) {
+        let fails = 0;
+        while (this.laneCount(l, P) < perLane(l) && guard++ < 600 && fails < 8) {
           const s = this.biggestGap(l, P.s - WIN_BACK + 10, P.s + WIN_AHEAD - 40, P.s);
-          if (s === null || !this.spawnAt(l, s)) break;
+          if (s === null) break;
+          if (!this.spawnAt(l, s)) fails++;                       // (random spot: try another)
         }
       }
       this.initDone = true;
@@ -396,20 +483,38 @@ class Traffic {
     return k;
   }
 
+  // something stopped in lane l just past b (a stopped player, a wreck): drivers coming up behind it have
+  // mostly moved over long before, so that lane is far emptier back there (otherwise it just keeps
+  // filling a queue that the other lanes - already busy - can't take in)
+  blockedPast(l, b) {
+    for (const o of this.lanes[l]) {
+      const ds = this.wd ? this.wd(o.s, b) : o.s - b;
+      if (ds > -10 && ds < 300 && (o.crashed || (!(o instanceof TrafficCar) && o.v < 3))) return true;
+    }
+    return false;
+  }
+  // per-lane multipliers for the traffic coming up behind b: a blocked lane far emptier, and the others a bit
+  // thinner too (4 lanes' worth of traffic can't squeeze into 3 without jamming all of them)
+  blockShares(b) {
+    const blk = [0, 1, 2, 3].map(l => this.blockedPast(l, b));
+    const any = blk.some(x => x);
+    return blk.map(x => x ? 0.1 : any ? 0.8 : 1);
+  }
   // bring every lane in [a, b] back to its even spacing: add into the biggest gaps, remove the most crowded extras
   fillBand(P, a, b, density) {
-    const N = this.target(density), shares = [0.26, 0.26, 0.25, 0.23];
+    const N = this.target(density), shares = LANE_SHARE;
     const closed = [0, 1, 2, 3].map(l => !!this.closedLaneAhead(l, a - 20, b - a + 40));
-    const laneK = Traffic.zoneShares(this, a, b);
+    const laneK = Traffic.zoneShares(this, a, b), blockK = this.blockShares(b);
     for (let l = 0; l < ROAD.LANES; l++) {
       if (closed[l]) continue;                                    // roadworks: no cars in a closed lane
       const spacing = (WIN_AHEAD + WIN_BACK) / Math.max(N * shares[l], 1);
-      const want = (b - a) / spacing * RUN_DENSITY * laneK[l];
+      const want = (b - a) / spacing * RUN_DENSITY * laneK[l] * blockK[l];
       const inBand = () => this.cars.filter(c => !c.crashed && Math.abs(c.d - ROAD.lane(l)) < 1.2 && c.s > a && c.s < b);
-      let guard = 0;
+      let guard = 0, fails = 0;
       while (inBand().length < want - 0.5 && guard++ < 6) {
         const s = this.biggestGap(l, a, b);
-        if (s === null || !this.spawnAt(l, s, Math.max(12, spacing * 0.35))) break;
+        if (s === null) break;
+        if (!this.spawnAt(l, s, Math.max(12, spacing * 0.35)) && ++fails > 2) break;
       }
       // too many: remove the car squeezed closest to its neighbours (never one that's changing lanes)
       let cs = inBand();
@@ -437,7 +542,7 @@ class Traffic {
     for (let i = this.cars.length - 1; i >= 0; i--) if (this.cars[i].gone) this.remove(i);   // wrecks that couldn't get going again
     this.maintain(P, density, dt);
     this.buildLanes(P, others);
-    const mergers = this.cars.filter(c => c.forced && c.ind && !c.changing && !c.crashed);
+    const mergers = this.cars.filter(c => (c.forced || c.blocked || c.around) && c.ind && !c.changing && !c.crashed);
 
     for (const c of this.cars) {
       if (c.crashed) { this.updateCrashed(c, dt); continue; }
@@ -446,9 +551,9 @@ class Traffic {
       c.v0 = U.damp(c.v0, c.laneV0(c.tgt), 0.25, dt);
       c.wishT -= dt;
       if (c.wishT <= 0) {
-        c.wishT = U.rand(10, 35) * (this.inPostZone(c.s) ? 2 : 1);
+        c.wishT = U.rand(18, 66) * (this.inPostZone(c.s) ? 2 : 1);
         c.wish = Math.random() < 0.5 ? -1 : 1;
-        c.wishLeft = 8;
+        c.wishLeft = 10;
       }
       if (c.wish && (c.wishLeft -= dt) <= 0) c.wish = 0;
 
@@ -456,11 +561,13 @@ class Traffic {
       const ls = Traffic.lanesOf(c.d, c.hw); if (!ls.includes(c.tgt)) ls.push(c.tgt);
       let lead = null;
       for (const l of ls) { const L = this.leadIn(c, l); if (L && (!lead || L.gap < lead.gap)) lead = L; }
-      // zipper: make room for a merger that's signalling into our lane and is AHEAD of us
+      // zipper: make room for a merger that's signalling into our lane and is AHEAD of us. A car getting
+      // round something stopped gets let in by courteous drivers who can ease off gently enough
+      // (one that's already stuck at a standstill only by drivers who are going slowly themselves).
       for (const o of mergers) {
         if (o === c || o.pending !== c.lane) continue;
         const g = o.s + o.rear - (c.s + c.front) - 6;               // leave ~6 m behind it
-        if (g < 0 || g > 45) continue;
+        if (o.forced ? (g < 0 || g > 45) : (!c.courteous || (o.blocked && c.v > 26) || g < 0 || g > 140 || (c.v - o.v) ** 2 / (2 * Math.max(g, 1)) > 3)) continue;
         if (!lead || g < lead.gap) lead = { gap: g, v: o.v };
       }
       // lane closure ahead: behaves like a stopped obstacle at the taper, while we're still in that lane
@@ -471,18 +578,23 @@ class Traffic {
           if (zg > -4 && (!lead || zg < lead.gap)) lead = { gap: Math.max(zg, 0.5), v: 0 };
         }
       }
-      const a = c.idm(lead);
+      // (just after a lane change the gap is short: drivers drop back to their normal distance gently)
+      c.tK = Math.min(1, (c.tK || 1) + dt / 8);
+      const a = c.idm(lead, c.v, c.tK);
       c.acc = U.damp(c.acc, a, a < c.acc ? 10 : 6, dt);
       c.v = Math.max(0, c.v + c.acc * dt);
       // pulling out of a queue: creep forward while angling out (until the nose is clear of the car ahead)
-      if (c.changing && (c.blocked || c.forced) && lead && lead.v < 2 && lead.gap > 1.2) c.v = Math.max(c.v, Math.min(2, (lead.gap - 1.2) * 0.7));
+      if (c.changing && (c.blocked || c.forced) && lead && lead.v < 2 && lead.gap > 0.5) c.v = Math.max(c.v, Math.min(2.5, Math.max(1, (lead.gap - 0.5) * 0.9)));
       c.s += c.v * dt;
 
       // ---- lane-change decisions
       c.cool -= dt; c.check -= dt;
+      if (c.backT > 0 && (c.backT -= dt) <= 0) { c.wish = c.backDir; c.wishLeft = 25; c.cool = 0; }   // back over after passing
       if (!c.changing && !c.ind && c.check <= 0) {
         const urgent = this.closedLaneAhead(c.lane, c.s, c.mergeAt);
-        if (urgent || c.cool <= 0 || c.v < 2) this.decide(c, P);   // (a stopped car keeps looking for a way round)
+        // (every check: drivers always notice something stopped ahead or a wide-open lane beside them;
+        //  spontaneous moves and overtakes wait for their cooldown)
+        this.decide(c, P, urgent || c.cool <= 0);
         c.check = urgent ? 0.25 : U.rand(0.5, 1.0);
       }
       if (c.ind && !c.changing) {
@@ -494,9 +606,10 @@ class Traffic {
             const zc = this.closedLaneAhead(c.lane, c.s, 400), dist = zc ? zc.start - c.s : 400;
             const k = U.clamp(dist / c.mergeAt, 0, 1);
             ok = this.safeIn(c, c.pending, U.lerp(6, 3.5, k), U.lerp(1.2, 2.5, k));
-          } else ok = this.safeIn(c, c.pending, 3, 2.5);
+          } else ok = c.blocked ? this.safeIn(c, c.pending, 6, 3) : this.safeIn(c, c.pending, 3, 2.5);   // (stuck: pulls out if the car behind can brake for it)
           if (ok && (c.v > 3 || c.forced || c.blocked)) this.startChange(c, c.pending);
-          else if (!c.forced && (c.indWait += dt) > 6) { c.cool = c.blocked ? U.rand(0.5, 2) : U.rand(3, 7); c.ind = 0; c.blocked = false; }
+          // (a stuck car keeps signalling for longer, while someone makes room for it)
+          else if (!c.forced && (c.indWait += dt) > (c.blocked ? 14 : 6)) { c.cool = c.blocked ? U.rand(0.5, 2) : U.rand(8, 20); c.ind = 0; c.blocked = false; c.around = false; }
         }
       }
 
@@ -507,19 +620,28 @@ class Traffic {
         // abort early if the player suddenly appears beside us in the target lane
         const progress = Math.abs(c.d - c.chg0) / ROAD.LW;
         const beside = Q => Math.abs(Q.d - ROAD.lane(c.tgt)) < 2.3 && Q.s + Q.front > c.s + c.rear - 3 && Q.s + Q.rear < c.s + c.front + 3;
-        if (progress < 0.4 && !c.forced && (beside(P) || (others && others.some(beside)))) {
-          c.tgt = c.lane; c.ind = 0; c.cool = U.rand(3, 6);
+        // (...or a car from the other side started moving into the same lane alongside: the later one backs off)
+        const far = this.lanes[2 * c.tgt - c.lane];
+        const rival = far && far.some(o => o !== c && o.tgt === c.tgt && o.lane !== c.tgt && Math.abs(o.s - c.s) < 12 &&
+          Math.abs(o.d - o.chg0) / ROAD.LW >= progress);
+        if (progress < 0.4 && !c.forced && (beside(P) || (others && others.some(beside)) || rival)) {
+          c.tgt = c.lane; c.ind = 0; c.cool = U.rand(3, 6); c.around = false;
         }
       }
       const err = ROAD.lane(c.tgt) - c.d;
-      // (a car pulling out of a queue may angle up to ~20 deg at walking pace, like a real driver)
-      const cap = Math.min(c.latMax, (c.blocked || c.forced) && c.v < 5 ? 0.36 * c.v + 0.08 : 0.1 * c.v + 0.04);
-      const want = U.clamp(err * 0.8, -cap, cap);
-      c.latV += U.clamp(want - c.latV, -0.6 * dt, 0.6 * dt);
+      // (a car pulling out of a queue turns the wheel hard and noses out at walking pace, like a real driver)
+      const cap = Math.min(c.latMax, (c.blocked || c.forced) && c.v < 5 ? 0.5 * c.v + 0.5 : 0.1 * c.v + 0.04);
+      // S-curve: ease in, cross at a steady rate, then ease out so it arrives exactly in the lane centre
+      // (a lane change takes ~3-4 s; it used to creep the last metre for seconds)
+      const aLat = c.type.truck ? 0.8 : 1.2;
+      const want = Math.sign(err) * Math.min(cap, Math.sqrt(2 * aLat * Math.abs(err)));
+      c.latV += U.clamp(want - c.latV, -aLat * dt, aLat * dt);
       c.d += c.latV * dt;
       if (c.changing && Math.abs(err) < 0.05 && Math.abs(c.latV) < 0.2) {
         c.d = ROAD.lane(c.tgt); c.latV = 0; c.lane = c.tgt; c.ind = 0; c.forced = false; c.blocked = false;
-        c.cool = U.rand(5, 12) * (this.inPostZone(c.s) ? 2 : 1);
+        // (just went round something: soon ready to move back into the empty lane in front of it)
+        c.cool = c.around ? U.rand(0.5, 2.5) : U.rand(9, 27) * (this.inPostZone(c.s) ? 2 : 1);
+        c.around = false;
       } else if (!c.changing && Math.abs(err) < 0.02 && Math.abs(c.latV) < 0.05) { c.d = ROAD.lane(c.lane); c.latV = 0; }
       const latRate = (c.d - pd) / Math.max(dt, 1e-4);
       c.relYaw = U.damp(c.relYaw, Math.atan2(latRate, Math.max(c.v, 2)), 8, dt);

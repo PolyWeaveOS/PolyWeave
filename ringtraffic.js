@@ -52,6 +52,7 @@ class RingTraffic extends Traffic {
   spawnAt(l, s, room = 14) {
     s = this.w(s);
     if (this.closedLaneAhead(l, s - 20, 150)) return null;
+    if (this.wallAt(l, s)) return null;                       // (no rows of cars side by side across the whole road)
     const type = this.pickType(l), M = getModel(type.key);
     for (const o of this.cars) {
       if (Math.abs(o.d - ROAD.lane(l)) > 2.6) continue;
@@ -67,7 +68,7 @@ class RingTraffic extends Traffic {
     this.cars.push(c); this.byId.set(c.id, c);
     return c;
   }
-  // biggest empty stretch of lane l in [a, b] (keeping 60 m clear of each player); returns its middle
+  // biggest empty stretch of lane l in [a, b] (keeping 60 m clear of each player); returns a random spot in it
   biggestGap(l, a, b) {
     const len = b - a;
     const xs = [];
@@ -79,27 +80,28 @@ class RingTraffic extends Traffic {
     for (let i = 0; i < pts.length - 1; i++) {
       let lo = pts[i], hi = pts[i + 1];
       for (const o of av) if (lo < o + 60 && hi > o - 60) { if (o - 60 - lo > hi - o - 60) hi = o - 60; else lo = o + 60; }
-      if (hi - lo > bl) { bl = hi - lo; best = (lo + hi) / 2 + (hi - lo) * U.rand(-0.12, 0.12); }
+      if (hi - lo > bl) { bl = hi - lo; best = lo + (hi - lo) * U.rand(0.2, 0.8); }
     }
     return bl > 30 ? a + best : null;
   }
   // bring every lane in [a, b] to single player's spacing: add into the biggest gaps, remove extras
   fillBand(a, b, density, maxAdd = 6) {
-    const N = this.target(density), shares = [0.26, 0.26, 0.25, 0.23], len = b - a;
+    const N = this.target(density), shares = LANE_SHARE, len = b - a;
     if (len < 25) return;
     const closed = [0, 1, 2, 3].map(l => !!this.closedLaneAhead(l, a - 20, len + 40));
-    const laneK = Traffic.zoneShares(this, a, b);           // (thinner before roadworks, like single player)
+    const laneK = Traffic.zoneShares(this, a, b), blockK = this.blockShares(b);   // (thinner before roadworks, like single player)
     for (let l = 0; l < ROAD.LANES; l++) {
       if (closed[l]) continue;
       const spacing = (WIN_AHEAD + WIN_BACK) / Math.max(N * shares[l], 1);
-      const want = len / spacing * RUN_DENSITY * laneK[l];
+      const want = len / spacing * RUN_DENSITY * laneK[l] * blockK[l];   // (fewer behind something stopped)
       const lc = ROAD.lane(l);
       const cs = this.cars.filter(c => !c.crashed && Math.abs(c.d - lc) < 1.2 && this.w(c.s - a) < len);
-      let guard = 0;
-      while (cs.length < want - 0.5 && guard++ < maxAdd) {
+      let guard = 0, fails = 0;
+      while (cs.length < want - 0.5 && guard++ < maxAdd + 3) {
         const s = this.biggestGap(l, a, b);
-        const c = s === null ? null : this.spawnAt(l, s, Math.max(12, spacing * 0.35));
-        if (!c) break;
+        if (s === null) break;
+        const c = this.spawnAt(l, s, Math.max(12, spacing * 0.35));
+        if (!c) { if (++fails > 3) break; continue; }                 // (random spot: try another)
         cs.push(c);
       }
       while (cs.length > want + 1.5) {

@@ -307,7 +307,7 @@ function resetCar() {
   lastCrash = -9;
 }
 
-let zoneHit = false, lastGoodS = 40;
+let zoneHit = false, railHit = false, lastGoodS = 40;
 // guard-rail contact for the player (rigid wall, per physics substep)
 // Walls the car can hit at road position s: the two guard rails, plus the barrier line of any
 // construction zone (only while the car is on the open side of it). On the loop circuit the right
@@ -336,8 +336,9 @@ function railCollide(h) {
   // Anti-stuck: when the car is close to a wall and pointing INTO it, swing it back parallel
   // to the road (works even when stopped, where steering can't turn the car). It never
   // acts when you're pointing away from the wall, so it doesn't fight you driving off.
+  // (Only when nearly stopped: at speed it steered you along the rail, so you could glide on it.)
   const lotArea = nearLot(pre.s, pre.d);
-  for (const wl of lotArea ? [] : wallsAt(pre.s, pre.d)) {   // (not in the parking lot: you park / turn around there)
+  for (const wl of lotArea || Math.abs(car.u) > 5 ? [] : wallsAt(pre.s, pre.d)) {   // (not in the parking lot: you park / turn around there)
     const sg = wl.sg;
     const dist = sg > 0 ? wl.d - pre.d : pre.d - wl.d;
     if (dist > 2.6) continue;
@@ -375,6 +376,8 @@ function railCollide(h) {
   // nudge slightly away from the rail so contact doesn't persist
   car.x -= nx * 0.01; car.z -= nz * 0.01;
   if (worst.zone && vn > 1.0) zoneHit = true; // clipping construction barriers counts as a crash
+  // any touch of a guard rail while driving is a crash (the lot / ramp fences don't count: you park there)
+  if (!worst.zone && Math.abs(car.u) > 2 && !lotArea && !inStartArea(pre.s, pre.d)) railHit = true;
   return vn;
 }
 
@@ -1317,8 +1320,8 @@ function driveStep(dt, ctl, paused) {
   if (coneHits) { sound.thump(0.15 * coneHits); car.u *= Math.pow(0.985, coneHits); }
   if (impact > 0.45) crashEvent(impact); // the lightest brushes (<0.45 m/s) just bump you
   if (impact > 1.5) car.hitT = 0.8;
-  if (wallHit > 3.5 || zoneHit) crashEvent(wallHit);
-  zoneHit = false;
+  if (wallHit > 3.5 || zoneHit || railHit) crashEvent(Math.max(wallHit, 2));
+  zoneHit = false; railHit = false;
   const kmh = Math.abs(car.u) * 3.6;
   const misses = traffic.nearMisses(proxy, kmh); // always run so pass tracking stays correct
   if (paused) { score.prox = 1; score.update(dt); return; }   // (no points while the menu is open)
