@@ -44,6 +44,17 @@
   <!-- main menu -->
   <div id="scrTitle" class="screen title">
     <button id="installBtn" class="hidden" title="Install PolyWeave as an app on this computer">INSTALL APP</button>
+    <!-- bottom right: friends + inbox -->
+    <div class="cornerBtns">
+      <button id="friendsBtn" class="roundBtn" title="Friends">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8.5" r="3.5"/><path d="M2.5 19.5c.6-3.3 3.2-5.2 6.5-5.2s5.9 1.9 6.5 5.2"/><circle cx="17" cy="9" r="2.6"/><path d="M16.2 14.4c2.6-.2 4.7 1.4 5.3 4.4"/></svg>
+        <span class="badge hidden" id="friendsBadge"></span>
+      </button>
+      <button id="inboxBtn" class="roundBtn" title="Inbox">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h5l1.5 2.5h5L16 13h5"/><path d="M5.5 5.5h13L21 13v5.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5V13z"/></svg>
+        <span class="badge hidden" id="inboxBadge"></span>
+      </button>
+    </div>
     <h1 class="logo">POLY<span>WEAVE</span></h1>
     <p class="tagline">Weave through traffic. Chain near misses. Don't crash.</p>
     <div class="acct" data-acct></div>
@@ -55,6 +66,10 @@
       <button class="card" data-go="scrMP">
         <svg viewBox="0 0 96 64"><g transform="translate(30 0)"><circle class="bg" cx="32" cy="32" r="31"/><circle class="fg" cx="32" cy="25" r="11"/><path class="fg" d="M13 53C15 43 23 39 32 39S49 43 51 53C46 59 39 63 32 63S18 59 13 53Z"/></g><g><circle class="bg2" cx="32" cy="32" r="31"/><circle class="fg" cx="32" cy="25" r="11"/><path class="fg" d="M13 53C15 43 23 39 32 39S49 43 51 53C46 59 39 63 32 63S18 59 13 53Z"/></g></svg>
         <b>MULTIPLAYER</b>
+      </button>
+      <button class="card" id="profileCard">
+        <svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><rect class="fg" x="13" y="18" width="38" height="28" rx="4"/><circle class="bg" cx="24" cy="29" r="5"/><path class="bg" d="M16 41c1-4 4-6 8-6s7 2 8 6z"/><rect class="bg" x="35" y="26" width="12" height="3" rx="1.5"/><rect class="bg" x="35" y="32" width="9" height="3" rx="1.5"/></svg>
+        <b>PROFILE</b>
       </button>
       <button class="card" data-go="scrLB">
         <svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><path class="fg" d="M21 14h22v10c0 8-5 14-11 14S21 32 21 24z"/><path class="st" d="M21 18h-5v3c0 5 3 8 7 9M43 18h5v3c0 5-3 8-7 9"/><rect class="fg" x="29" y="37" width="6" height="7"/><rect class="fg" x="22" y="44" width="20" height="5" rx="1.5"/></svg>
@@ -138,6 +153,7 @@
     <div class="hdr"><button class="back" data-go="scrTitle">← BACK</button><h1>LEADERBOARD</h1></div>
     <div class="acct left" data-acct></div>
     <div class="tabs"><button class="tab sel" data-lb="sp">SINGLEPLAYER</button><button class="tab" data-lb="mp">MULTIPLAYER</button></div>
+    <div class="subTabs"><button class="sel" data-lbview="top">TOP 100</button><button data-lbview="me">YOUR POSITION</button></div>
     <div id="lbNote"></div>
     <div id="lbList"></div>
   </div>
@@ -190,6 +206,80 @@
     <div class="stack"><button id="acctNameSave" class="go">SAVE</button><button id="acctNameLater">LATER</button></div>
   </div>
 
+  <!-- profile: battle card (car in its paint, name, title) + stats; your own also picks your title -->
+  <div id="scrProfile" class="screen panel hidden">
+    <div class="hdr"><button class="back" id="profBack">← BACK</button><h1 id="profHead">PROFILE</h1></div>
+    <div id="profNote" class="sub"></div>
+    <div id="profBody" class="hidden">
+      <div class="profTop">
+        <div class="profCard">
+          <div class="profName" id="profName"></div>
+          <div class="profTitle" id="profTitle"></div>
+          <button id="profPickTitle" class="hidden">SELECT TITLE</button>
+        </div>
+        <div class="profStats" id="profStats"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- inbox: titles to claim -->
+  <div id="scrInbox" class="screen panel hidden">
+    <div class="hdr"><button class="back" data-go="scrTitle">← BACK</button><h1>INBOX</h1></div>
+    <div id="ibNote" class="sub"></div>
+    <div id="ibInbox"></div>
+  </div>
+
+  <!-- friends: requests, what they're playing, chats -->
+  <div id="scrFriends" class="screen panel wide hidden">
+    <div class="hdr"><button class="back" data-go="scrTitle">← BACK</button><h1>FRIENDS</h1></div>
+    <div id="frNote" class="sub"></div>
+    <div id="ibFriends">
+      <div class="frGrid">
+        <div class="frSide">
+          <div class="frAdd">
+            <input type="text" id="frName" maxlength="16" placeholder="Add a friend by username" spellcheck="false" autocomplete="off">
+            <button id="frSend" class="go">SEND</button>
+          </div>
+          <div id="frMsg" class="frMsg"></div>
+          <div id="frRequests"></div>
+          <div class="frHead">Friends</div>
+          <div id="frList"></div>
+          <div class="frSettings">
+            <label class="chk"><input type="checkbox" id="frAllow"> Allow friend requests</label>
+            <label class="chk"><input type="checkbox" id="frHide"> Hide my activity</label>
+            <label class="chk"><input type="checkbox" id="frPopups"> Message pop-ups</label>
+          </div>
+        </div>
+        <div class="frChat" id="frChat">
+          <div class="chatEmpty" id="chatEmpty">Pick a friend and press CHAT to talk.</div>
+          <div class="chatHead hidden" id="chatHead"></div>
+          <div class="chatLog hidden" id="chatLog"></div>
+          <form class="chatIn hidden" id="chatForm"><input type="text" id="chatText" maxlength="300" placeholder="Message" autocomplete="off"><button class="go">SEND</button></form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- pick the title shown on your profile and above your car in multiplayer -->
+  <div id="scrTitles" class="screen panel hidden">
+    <div class="hdr"><button class="back" data-go="scrProfile">← BACK</button><h1>SELECT TITLE</h1></div>
+    <div class="titleBar">
+      <label class="row">Sort <select id="titleSort">
+        <option value="rarityAsc">Rarity (ascending)</option>
+        <option value="rarityDesc">Rarity (descending)</option>
+        <option value="az">Alphabetical (A–Z)</option>
+        <option value="za">Alphabetical (Z–A)</option>
+      </select></label>
+      <label class="chk"><input type="checkbox" id="titleOwned"> Owned</label>
+      <div class="rarityHelp">
+        <button id="rarityBtn" class="helpBtn" title="What the colours mean">?</button>
+        <div id="rarityPop" class="rarityPop hidden"><div class="rpHead">Rarities</div><div id="rarityList"></div></div>
+      </div>
+    </div>
+    <div id="titleList"></div>
+    <div id="titleErr" class="err"></div>
+  </div>
+
   <!-- pause (Esc while driving) -->
   <div id="scrPause" class="screen panel narrow hidden">
     <h1>PAUSED</h1>
@@ -208,6 +298,20 @@
   </div>
 </div>
 
+<!-- claiming a title: the reveal -->
+<div id="claimFx" class="hidden">
+  <div class="cfCard">
+    <div class="cfGlow"></div>
+    <div class="cfRing"></div>
+    <div class="cfLabel"><span>NEW TITLE</span></div>
+    <div class="cfTitle" id="cfTitle"></div>
+    <div class="cfDesc" id="cfDesc"></div>
+    <div class="cfBtns"><button id="cfEquip" class="go">EQUIP</button><button id="cfOk">LATER</button></div>
+  </div>
+</div>
+<!-- friend messages / requests pop in here (top right) -->
+<div id="toasts"></div>
+
 <script src="https://cdn.jsdelivr.net/npm/three@0.149.0/build/three.min.js"></script>
 <script>
   // Load game scripts in order with a cache-buster so the browser always runs the latest code.
@@ -218,7 +322,7 @@
   // Remove names from this list to take a vehicle out of traffic; with none loaded the old traffic returns.
   const VEHICLES = ['camry', 'civic', 'model3', 'golf', 'mini', 'mustang', 'p911', 'prius', 'charger', 'gtr',
     'rav4', 'wrangler', 'tahoe', 'f150', 'transit', 'odyssey', 'vwbus', 'boxtruck', 'cascadia'];
-  const files = ['js/core', 'js/zones', 'js/models', 'js/lowpoly', 'js/toykit', ...VEHICLES.map(k => 'js/vehicles/' + k), 'js/world', 'js/physics', 'js/traffic', 'js/input', 'js/hud', 'js/net', 'js/account', 'js/main'];
+  const files = ['js/core', 'js/zones', 'js/models', 'js/lowpoly', 'js/toykit', ...VEHICLES.map(k => 'js/vehicles/' + k), 'js/world', 'js/physics', 'js/traffic', 'js/input', 'js/titles', 'js/hud', 'js/net', 'js/account', 'js/main', 'js/social'];
   for (const f of files) {
     const s = document.createElement('script');
     s.src = `${f}.js?v=${v}`; s.async = false;

@@ -63,6 +63,10 @@ const SUN_OFF = new THREE.Vector3(-55, 95, 40);
 
 const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.05, 3000);
 addEventListener('resize', () => { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); });
+// HUD size (score, near miss / crash messages, run result, speedometer...) follows the window: full size with
+// about 1250 px of height (a big monitor), smaller on laptops, never under half (style.css --hud)
+function hudScale() { document.documentElement.style.setProperty('--hud', U.clamp(Math.min(innerHeight / 1250, innerWidth / 2000), 0.5, 1.1).toFixed(3)); }
+hudScale(); addEventListener('resize', hudScale);
 
 // ---------- game objects ----------
 const world = new World(scene);
@@ -647,7 +651,10 @@ function renderAccount() {
     n.classList.toggle('warn', on && !Account.signedIn);
   }
 }
-Account.onChange = () => { acctMsg = ''; renderAccount(); syncBest(game.mode === 'mp' ? 'mp' : 'sp'); };
+Account.onChange = () => {
+  acctMsg = ''; renderAccount(); syncBest(game.mode === 'mp' ? 'mp' : 'sp');
+  if (game.mode === 'sp' && game.scored && !spToken) fetchSpToken();   // (signed in during a scored run: the next one counts)
+};
 Account.onMsg = t => { acctMsg = t; renderAccount(); };
 Account.onNeedName = () => { $id('acctName').value = ''; $id('acctNameErr').textContent = ''; if (!menuOpen) openMenu('scrName'); else show('scrName'); };
 $id('acctNameSave').onclick = async () => {
@@ -668,21 +675,68 @@ function startSingle(scored) {
   startPosition(); score.reset();
   closeMenu();
   hud.message(scored ? 'SCORED RUN' : 'FREE DRIVE');
+  if (scored) fetchSpToken();
 }
-// scored singleplayer streaks go to the leaderboard (multiplayer runs are recorded by the server itself)
-score.onStreakEnd = (pts, peak, dur) => {
-  if (!game.scored || pts < 100) return;
-  if (!Account.signedIn) { if (Account.clientId) hud.message('SIGN IN TO SAVE SCORES'); return; }   // (multiplayer runs: the server records them)
-  if (game.mode === 'sp') submitScore(pts, peak, dur);
-};
-async function submitScore(pts, peak, dur) {
+// ---------- scored runs -> leaderboard ----------
+// Each run needs a token from the server, taken BEFORE the run (singleplayer: /api/run/start; multiplayer:
+// the server sends one over the WebSocket). The run goes back with its token and its event log, and the
+// server replays the log to check the score (runcheck.js).
+let spToken = null;
+async function fetchSpToken() {
+  spToken = null;
+  if (!Account.signedIn) return;
   const base = await Net.findBase(); if (!base) return;
   try {
-    const r = await fetch(base + '/api/score', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode: 'sp', session: Account.session, score: pts, peak, dur }) });
+    const r = await fetch(base + '/api/run/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session: Account.session }) });
     const j = await r.json();
-    if (j && j.rank) hud.message(`LEADERBOARD #${j.rank}`);
+    if (j.token) spToken = j.token; else if (j.error && r.status === 403) hud.message(j.error.toUpperCase());
+  } catch (e) { /* offline: runs won't count */ }
+}
+// the run's token (and a fresh one asked for straight away for the next run)
+function takeToken(mode) {
+  if (mode === 'mp') { const t = Net.runToken; Net.runToken = null; Net.send({ t: 'runtoken' }); return t; }
+  const t = spToken; fetchSpToken(); return t;
+}
+const runBody = (mode, token, run) => JSON.stringify({ session: Account.session, token, mode, score: run.score, dur: run.dur, dist: run.dist || 0, log: run.log });
+// time played (profile): reported about once a minute while you're driving, signed in, in any mode
+let playT = 0;
+function playBeat(dt) {
+  if (!Account.signedIn || !Net.base || (playT += dt) < 60) return;
+  const s = playT; playT = 0;
+  fetch(Net.base + '/api/playtime', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session: Account.session, s }) }).catch(() => {});
+}
+score.onStreakEnd = run => {
+  if (!game.scored || run.score < 100 || !run.log) return;
+  if (!Account.signedIn) { if (Account.clientId) hud.message('SIGN IN TO SAVE SCORES'); return; }
+  submitRun(game.mode === 'mp' ? 'mp' : 'sp', run);
+};
+async function submitRun(mode, run) {
+  const token = takeToken(mode);
+  if (!token) { hud.message('RUN NOT SAVED (NO CONNECTION TO THE SERVER)'); return; }
+  const base = await Net.findBase(); if (!base) return;
+  try {
+    const r = await fetch(base + '/api/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: runBody(mode, token, run) });
+    const j = await r.json();
+    if (j.rejected) { hud.message('RUN COULD NOT BE VERIFIED', true); console.warn('run rejected:', j.rejected); return; }
+    if (j.error) { console.warn('run not saved:', j.error); return; }
+    if (j.rank) hud.message(`LEADERBOARD #${j.rank}`);
+    for (const id of (j.newTitles || []).concat(j.teamTitles || [])) { const t = Titles.TITLE_BY_ID[id]; if (t) setTimeout(() => hud.message(`NEW TITLE IN YOUR INBOX: ${t.name.toUpperCase()}`), 1600); }
   } catch (e) { /* offline: no leaderboard */ }
 }
+// closing / leaving the page in the middle of a scored run: send it anyway
+addEventListener('pagehide', () => {
+  if (!game.scored || score.score < 100 || !Account.signedIn || !Net.base) return;
+  const mode = game.mode === 'mp' ? 'mp' : 'sp', token = mode === 'mp' ? Net.runToken : spToken, log = score.runEvents();
+  if (!token || !log) return;
+  if (mode === 'mp') Net.runToken = null; else spToken = null;
+  score.log = null;                                    // (sent: if the page comes back, this streak isn't sent again)
+  navigator.sendBeacon(Net.base + '/api/run', new Blob([runBody(mode, token, { score: score.score, dur: score.runTime || 0, dist: score.runDist || 0, log })], { type: 'application/json' }));
+});
+// ...and if the browser brings the page back instead of closing it: a fresh token for the next run
+addEventListener('pageshow', e => {
+  if (!e.persisted || !game.scored) return;
+  if (game.mode === 'mp') { if (!Net.runToken) Net.send({ t: 'runtoken' }); } else if (!spToken) fetchSpToken();
+});
 function quitToTitle() {
   if (game.mode === 'mp') { quitting = true; Net.leave(); quitting = false; }   // (onLeft puts the endless road back)
   else score.reset();
@@ -702,49 +756,181 @@ document.querySelectorAll('[data-lb]').forEach(b => b.addEventListener('click', 
   document.querySelectorAll('[data-lb]').forEach(o => o.classList.toggle('sel', o === b));
   loadLeaderboard();
 }));
+let lbView = 'top';   // 'top' = Top 100, 'me' = Your Position (you, 10 ahead, 10 behind)
+document.querySelectorAll('[data-lbview]').forEach(b => b.addEventListener('click', () => {
+  lbView = b.dataset.lbview;
+  document.querySelectorAll('[data-lbview]').forEach(o => o.classList.toggle('sel', o === b));
+  loadLeaderboard();
+}));
+const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt !== undefined) e.textContent = txt; return e; };
+// a title as a coloured label (rarity colour; neon ones glow)
+function titleEl(id, cls = 'ttl') {
+  const t = Titles.TITLE_BY_ID[id]; if (!t) return null;
+  const e = el('span', cls + ' r-' + t.rarity + (Titles.RARITIES[t.rarity].neon ? ' neon' : ''), t.name);
+  e.title = Titles.desc(t, Settings.units);
+  return e;
+}
+// driver name: click it to open their profile
+function nameCell(cls, e) {
+  const n = el('span', cls), who = el('span', 'who link', e.name);
+  who.title = 'View profile'; who.onclick = () => openProfile(Account.signedIn && e.name === Account.user.name ? null : e.name);
+  n.append(who); return n;
+}
 let lbReq = 0;   // only the newest load draws (two quick loads would otherwise both add their rows)
 async function loadLeaderboard() {
-  const mode = lbTab, list = $id('lbList'), note = $id('lbNote'), my = ++lbReq;
+  const mode = lbTab, view = lbView, list = $id('lbList'), note = $id('lbNote'), my = ++lbReq;
   note.textContent = 'Loading…'; list.innerHTML = '';
   const base = await Net.findBase();
   if (!base) { note.textContent = 'Leaderboards live on the online server: open the game from its website link.'; return; }
+  if (view === 'me' && !Account.signedIn) { note.textContent = 'Sign in with Google to see where you rank.'; return; }
   let j;
-  try { j = await (await fetch(base + '/api/leaderboard?mode=' + mode, { cache: 'no-store' })).json(); }
-  catch (e) { note.textContent = 'Could not load the leaderboard. Check your internet connection.'; return; }
-  if (mode !== lbTab || my !== lbReq) return;
+  try {
+    const r = await fetch(base + (view === 'me' ? '/api/leaderboard/me?mode=' : '/api/leaderboard?mode=') + mode,
+      { cache: 'no-store', headers: view === 'me' ? { Authorization: 'Bearer ' + Account.session } : {} });
+    j = await r.json();
+  } catch (e) { note.textContent = 'Could not load the leaderboard. Check your internet connection.'; return; }
+  if (mode !== lbTab || view !== lbView || my !== lbReq) return;
+  if (j.error) { note.textContent = j.error; return; }
   const rows = j.list || [];
-  note.textContent = (mode === 'sp' ? 'Best scored singleplayer drive of each driver (60% traffic).' : 'Best drive of each driver on public and scored servers.')
-    + (j.persistent ? '' : ' (Not saved permanently yet: they reset when the server restarts.)')
-    + (j.accounts ? (Account.signedIn ? '' : ' Sign in with Google to get on it.') : ' (Sign-in isn\'t set up on this server yet, so no drives can be saved.)');
+  const what = mode === 'sp' ? 'Best scored singleplayer drive of each driver (60% traffic).' : 'Best drive of each driver on public and scored servers.';
+  if (view === 'me') note.textContent = j.rank ? `You're #${j.rank} of ${j.total} drivers. ${what}` : `You're not on this leaderboard yet: finish a scored run of at least 100 points. ${what}`;
+  else note.textContent = what + (j.accounts ? (Account.signedIn ? '' : ' Sign in with Google to get on it.') : ' (Sign-in isn\'t set up on this server yet, so no drives can be saved.)');
   // when the drive was set, e.g. "Oct 7" (with the year if it's from an earlier year)
   const time = t => { if (!t) return '—'; const d = new Date(t); return d.toLocaleDateString(undefined, d.getFullYear() === new Date().getFullYear() ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' }); };
-  const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt !== undefined) e.textContent = txt; return e; };
   const me = Account.signedIn ? Account.user.name : null;
-  // podium: 2nd | 1st | 3rd
-  if (rows.length) {
+  // podium: 2nd | 1st | 3rd (Top 100 only)
+  const podium = view === 'top' ? rows.slice(0, 3) : [];
+  if (podium.length) {
     const pod = el('div', 'podium');
     for (const i of [1, 0, 2]) {
       const e = rows[i], p = el('div', 'pod p' + (i + 1) + (e ? '' : ' empty') + (e && e.name === me ? ' me' : ''));
-      if (e) { p.append(el('div', 'pname', e.name), el('div', 'pscore', U.fmt(e.score)), el('div', 'ptime', time(e.t))); }
+      if (e) p.append(nameCell('pname', e), el('div', 'pscore', U.fmt(e.score)), el('div', 'ptime', time(e.t)));
       else p.append(el('div', 'pname', '—'));
       const block = el('div', 'block'); block.append(el('span', '', String(i + 1))); p.appendChild(block);
       pod.appendChild(p);
     }
     list.appendChild(pod);
   }
-  // everyone else
-  if (rows.length > 3) {
+  // everyone else (Your Position: everyone in the list, you highlighted)
+  const rest = rows.slice(podium.length);
+  if (rest.length) {
     const tbl = el('div', 'lbTable'), head = el('div', 'lbRow head');
     head.append(el('span', 'rk', '#'), el('span', 'nm', 'DRIVER'), el('span', 'sc', 'SCORE'), el('span', 'tm', 'TIME'));
     tbl.appendChild(head);
-    rows.slice(3).forEach((e, k) => {
+    for (const e of rest) {
       const row = el('div', 'lbRow' + (e.name === me ? ' me' : ''));
-      row.append(el('span', 'rk', String(k + 4)), el('span', 'nm', e.name), el('span', 'sc', U.fmt(e.score)), el('span', 'tm', time(e.t)));
+      row.append(el('span', 'rk', String(e.rank)), nameCell('nm', e), el('span', 'sc', U.fmt(e.score)), el('span', 'tm', time(e.t)));
       tbl.appendChild(row);
-    });
+    }
     list.appendChild(tbl);
+    if (view === 'me') { const mine = tbl.querySelector('.me'); if (mine) requestAnimationFrame(() => mine.scrollIntoView({ block: 'center' })); }
   }
-  if (!rows.length) list.appendChild(el('div', 'lbEmpty', 'No drives yet. Be the first on the podium!'));
+  if (!rows.length && view === 'top') list.appendChild(el('div', 'lbEmpty', 'No drives yet. Be the first on the podium!'));
+}
+
+// ---------- profile ----------
+let profBackTo = 'scrTitle', profData = null;
+$id('profileCard').onclick = () => openProfile(null);
+$id('profBack').onclick = () => show(profBackTo);
+$id('profPickTitle').onclick = () => { show('scrTitles'); renderTitles(); };
+// name = another driver's profile (null = yours)
+async function openProfile(name) {
+  if (screen !== 'scrProfile') profBackTo = screen;
+  show('scrProfile');
+  const note = $id('profNote'), body = $id('profBody'), my = name ? null : true;
+  $id('profHead').textContent = name ? 'DRIVER PROFILE' : 'YOUR PROFILE';
+  body.classList.add('hidden'); note.textContent = 'Loading…';
+  const base = await Net.findBase();
+  if (!base) { note.textContent = 'Profiles live on the online server: open the game from its website link.'; return; }
+  if (my && !Account.signedIn) { note.textContent = 'Sign in with Google on the main menu to get your profile, stats and titles.'; return; }
+  let p;
+  try {
+    const r = await fetch(base + '/api/profile' + (name ? '?name=' + encodeURIComponent(name) : ''), { cache: 'no-store', headers: my ? { Authorization: 'Bearer ' + Account.session } : {} });
+    p = await r.json();
+  } catch (e) { note.textContent = 'Could not reach the server.'; return; }
+  if (screen !== 'scrProfile') return;
+  if (p.error) { note.textContent = p.error; return; }
+  note.textContent = '';
+  profData = p;
+  // the card: name, equipped title (and, on your own, the button to change it)
+  $id('profName').textContent = p.name;
+  showProfTitle();
+  $id('profPickTitle').classList.toggle('hidden', !p.self);
+  // stats
+  const mph = Settings.units !== 'kmh';
+  const hm = s => { const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? `${h}h ${m}m` : `${m}m`; };
+  const pts = n => n ? U.fmt(n) : '—';
+  // top row: this season's best runs with their leaderboard spot; then all-time bests; date joined bottom right
+  const tiles = [
+    ['Season best · singleplayer', pts(p.sp.season), p.sp.rank ? '#' + p.sp.rank : ''],
+    ['Season best · multiplayer', pts(p.mp.season), p.mp.rank ? '#' + p.mp.rank : ''],
+    ['Best singleplayer run', pts(p.sp.best), ''],
+    ['Best multiplayer run', pts(p.mp.best), ''],
+    ['Time played', hm(p.playS), ''],
+    ['Total near misses', U.fmt(p.near), ''],
+    ['Total distance', (p.distM / (mph ? 1609.34 : 1000)).toFixed(p.distM > 1e5 ? 0 : 1) + (mph ? ' mi' : ' km'), ''],
+    ['Date joined', p.joined ? new Date(p.joined).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—', ''],
+  ];
+  const st = $id('profStats'); st.innerHTML = '';
+  for (const [k, v, sub] of tiles) { const d = el('div', 'stat'); d.append(el('span', 'k', k), el('span', 'v', v)); if (sub) d.append(el('span', 's rank', sub)); st.appendChild(d); }
+  body.classList.remove('hidden');
+}
+function showProfTitle() {
+  const tb = $id('profTitle'); tb.innerHTML = '';
+  const t = titleEl(profData && profData.title);
+  tb.append(t || el('span', 'ttl none', profData && profData.self ? 'No title equipped' : 'No title'));
+}
+// ---------- select title: sort by rarity / name; "Owned" keeps your unlocked titles on top (on by default) ----------
+const titleSort = $id('titleSort'), titleOwned = $id('titleOwned');
+titleSort.value = ['rarityAsc', 'rarityDesc', 'az', 'za'].includes(Settings.titleSort) ? Settings.titleSort : 'rarityAsc';
+titleOwned.checked = Settings.titleOwned !== false;
+titleSort.onchange = () => { Settings.titleSort = titleSort.value; saveSettings(); renderTitles(); };
+// "?": every rarity name in its own colour, highest first
+{
+  const pop = $id('rarityPop'), btn = $id('rarityBtn'), list = $id('rarityList');
+  for (const id of Titles.RARITY_ORDER.slice().reverse()) {
+    const r = Titles.RARITIES[id];
+    list.append(el('span', 'ttl r-' + id + (r.neon ? ' neon' : ''), r.name));
+  }
+  const toggle = on => { pop.classList.toggle('hidden', !on); btn.classList.toggle('sel', on); };
+  btn.onclick = e => { e.stopPropagation(); toggle(pop.classList.contains('hidden')); };
+  document.addEventListener('click', e => { if (!pop.contains(e.target)) toggle(false); });
+}
+titleOwned.onchange = () => { Settings.titleOwned = titleOwned.checked; saveSettings(); renderTitles(); };
+function renderTitles() {
+  const p = profData, list = $id('titleList'), err = $id('titleErr');
+  list.innerHTML = ''; err.textContent = '';
+  if (!p || !p.self) return;
+  const owned = new Set(p.owned || []);
+  const pick = async id => {
+    err.textContent = '';
+    try {
+      const r = await fetch(Account.base + '/api/title', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session: Account.session, title: id }) });
+      const k = await r.json();
+      if (!r.ok) { err.textContent = k.error || 'Could not change your title.'; return; }
+      Account.user.title = p.title = k.equipped;
+      showProfTitle(); show('scrProfile');            // (back to your profile, wearing it)
+    } catch (e) { err.textContent = 'Could not reach the server.'; }
+  };
+  const rk = t => Titles.RARITY_ORDER.indexOf(t.rarity);
+  const by = {
+    rarityAsc: (a, b) => rk(a) - rk(b) || a.name.localeCompare(b.name),
+    rarityDesc: (a, b) => rk(b) - rk(a) || a.name.localeCompare(b.name),
+    az: (a, b) => a.name.localeCompare(b.name),
+    za: (a, b) => b.name.localeCompare(a.name),
+  }[titleSort.value];
+  // (handed-out titles you don't have aren't listed: there's no way to unlock them - except ones marked `show`)
+  const all = Titles.TITLES.filter(t => owned.has(t.id) || t.how !== 'grant' || t.show)
+    .sort((a, b) => (titleOwned.checked ? owned.has(b.id) - owned.has(a.id) : 0) || by(a, b));
+  const none = el('button', 'titleOpt' + (p.title ? '' : ' sel')); none.append(el('span', 'ttl none', 'No title'), el('span', 'desc', 'Show only your name'));
+  none.onclick = () => pick(null); list.appendChild(none);
+  for (const t of all) {
+    const have = owned.has(t.id), b = el('button', 'titleOpt' + (have ? '' : ' locked') + (p.title === t.id ? ' sel' : ''));
+    const n = (p.owners && p.owners[t.id]) || 0;            // how many accounts own it
+    b.append(titleEl(t.id), el('span', 'desc', (have ? '' : '🔒 ') + Titles.desc(t, Settings.units)), el('span', 'owners', `${U.fmt(n)} ${n === 1 ? 'owner' : 'owners'}`));
+    if (have) b.onclick = () => pick(t.id); else b.disabled = true;
+    list.appendChild(b);
+  }
 }
 
 // ---------- multiplayer (dedicated server: public servers + private rooms with codes) ----------
@@ -829,6 +1015,10 @@ Net.onRoster = () => {
   const list = mpEl('mpList'); list.innerHTML = '';
   for (const p of Net.roster(0)) {
     const sp = document.createElement('span'); sp.style.setProperty('--c', p.color); sp.textContent = p.name + (p.you ? ' (you)' : '');
+    if (p.you || p.acct) {                             // (signed-in drivers only: a guest's name could be anyone's)
+      sp.className = 'link'; sp.title = 'View profile';
+      sp.onclick = () => openProfile(p.you ? null : p.name);
+    }
     list.appendChild(sp);
   }
 };
@@ -850,7 +1040,6 @@ Net.onJoined = (room, slot) => {
   if (room.scored && Account.clientId && !Account.signedIn) setTimeout(() => hud.message('NOT SIGNED IN · RUNS WON\'T BE SAVED'), 1800);
 };
 // left the server (or lost it): endless road again, back to the menu
-Net.onRank = r => hud.message(`LEADERBOARD #${r}`);
 // AFK on a server: no input for 20 s out on the road (60 s parked in the start lot) and you're removed,
 // so an empty car doesn't sit in everyone's traffic. A warning shows 10 s before.
 const AFK_ROAD = 20, AFK_LOT = 60;
@@ -1326,7 +1515,7 @@ function driveStep(dt, ctl, paused) {
   const misses = traffic.nearMisses(proxy, kmh); // always run so pass tracking stays correct
   if (paused) { score.prox = 1; score.update(dt); return; }   // (no points while the menu is open)
   // multiplayer: driving close to another player multiplies the points you earn
-  score.prox = proximity(kmh);
+  score.prox = Math.max(1, Math.round(proximity(kmh) * 10) / 10);   // (in steps of 0.1, as shown: the run check replays it exactly)
   const pe = $id('prox');
   if (pe.classList.contains('on') !== score.prox > 1) pe.classList.toggle('on', score.prox > 1);
   if (score.prox > 1) hud.set('prox', pe.firstElementChild, '×' + score.prox.toFixed(1));
@@ -1345,6 +1534,8 @@ function driveStep(dt, ctl, paused) {
   if (shoulderT > 3) { shoulderT = 0; backOnRoad(); hud.shoulderWarn(false, 0); return; }
   hud.shoulderWarn(onShoulder, shoulderLost);
   score.update(dt);
+  if (score.score >= 1) score.runDist = (score.runDist || 0) + Math.abs(car.u) * dt;   // (distance this streak: a profile stat)
+  playBeat(dt);
 
   // ---- floating origin: keep coordinates small for precision ----
   // (the loop circuit stays within a few km of the centre, so it never needs this)

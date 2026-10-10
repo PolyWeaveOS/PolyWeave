@@ -46,12 +46,12 @@ async function verifyGoogle(credential) {
 }
 async function login(credential) {
   const sub = await verifyGoogle(credential);
-  let u = db.users[sub];
-  if (!u) { u = db.users[sub] = { id: sub, name: null, created: Date.now() }; }
+  let u = db.users[sub], isNew = false;
+  if (!u) { u = db.users[sub] = { id: sub, name: null, created: Date.now() }; isNew = true; }
   const token = crypto.randomBytes(32).toString('hex');
   db.sessions[token] = { uid: sub, exp: Date.now() + SESSION_DAYS * 86400 * 1000 };
   save();
-  return { token, user: u };
+  return { token, user: u, isNew };
 }
 function bySession(token) {
   if (typeof token !== 'string' || !token) return null;
@@ -72,5 +72,6 @@ function setName(user, name) {
   return null;
 }
 const nameOf = uid => (db.users[uid] && db.users[uid].name) || null;
+const byName = name => { const low = String(name || '').toLowerCase(); return Object.values(db.users).find(u => u.name && u.name.toLowerCase() === low) || null; };
 
-module.exports = { enabled: () => !!CLIENT_ID, clientId: () => CLIENT_ID, login, bySession, logout, setName, nameOf };
+module.exports = { enabled: () => !!CLIENT_ID, clientId: () => CLIENT_ID, login, bySession, logout, setName, nameOf, byName };

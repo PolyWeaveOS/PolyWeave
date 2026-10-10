@@ -6,10 +6,42 @@ const $ = id => document.getElementById(id);
 // near miss / close call points vs your speed (km/h): x1/4 at 100, x1 at 175, x2 at 230
 const NEAR_MISS_SPEED = mcurve([[60, 0.08], [100, 0.25], [130, 0.45], [150, 0.66], [175, 1], [200, 1.4], [230, 2], [260, 2.6], [300, 3.3]]);
 
+const MULT_CAP = 100;                     // near-miss multiplier never goes above x100
+
+// Every scoring event of the current streak, in order, so the server can replay the run and check
+// its score (runcheck.js). Times are seconds since the streak started.
+//   [0, t, gap, kmh, pts] near miss · [1, t, dur, base] speed points · [2, t, prox] proximity bonus
+//   [3, t, dur] shoulder · [4, t, mult] multiplier drained
+const r4 = x => Math.round(x * 1e4) / 1e4;   // (log numbers to 4 decimals: small enough to send, far inside the check's tolerance)
+class RunLog {
+  constructor() { this.ev = []; this.mult = 1; this.prox = 1; this.cDur = 0; this.cBase = 0; this.cEnd = 0; this.sh = 0; this.now = 0; }
+  flush() {                                  // close the open speed chunk / shoulder stretch
+    if (this.cDur > 0) {
+      const t = Math.max(this.now, this.cEnd + this.cDur);
+      this.ev.push([1, r4(t), r4(this.cDur), r4(this.cBase)]);
+      this.cEnd = t; this.cDur = 0; this.cBase = 0;
+    }
+    if (this.sh > 0) { this.ev.push([3, r4(this.now), r4(this.sh)]); this.sh = 0; }
+  }
+  // the multiplier / proximity bonus about to be used: log any change first
+  state(mult, prox) {
+    if (mult === this.mult && prox === this.prox) return;
+    this.flush();
+    if (mult < this.mult) this.ev.push([4, r4(this.now), mult]);   // (exact: the next near miss rounds it to 0.1)
+    if (prox !== this.prox) this.ev.push([2, r4(this.now), prox]);
+    this.mult = mult; this.prox = prox;
+  }
+  near(gap, kmh, pts, newMult) { this.flush(); this.ev.push([0, r4(this.now), r4(gap), r4(kmh), pts]); this.mult = newMult; }
+  speed(base, dt) { if (this.sh > 0) this.flush(); this.cBase += base; this.cDur += dt; if (this.cDur >= 1) this.flush(); }
+  shoulder(dt) { if (this.cDur > 0) this.flush(); this.sh += dt; if (this.sh >= 3) this.flush(); }
+  finish() { this.flush(); return this.ev; }
+}
+
 class Score {
   constructor(hud) {
     this.hud = hud;
     this.score = 0; this.pot = 0; this.mult = 1; this.timer = 0;
+    this.log = null;
     this.useBest('sp');
     this.COMBO_TIME = 5.5;
   }
@@ -18,7 +50,7 @@ class Score {
   add(pts) {
     const v = pts * this.mult * (this.prox || 1);     // prox: multiplayer proximity bonus (driving close to another player)
     if (!Number.isFinite(v)) return 0;          // never let a bad value poison the score
-    if (this.score < 1) { this.bestBefore = this.best; this.peakMult = 1; this.runTime = 0; }   // a new streak starts
+    if (this.score < 1) { this.bestBefore = this.best; this.peakMult = 1; this.runTime = 0; this.runDist = 0; this.log = new RunLog(); }   // a new streak starts
     this.score += v; this.pot += v;
     this.peakMult = Math.max(this.peakMult || 1, this.mult);
     this.saveBest();
@@ -28,8 +60,10 @@ class Score {
     const close = U.clamp(1 - gap / 1.15, 0, 1);
     // your speed scales the points: x1 at 175 km/h, x2 at 230, x1/4 at 100 (smooth in between)
     const pts = Math.round((90 + 460 * close * close) * NEAR_MISS_SPEED(kmh) * 1.25);
-    this.mult = +(this.mult + 0.1).toFixed(1); // no cap (NoHesi style)
+    if (this.log) { this.log.now = this.runTime || 0; this.log.state(this.mult, this.prox || 1); }
+    this.mult = Math.min(MULT_CAP, +(this.mult + 0.1).toFixed(1));
     const got = Math.round(this.add(pts));
+    if (this.log) { this.log.now = this.runTime || 0; this.log.near(gap, kmh, pts, this.mult); }
     this.timer = 1;
     this.hud.message(gap < 0.3 ? `CLOSE CALL +${U.fmt(got)}` : `NEAR MISS +${U.fmt(got)}`);
     this.hud.potBump();
@@ -38,7 +72,10 @@ class Score {
     // below 130 km/h the multiplier bleeds away (faster the slower you go), never under x1
     if (kmh < 130 && this.mult > 1) this.mult = Math.max(1, this.mult - (0.25 + (130 - kmh) / 80) * dt);
     if (kmh < 130) return;
-    this.add((kmh - 130) * 0.55 * dt);
+    const base = (kmh - 130) * 0.55 * dt;
+    if (this.log) { this.log.now = this.runTime || 0; this.log.state(this.mult, this.prox || 1); }
+    this.add(base);
+    if (this.log) { this.log.now = this.runTime || 0; this.log.state(this.mult, this.prox || 1); this.log.speed(base, dt); }
     if (this.timer <= 0) this.timer = 1;
   }
   update(dt) {
@@ -58,7 +95,9 @@ class Score {
   shoulder(dt) {
     const k = Math.pow(0.9, dt), before = this.score;
     this.score *= k; this.pot *= k;
-    if (this.score < 1) this.score = 0;
+    if (this.log && before >= 1) { this.log.now = this.runTime || 0; this.log.shoulder(dt); }
+    // all points gone: that streak is over (the next one starts fresh, at x1)
+    if (this.score < 1) { if (before >= 1) { this.mult = 1; this.log = null; } this.score = 0; }
     if (this.pot < 1 && this.pot > 0) { this.pot = 0; this.timer = 0; this.hud.potHide(); }
     return before - this.score;
   }
@@ -66,19 +105,22 @@ class Score {
   endStreak() {
     if (this.score < 1) return;
     this.hud.showResult(this.score, this.peakMult || this.mult, this.score > (this.bestBefore ?? 0) + 0.5);
-    if (this.onStreakEnd) this.onStreakEnd(Math.round(this.score), this.peakMult || this.mult, Math.round(this.runTime || 0));   // (scored runs -> leaderboard)
+    // (scored runs -> leaderboard, with the event log so the server can check the score)
+    if (this.onStreakEnd) this.onStreakEnd({ score: this.score, peak: this.peakMult || this.mult, dur: this.runTime || 0, dist: this.runDist || 0, log: this.runEvents() });
   }
+  // the current streak's scoring events, closed off (null when no streak is going)
+  runEvents() { if (!this.log || this.score < 1) return null; this.log.now = this.runTime || 0; return this.log.finish().slice(); }
   crash() { this.lose(this.score > 0 || this.pot > 1 ? 'CRASH, STREAK LOST' : 'CRASH'); }
   // the streak ends (crash, too long on the shoulder): show its result, back to zero
   lose(msg) {
     this.endStreak();
-    this.score = 0; this.pot = 0; this.mult = 1; this.timer = 0;
+    this.score = 0; this.pot = 0; this.mult = 1; this.timer = 0; this.log = null;
     this.hud.message(msg, true);
     this.hud.potHide();
   }
   reset() {
     this.endStreak();
-    this.score = 0; this.pot = 0; this.mult = 1; this.timer = 0;
+    this.score = 0; this.pot = 0; this.mult = 1; this.timer = 0; this.log = null;
     this.hud.potHide(); this.hud.shownScore = 0; this.hud.el.msgs.innerHTML = '';
   }
   // separate personal bests: singleplayer (kept under the original key) and multiplayer

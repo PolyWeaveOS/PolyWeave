@@ -47,7 +47,7 @@ const Account = {
       const r = await fetch(this.base + '/api/auth/google', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ credential: resp.credential }) });
       const j = await r.json();
       if (!r.ok) { this.msg(j.error || 'Sign-in failed.'); return; }
-      this.session = j.session; this.user = { name: j.name };
+      this.session = j.session; this.user = { name: j.name, title: j.title || null };
       try { localStorage.setItem('pw_session', j.session); } catch (e) { /* ignore */ }
       this.changed();
       if (!j.name && this.onNeedName) this.onNeedName();      // first time: pick a driver name
@@ -59,7 +59,7 @@ const Account = {
       const r = await fetch(this.base + '/api/account/name', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session: this.session, name }) });
       const j = await r.json();
       if (!r.ok) return j.error || 'Could not save that name.';
-      this.user = { name: j.name }; this.changed();
+      this.user = Object.assign({}, this.user, { name: j.name }); this.changed();
       return null;
     } catch (e) { return 'Could not reach the server.'; }
   },

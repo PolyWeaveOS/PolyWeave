@@ -80,8 +80,12 @@ const Net = {
         if (this.ws !== ws) return;
         this.ws = null;
         if (this.room) { this.left(); this.status('Disconnected from the server. Join again to keep playing together.', 'err'); }
+        if (this.onClosed) this.onClosed();             // (signed in: social.js reconnects for friends / messages)
       };
       this.ws = ws;
+      // signed in: online for friends (messages, requests and activity arrive over this connection)
+      if (typeof Account !== 'undefined' && Account.session) this.send({ t: 'auth', session: Account.session });
+      if (this.onOpened) this.onOpened();
       return ws;
     })();
     this._conn.finally(() => (this._conn = null)).catch(() => {});
@@ -141,7 +145,7 @@ const Net = {
     else if (m.t === 'hello') this.myId = m.id;
     else if (m.t === 'joined') {
       this.clearRoom();
-      this.myId = m.id;
+      this.myId = m.id; this.runToken = null;      // (the server sends this server's token next)
       // official: one of the game's own servers; listed: a player's public server (also joinable by code)
       this.room = { id: m.room, name: m.name, pub: !!(m.official ?? m.pub), official: !!(m.official ?? m.pub), listed: !!m.listed, code: m.code || '',
         scored: !!m.scored, density: Number.isFinite(m.density) ? m.density : 0.6, theme: m.theme || 'grass', tod: m.tod || 'day' };
@@ -150,22 +154,24 @@ const Net = {
       this.changed();
       if (this.onJoined) this.onJoined(this.room, m.slot || 0);
     } else if (m.t === 'error') this.status(m.msg, 'err');
-    else if (m.t === 'rank') { if (this.onRank) this.onRank(m.rank); }
+    else if (m.t === 'runtoken') this.runToken = typeof m.token === 'string' ? m.token : null;   // (lets my next scored run count)
+    else if (m.t === 'presence' || m.t === 'msg' || m.t === 'social' || m.t === 'inbox') { if (this.onSocial) this.onSocial(m); }   // (friends: social.js)
     else if (m.t === 'roster') {
       const keep = new Set();
-      for (const r of m.list) { if (r.id === this.myId) continue; keep.add(r.id); this.player(r.id, r.name, r.color); }
+      for (const r of m.list) { if (r.id === this.myId) continue; keep.add(r.id); this.player(r.id, r.name, r.color, r.title).acct = !!r.acct; }
       for (const [id, p] of this.players) if (!keep.has(id)) { this.removeVis(p); this.players.delete(id); }
       this.changed();
     }
   },
 
   // ---------------------------------------------------------------- friends' cars
-  player(id, name, color) {
+  player(id, name, color, title) {
     name = String(name || 'Driver').slice(0, 16);
     if (!/^#[0-9a-f]{6}$/i.test(color)) color = '#a6b0b8';   // only plain colours from other players
+    title = Titles.TITLE_BY_ID[title] ? title : null;
     let p = this.players.get(id);
     if (!p) { p = { id, name, color, buf: [] }; this.players.set(id, p); }
-    if (p.name !== name || p.color !== color || !p.g) { p.name = name; p.color = color; this.removeVis(p); this.makeVis(p); }
+    if (p.name !== name || p.color !== color || p.title !== title || !p.g) { p.name = name; p.color = color; p.title = title; this.removeVis(p); this.makeVis(p); }
     return p;
   },
   // Each update carries the sender's clock (t). The gap between their clock and ours is the network
@@ -191,17 +197,36 @@ const Net = {
     p.vis = makeVehicle('m4', paintMat(p.color || '#a6b0b8'));
     p.vis.root.position.z = CG_F;                 // body sits behind the centre of gravity, like yours
     p.g.add(p.vis.root);
-    // floating name tag
-    const c = document.createElement('canvas'); c.width = 256; c.height = 64;
+    // floating name tag (with their title underneath, in its rarity colour; neon ones glow)
+    const t = p.title && Titles.TITLE_BY_ID[p.title], rar = t && Titles.RARITIES[t.rarity];
+    const c = document.createElement('canvas'); c.width = 256; c.height = t ? 96 : 64;
     const g = c.getContext('2d');
-    g.font = '800 30px Segoe UI, Arial'; g.textAlign = 'center'; g.textBaseline = 'middle';
-    const w = Math.min(250, g.measureText(p.name).width + 34);
-    g.fillStyle = 'rgba(14,18,26,0.6)'; g.fillRect(128 - w / 2, 10, w, 44);
-    g.fillStyle = p.color || '#fff'; g.fillRect(128 - w / 2, 10, 6, 44);
-    g.fillStyle = '#fff'; g.fillText(p.name, 131, 33);
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = '800 30px Segoe UI, Arial';
+    let w = g.measureText(p.name).width;
+    if (t) { g.font = '800 19px Segoe UI, Arial'; w = Math.max(w, g.measureText(t.name.toUpperCase()).width); }
+    w = Math.min(250, w + 34);
+    const h = t ? 74 : 44;
+    g.fillStyle = 'rgba(14,18,26,0.6)'; g.fillRect(128 - w / 2, 10, w, h);
+    g.fillStyle = p.color || '#fff'; g.fillRect(128 - w / 2, 10, 6, h);
+    g.font = '800 30px Segoe UI, Arial'; g.fillStyle = '#fff'; g.fillText(p.name, 131, 33);
+    if (t) {
+      g.font = '800 19px Segoe UI, Arial'; g.fillStyle = rar.color;
+      const tw = g.measureText(t.name.toUpperCase()).width, grad = stops => {
+        const gr = g.createLinearGradient(131 - tw / 2, 0, 131 + tw / 2, 0); stops.forEach((c, i) => gr.addColorStop(i / (stops.length - 1), c)); return gr;
+      };
+      if (t.rarity === 'epic') g.fillStyle = grad(['#c08cff', '#ff8cd2']);   // (the purple-pink mix, like in the menus)
+      if (rar.neon) {                               // glowing: a soft halo, then a crisp bright core on top (readable)
+        const exotic = t.rarity === 'exotic';         // (deep crimson: a brighter, wider halo so it glows like the rest)
+        g.save(); g.shadowColor = exotic ? '#ff2350' : rar.color; g.shadowBlur = exotic ? 16 : 12; g.globalAlpha = rar.pearl ? 0.6 : exotic ? 0.9 : 0.75; g.fillText(t.name.toUpperCase(), 131, 64); g.restore();
+        const c = new THREE.Color(rar.color).lerp(new THREE.Color('#ffffff'), t.rarity === 'exotic' ? 0.12 : 0.28); g.fillStyle = '#' + c.getHexString();   // (crimson stays deep)
+        if (rar.pearl) g.fillStyle = grad(['#fbfaf6', '#f8cde1', '#c6e6fb', '#fbfaf6', '#d9cbfb', '#c9f2d8', '#fad9bd']);   // (pearl: soft colours)
+      }
+      g.fillText(t.name.toUpperCase(), 131, 64);
+    }
     const tex = new THREE.CanvasTexture(c); tex.encoding = THREE.sRGBEncoding;
     const tag = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthWrite: false, transparent: true, fog: false }));
-    tag.scale.set(2.4, 0.6, 1); tag.position.y = 2.05;
+    tag.scale.set(2.4, t ? 0.9 : 0.6, 1); tag.position.y = t ? 2.2 : 2.05;
     p.g.add(tag);
     p.g.visible = false;
     this.scene.add(p.g);
@@ -314,7 +339,7 @@ const Net = {
   roster(myScore) {
     this.myBest = Math.max(this.myBest || 0, Math.round(myScore));
     const rows = [{ name: this.me.name, you: true, score: myScore, best: this.myBest, color: this.me.color }];
-    for (const p of this.players.values()) rows.push({ name: p.name, score: p.last ? p.last.score || 0 : 0, best: p.last ? p.last.best || 0 : 0, color: p.color, wait: !p.last });
+    for (const p of this.players.values()) rows.push({ name: p.name, score: p.last ? p.last.score || 0 : 0, best: p.last ? p.last.best || 0 : 0, color: p.color, wait: !p.last, acct: !!p.acct });
     return rows;
   },
 };
