@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const { WebSocketServer } = require('ws');
 const { RingTraffic, nowS } = require('./trafficserver');
+const NetCodec = require('./js/netcodec');   // (binary versions of the frequent messages: snapshots + positions)
 const DB = require('./db');
 const RunCheck = require('./runcheck');
 const Accounts = require('./accounts');
@@ -89,13 +90,21 @@ function trackRun(p, st) {
   const dt = st.t - prev.t;                            // (sender's clock)
   if (!(dt > 0 && dt < 5)) return;
   const T = p.room.traffic, ds = Math.abs(T ? T.wd(T.w(st.s), T.w(prev.s)) : st.s - prev.s);
-  if (ds > 120) return;                                // jumped (back to the lot, restart): not driving
+  // jumped (back to the lot, restart): not driving. Anything a car could actually cover in that time counts,
+  // so a lag spike (a second or two without updates at top speed) doesn't lose distance
+  if (ds > dt * 95 + 30) return;
   // (distance, not speed: a slow computer's game clock runs behind real time, so speeds worked out from
   // the update times would come out too low)
   R.dist += ds;
+  // near another player = the same test the game uses for the proximity bonus (js/main.js proximity(): the gap
+  // between the two cars' bodies within 25 m, anywhere across the road), with a little room for lag
+  const len = p.ext.front - p.ext.rear;
   for (const o of p.room.players.values()) {
     if (o === p || !o.st) continue;
-    if (Math.abs(T ? T.wd(T.w(o.st.s), T.w(st.s)) : o.st.s - st.s) < 35 && Math.abs(o.st.d - st.d) < 12) { R.nearS += dt; break; }
+    const ds2 = Math.abs(T ? T.wd(T.w(o.st.s), T.w(st.s)) : o.st.s - st.s);
+    if (ds2 > 48) continue;
+    const gap = Math.hypot(Math.max(0, ds2 - len), Math.max(0, Math.abs(o.st.d - st.d) - 2 * p.ext.hw));
+    if (gap < 30) { R.nearS += dt; break; }
   }
 }
 setInterval(() => { const t = Date.now(); for (const [n, R] of mpRuns) if (t - R.t0 > 48 * 3600e3) mpRuns.delete(n); }, 600e3).unref();
@@ -167,7 +176,7 @@ function cleanState(st) {
     rtt: Math.round(num(st.rtt, 0, 2000)),   // sender's round trip to the server (ms): friends use it to draw them where they are NOW
     // wrecks the sender is simulating right now (cars they hit): [id, s, d, ry]. Friends draw these straight from
     // here, on the same clock as the sender's own car, so the crash looks the same for everyone
-    w: Array.isArray(st.w) ? st.w.slice(0, 6).filter(e => Array.isArray(e) && Number.isInteger(e[0]) && e.slice(1, 4).every(Number.isFinite))
+    w: Array.isArray(st.w) ? st.w.slice(0, 8).filter(e => Array.isArray(e) && Number.isInteger(e[0]) && e.slice(1, 4).every(Number.isFinite))
       .map(e => [e[0], num(e[1], -1e9, 1e9), num(e[2], -60, 60), num(e[3], -7, 7), num(e[4], -60, 90), num(e[5], -15, 15), num(e[6], -8, 8)]) : undefined,
   };
 }
@@ -176,6 +185,28 @@ function cleanState(st) {
 function roster(room) { return [...room.players.values()].map(p => ({ id: p.id, name: p.name, color: p.color, title: p.title || null, acct: !!(p.account && p.account.name) })); }
 function send(ws, m) { if (ws.readyState === 1) ws.send(JSON.stringify(m)); }
 function broadcast(room, m, except) { const s = JSON.stringify(m); for (const p of room.players.values()) if (p !== except && p.ws.readyState === 1) p.ws.send(s); }
+// a player's position to everyone else in the room: binary for today's game, JSON for a page loaded before
+// the update (each version is made once, however many players get it)
+function relayState(room, p, st) {
+  let bin = null, txt = null;
+  for (const q of room.players.values()) {
+    if (q === p || q.ws.readyState !== 1) continue;
+    if (q.bin) q.ws.send(bin || (bin = NetCodec.encodeRelay(p.id, st)));
+    else q.ws.send(txt || (txt = JSON.stringify({ t: 'st', id: p.id, st })));
+  }
+}
+// The wrecks a player's game is simulating (cars they hit) come with their position: the shared traffic
+// puts each wreck where they say. Only the first player to hit a car moves it; anyone else is told so
+// once (their game then leaves that car to the owner instead of reporting it too).
+function claimWrecks(p, list) {
+  const T = p.room && p.room.traffic; if (!T || !p.agent || !list) return;
+  for (const [id, s, d, ry] of list) {
+    const c = T.byId.get(id); if (!c) continue;
+    if (T.claim(c, p.agent, s, num(d, -30, 30), num(ry, -7, 7))) { if (p.denied) p.denied.delete(id); continue; }
+    p.denied = p.denied || new Set();
+    if (!p.denied.has(id)) { p.denied.add(id); send(p.ws, { t: 'wreckOwner', id }); if (p.denied.size > 200) p.denied.clear(); }
+  }
+}
 
 function joinRoom(p, room) {
   leaveRoom(p);
@@ -188,7 +219,7 @@ function joinRoom(p, room) {
   if (!room.traffic) room.traffic = new RingTraffic();
   p.title = titleOf(p);
   send(p.ws, { t: 'joined', id: p.id, room: room.id, name: room.name, official: room.official, listed: room.listed, code: room.code, slot, best: p.best,
-    scored: room.scored, density: room.density, theme: room.theme, tod: room.tod });
+    scored: room.scored, density: room.density, theme: room.theme, tod: room.tod, bin: !!p.bin });   // (bin: binary positions understood)
   issueMpToken(p);                                     // (scored server + signed in: runs can go on the leaderboard)
   broadcast(room, { t: 'roster', list: roster(room) });
   broadcast(room, { t: 'chat', sys: 'join', name: p.name, title: p.title || null });   // "Name (Title) joined the server"
@@ -247,6 +278,18 @@ const server = http.createServer((req, res) => {
   if (route === '/api/account') {                       // who am I? (Authorization: Bearer <session>)
     const u = bearer();
     json(u ? 200 : 401, u ? { name: u.name, title: DB.equipped(u.id) } : { error: 'not signed in' });
+    return;
+  }
+  // owner tools: the video recorder (tools/recorder.js) is only handed to the owners' accounts (Bearer).
+  // Everyone else gets a plain 404, as if it didn't exist; tools/ is never served as a static folder.
+  if (route === '/api/tools/recorder') {
+    const u = bearer();
+    if (!u || !u.name || !DB.OWNER_NAMES.includes(u.name.toLowerCase())) { res.writeHead(404); res.end('Not found'); return; }
+    fs.readFile(path.join(ROOT, 'tools', 'recorder.js'), (err, data) => {
+      if (err) { res.writeHead(404); res.end('Not found'); return; }
+      res.writeHead(200, { 'Content-Type': TYPES['.js'], 'Cache-Control': 'no-store' });
+      res.end(data);
+    });
     return;
   }
   // profiles: GET /api/profile?name=<driver> (anyone's), GET /api/profile (Bearer: your own, with your titles)
@@ -459,9 +502,11 @@ wss.on('connection', ws => {
     ext: { front: 2.24, rear: -2.55, hw: 0.95 } };
   ws._tw = p;
   ws.on('pong', () => (ws._twDead = false));
-  ws.on('message', raw => {
+  ws.on('message', (raw, isBinary) => {
     if (++p.msgs > 80) return;                          // flood guard (reset every second)
-    let m; try { m = JSON.parse(raw); } catch (e) { return; }
+    let m;
+    if (isBinary) { m = NetCodec.decode(raw); if (!m || m.t !== 'state') return; }   // (only positions come as binary)
+    else { try { m = JSON.parse(raw); } catch (e) { return; } }
     if (!m || typeof m !== 'object') return;
     if (m.t === 'ping') { if (Number.isFinite(m.c)) send(ws, { t: 'pong', c: m.c }); return; }   // round-trip time check
     // two players collided hard: the one who noticed tells the other, so BOTH streaks end
@@ -476,19 +521,19 @@ wss.on('connection', ws => {
       p.st = st;
       if (st.score > p.best) { p.best = st.score; room.bests.set(p.name, p.best); }
       trackRun(p, st);                                   // (the server's own record of the run, for checking it)
+      claimWrecks(p, st.w);                              // (cars they hit: the shared traffic follows their crash)
       st.best = p.best;
-      broadcast(room, { t: 'st', id: p.id, st }, p);
+      relayState(room, p, st);
       return;
     }
-    if (m.t === 'crash') {                               // a player hit a traffic car: it stays crashed where they report
+    if (m.t === 'crash') {                               // (a page from before the update reports wrecks one by one)
       const room = p.room; if (!room || !room.traffic) return;
-      const c = room.traffic.byId.get(m.id);
-      if (c && Number.isFinite(m.s) && Number.isFinite(m.d) && Number.isFinite(m.ry)) room.traffic.crash(c, m.s, num(m.d, -30, 30), num(m.ry, -7, 7));
+      if (Number.isFinite(m.s) && Number.isFinite(m.d) && Number.isFinite(m.ry)) claimWrecks(p, [[m.id, m.s, m.d, m.ry]]);
       return;
     }
-    if (m.t === 'recover' || m.t === 'gone') {           // a wreck got going again / disappeared
+    if (m.t === 'recover' || m.t === 'gone') {           // a wreck got going again / disappeared (only its owner says so)
       const room = p.room; if (!room || !room.traffic) return;
-      const c = room.traffic.byId.get(m.id); if (!c) return;
+      const c = room.traffic.byId.get(m.id); if (!c || !room.traffic.mayRelease(c, p.agent)) return;
       if (m.t === 'gone') room.traffic.gone(c);
       else if (Number.isFinite(m.s) && Number.isInteger(m.lane) && m.lane >= 0 && m.lane < 4) room.traffic.recover(c, m.s, m.lane, num(m.v, 0, 40));
       return;
@@ -516,7 +561,8 @@ wss.on('connection', ws => {
     if (m.session !== undefined) setAccount(p, Accounts.bySession(m.session));   // signed in: runs count, name = account name
     if (m.name !== undefined) p.name = p.account && p.account.name ? p.account.name : cleanName(m.name);
     if (m.color !== undefined) p.color = cleanColor(m.color);
-    if (m.ext && typeof m.ext === 'object') p.ext = { front: num(m.ext.front, 1, 4), rear: num(m.ext.rear, -4, -1), hw: num(m.ext.hw, 0.6, 1.3) };
+    if (m.bin !== undefined) p.bin = m.bin === 1;      // (this game reads the binary snapshots / positions)
+    if (m.ext && typeof m.ext === 'object') p.ext ={ front: num(m.ext.front, 1, 4), rear: num(m.ext.rear, -4, -1), hw: num(m.ext.hw, 0.6, 1.3) };
     if (m.t === 'join') {
       const id = String(m.room || '');
       const code = String(m.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -558,7 +604,11 @@ setInterval(() => {
     }
     T.players = agents;
     T.step(dt, room.density);
-    for (const p of room.players.values()) if (p.agent) send(p.ws, T.snapshot(p.agent, now));
+    for (const p of room.players.values()) {
+      if (!p.agent || p.ws.readyState !== 1) continue;
+      const snap = T.snapshot(p.agent, now);
+      p.ws.send(p.bin ? NetCodec.encodeTraffic(snap) : JSON.stringify(snap));
+    }
   }
   simMs = simMs * 0.95 + (nowS() - t0) * 1000 * 0.05;
 }, SIM_DT * 1000);

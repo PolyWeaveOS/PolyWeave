@@ -95,11 +95,12 @@ class TrafficCar {
   // drivers hardly ever found a gap to change lanes). ACC brakes only as hard as the situation needs.
   idm(lead, v = this.v, tScale = 1) {
     const a = this.type.amax;
-    let acc = a * (1 - Math.pow(Math.max(v, 0) / Math.max(this.v0, 1), 4));
+    const r = Math.max(v, 0) / Math.max(this.v0, 1), r2 = r * r;   // (plain products: much quicker than Math.pow)
+    let acc = a * (1 - r2 * r2);
     if (lead) {
       const dv = v - lead.v, s = Math.max(lead.gap, 0.5);
-      const ss = this.s0 + Math.max(0, v * this.T * tScale + v * dv / (2 * Math.sqrt(a * this.bComf)));
-      acc -= a * Math.pow(ss / s, 2);
+      const ss = this.s0 + Math.max(0, v * this.T * tScale + v * dv / (2 * Math.sqrt(a * this.bComf))), q = ss / s;
+      acc -= a * q * q;
       // constant-acceleration heuristic: the braking that's really needed if the leader keeps its acceleration
       const al = lead.v < 0.5 ? 0 : Math.min((lead.o && lead.o.acc) || 0, a);
       let cah;
@@ -128,7 +129,12 @@ class Traffic {
   // here (the crash physics) and its resting place is reported back so everyone sees it.
   applySnapshot(m) {
     const now = performance.now() / 1000, off = now - m.ts;
-    this.srvOff = this.srvOff === undefined ? off : Math.min(off, this.srvOff + 0.0005);   // fastest delivery seen (drifts up slowly)
+    if (this.srvOff === undefined) { this.srvOff = off; this.srvJit = 0.02; }
+    else {
+      this.srvOff = Math.min(off, this.srvOff + 0.0005);   // fastest delivery seen (drifts up slowly)
+      // how late snapshots arrive beyond that, on average (a busy server or patchy wifi): the buffer grows to cover it
+      this.srvJit = this.srvJit * 0.97 + Math.min(0.5, off - this.srvOff) * 0.03;
+    }
     if (!this.byId) this.byId = new Map();
     for (const [id, key, color] of m.add || []) {
       if (this.byId.has(id)) continue;
@@ -159,18 +165,25 @@ class Traffic {
     return { s: a.s + (n.s - a.s) * k, d: a.d + (n.d - a.d) * k, v: a.v + (n.v - a.v) * k, ry: a.ry + U.wrap(n.ry - a.ry) * k, f: k < 0.5 ? a.f : n.f,
       vs: (n.s - a.s) / dt, vd: (n.d - a.d) / dt, vr: U.wrap(n.ry - a.ry) / dt };   // (how it's moving: to draw it where it is now)
   }
+  // how far in the past the shared traffic is drawn (before being carried forward to "now"): one snapshot
+  // interval plus room for how unevenly they arrive
+  netDelay() { return this.tDelay || 0.15; }
   updateRemote(dt, P) {
-    const rt = performance.now() / 1000 - (this.srvOff || 0) - 0.15;
-    const blink = (this.time * 1.45 % 1) < 0.55;
+    const want = U.clamp(0.1 + 2.5 * (this.srvJit || 0.02), 0.13, 0.4);
+    this.tDelay = this.tDelay === undefined ? want : U.damp(this.tDelay, want, 0.5, dt);
+    const rt = performance.now() / 1000 - (this.srvOff || 0) - this.tDelay;
+    const blink = (this.time * 1.45 % 1) < 0.55, ease = Math.exp(-dt / 0.1);
+    // (the carry-forward follows ping changes gradually: a new ping reading would nudge every car at once)
+    const L = this.leadS = this.leadS === undefined ? (this.lead || 0) : U.damp(this.leadS, this.lead || 0, 1.5, dt);
     for (let i = this.cars.length - 1; i >= 0; i--) {
       const c = this.cars[i];
       if (c.goneAt !== undefined && rt >= c.goneAt && !c.local) { this.remove(i); continue; }
-      if (c.local) {                                   // a car we hit: our crash physics + recovery, reported to everyone
+      if (c.local) {                                   // a car we hit: our crash physics + recovery (sent with our position)
         this.updateCrashed(c, dt);
-        if (c.gone) { if (this.onGone) this.onGone(c); this.remove(i); continue; }
-        if (!c.local) continue;                        // (just recovered: the server drives it again)
-        c.repT = (c.repT || 0) - dt;
-        if (c.repT <= 0 && this.onReport) { c.repT = 0.1; this.onReport(c); }
+        if (c.gone) {
+          if (c.shadow) { this.release(c); continue; }   // (a friend's wreck: still theirs, back to their version)
+          if (this.onGone) this.onGone(c); this.remove(i); continue;
+        }
         continue;
       }
       // A wreck a friend is simulating comes straight from that friend (same clock as their car: car and
@@ -184,11 +197,37 @@ class Traffic {
         // The snapshot is from a moment ago (server delay + the smoothing buffer). Friends' cars are drawn
         // where they are NOW, so carry the traffic forward by the same time - otherwise a friend appears to
         // drive straight through the car they're hitting (it's still ~0.2 s behind on your screen).
-        const L = this.lead || 0;
         if (L) {
           if (st.f & 8) { st.s += U.clamp(st.vs, -60, 90) * L; st.d += U.clamp(st.vd, -15, 15) * L; st.ry += U.clamp(st.vr, -6, 6) * L; }
           else { st.s += st.v * L; st.d += U.clamp(st.vd, -3, 3) * L; }
         }
+      }
+      // Where it's drawn from changed (a friend hit it / got it going again, or my own crash with it ended):
+      // the two versions never quite agree, so the difference is eased out over ~0.3 s instead of a jump.
+      const src = wp ? 1 : 0;
+      if (c.src !== src || c.relo) {
+        const es = c.s - st.s, ed = c.d - st.d, er = U.wrap(c.yaw - ROAD.yaw(c.s) - st.ry);
+        if (c.src !== undefined && Math.abs(es) < 30 && Math.abs(ed) < 12) { c.es = es; c.ed = ed; c.er = er; }
+        c.src = src; c.relo = false; c.rs = c.rvs = undefined;
+      }
+      // Any other sudden jump (e.g. the server moved a wreck somewhere else in one go) is eased out the same way.
+      // A jump = far more movement in one frame than its speed explains: nothing real moves like that.
+      if (dt > 0) {
+        let jumped = false;
+        if (c.rvs !== undefined) {
+          const js = st.s - c.rs - c.rvs * dt, jd = st.d - c.rd - c.rvd * dt;
+          if (Math.abs(js) > 0.3 || Math.abs(jd) > 0.3) {
+            jumped = true;                                 // (its speed carries on: the jump itself isn't movement)
+            if (Math.abs(js) < 30 && Math.abs(jd) < 12) { c.es = (c.es || 0) - js; c.ed = (c.ed || 0) - jd; c.er = (c.er || 0) - U.wrap(st.ry - c.rry); }
+          }
+        }
+        if (c.rs !== undefined && !jumped) { c.rvs = (st.s - c.rs) / dt; c.rvd = (st.d - c.rd) / dt; }
+        c.rs = st.s; c.rd = st.d; c.rry = st.ry;
+      }
+      if (c.es || c.ed || c.er) {
+        c.es *= ease; c.ed *= ease; c.er *= ease;
+        if (Math.abs(c.es) + Math.abs(c.ed) < 0.01 && Math.abs(c.er) < 0.002) c.es = c.ed = c.er = 0;
+        st.s += c.es; st.d += c.ed; st.ry += c.er;
       }
       const pd = c.d;
       c.s = st.s; c.d = st.d; c.v = st.v; c.relYaw = st.ry;
@@ -667,10 +706,12 @@ class Traffic {
 
   // the wrecks this player is simulating (cars they hit), sent with their position so friends can draw them
   // on the same clock as their car: [id, s, d, ry, along-road speed, sideways speed, spin] (speeds in m/s, rad/s)
+  // (The server puts each of these wrecks where this says. A "shadow" is a friend's wreck I bumped into: on my
+  // screen it reacts, but it's still theirs to move for everyone else, so it isn't sent.)
   localWrecks() {
     const out = [];
     for (const c of this.cars) {
-      if (!c.local || !c.crashed || out.length >= 6) continue;
+      if (!c.local || !c.crashed || c.shadow || out.length >= 8) continue;
       const ry = ROAD.yaw(c.s), b = c.body;
       let vs = c.v || 0, vd = 0, w = 0;
       if (b && !c.rec) { vs = b.vx * Math.sin(ry) - b.vz * Math.cos(ry); vd = b.vx * Math.cos(ry) + b.vz * Math.sin(ry); w = b.w; }
@@ -681,7 +722,10 @@ class Traffic {
 
   // ---------------------------------------------------------------- crashes
   crash(c) {
-    if (this.remote && !c.local) { c.crashed = false; c.local = true; c.crashT = 0; c.vis.root.visible = true; }   // we take over this car's crash
+    if (this.remote && !c.local) {                   // we take over this car's crash
+      c.shadow = c.src === 1;                          // (a friend is already simulating it: see localWrecks)
+      c.crashed = false; c.local = true; c.crashT = 0; c.vis.root.visible = true;
+    }
     if (c.crashed) return;
     c.crashed = true; c.ind = 0; c.tgt = c.lane; c.forced = false;
     const sy = Math.sin(c.yaw), cy = Math.cos(c.yaw);
@@ -738,7 +782,12 @@ class Traffic {
     c.ind = 0; c.forced = false; c.blocked = false; c.pending = undefined; c.cool = U.rand(3, 6); c.check = 1;
     c.nm = { active: false, done: true, min: 9 };
     vis.indL.visible = vis.indR.visible = false;
-    if (this.remote) { c.local = false; c.buf = []; if (this.onRecover) this.onRecover(c); }
+    if (this.remote) { if (!c.shadow && this.onRecover) this.onRecover(c); c.local = false; c.shadow = false; c.relo = true; }
+  }
+  // online: a friend's wreck I'd bumped (a "shadow") goes back to being drawn from their version
+  release(c) {
+    c.local = false; c.shadow = false; c.gone = false; c.rec = null; c.body = null; c.crashT = 0; c.relo = true;
+    c.vis.root.position.y = 0;
   }
 
   updateCrashed(c, dt) {
@@ -823,7 +872,7 @@ class Traffic {
     // crashes too. (Online: only the wrecks this player is simulating; the cars it hits are taken over
     // and reported to the server, so everyone sees the pile-up.)
     for (const a of this.cars) {
-      if (!a.crashed || !a.body || a.rec || (this.remote && !a.local)) continue;
+      if (!a.crashed || !a.body || a.rec || (this.remote && (!a.local || a.shadow))) continue;   // (a shadow isn't really here for anyone else)
       const ab = a.body;
       const A = SAT.toWorld(a.hull, ab.x, ab.z, a.yaw, this._pa);
       for (const c of this.cars) {

@@ -175,16 +175,22 @@ const Social = {
     const a = p.act, w = (WORLD_NAMES[a.theme] || 'Grassy') + ' · ' + (TOD_NAMES[a.tod] || 'Day');
     if (a.mode === 'sp') return 'Singleplayer · ' + w;
     if (a.mode === 'mp') return (a.kind === 'private' ? 'Private server' : 'Public') + ' · ' + w;
-    return 'In the menus';
+    return 'In Menus';
+  },
+  // the little message under "Add a friend": shows, then fades away after 3 s
+  note(text, kind) {
+    const msg = $id('frMsg');
+    clearTimeout(this._noteT);
+    msg.textContent = text; msg.className = 'frMsg ' + kind;
+    if (text) this._noteT = setTimeout(() => msg.classList.add('fade'), 3000);
   },
   async friendCall(what, name, extra, okMsg) {
-    const msg = $id('frMsg');
     let r;
-    try { r = await this.api('/api/friends/' + what, Object.assign({ name }, extra || {})); } catch (e) { msg.className = 'frMsg err'; msg.textContent = 'Could not reach the server.'; return; }
-    if (r.error) { msg.className = 'frMsg err'; msg.textContent = r.error; }
-    else if (what === 'request') { msg.className = 'frMsg ok'; msg.textContent = r.ok === 'accepted' ? `You and ${r.name} are now friends.` : `Friend request sent to ${r.name}.`; }
-    else if (okMsg) { msg.className = 'frMsg ok'; msg.textContent = okMsg; }
-    else msg.textContent = '';
+    try { r = await this.api('/api/friends/' + what, Object.assign({ name }, extra || {})); } catch (e) { this.note('Could not reach the server.', 'err'); return; }
+    if (r.error) this.note(r.error, 'err');
+    else if (what === 'request') this.note(r.ok === 'accepted' ? `You and ${r.name} are now friends.` : `Friend request sent to ${r.name}.`, 'ok');
+    else if (okMsg) this.note(okMsg, 'ok');
+    else this.note('', '');
     this.refresh();
   },
   async saveSettings() {

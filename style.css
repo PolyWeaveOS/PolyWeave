@@ -420,7 +420,10 @@ button:disabled { opacity: .45; cursor: default; }
 .frGrid { display: grid; grid-template-columns: 1fr 1.1fr; gap: 18px; align-items: start; }
 .frAdd { display: flex; gap: 8px; }
 .frAdd input { flex: 1; min-width: 0; }
-.frMsg { min-height: 18px; font-size: 12.5px; margin: 6px 0 2px; }
+.frMsg { min-height: 18px; font-size: 12.5px; margin: 6px 0 2px; transition: opacity .6s ease, transform .6s ease; }
+.frMsg:not(:empty):not(.fade) { animation: frMsgIn .25s ease-out; }
+.frMsg.fade { opacity: 0; transform: translateY(-4px); }   /* (fades away 3 s after it appears) */
+@keyframes frMsgIn { from { opacity: 0; transform: translateY(4px); } }
 .frMsg.err { color: var(--red); } .frMsg.ok { color: #8fe08a; }
 .frHead { font-size: 11px; letter-spacing: 1.8px; text-transform: uppercase; color: var(--accent); margin: 14px 0 6px; }
 .frRow { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 10px; background: rgba(255,255,255,.035); margin-bottom: 6px; }

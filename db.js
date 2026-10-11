@@ -393,5 +393,5 @@ module.exports = {
   db, SEASON, SECRET, ensureUser, grant, gift, inboxOf, unclaimed, claim, top, around, rankOf, bestOf, addRun, spendToken, profile, addPlayTime,
   titlesOf, ownerCounts, alphaOpen, setAlphaOpen, resetTitles, statTitles, statsOf, pendingOf, equipped, equip, isBanned, setBanned, setRemoved, runsOf, runLog, recentRejected,
   areFriends, friendsOf, requestsIn, requestsOut, socialSettings, setSocialSettings, sendRequest, respond, cancelRequest, unfriend,
-  sendMessage, chatWith, markRead, unreadBy,
+  sendMessage, chatWith, markRead, unreadBy, OWNER_NAMES,
 };

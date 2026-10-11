@@ -707,7 +707,8 @@ function makeVehicle(key, paint, matOverrides, lite = false) {
   const root = new THREE.Group();
   let body;
   if (lite) {
-    M.lite = M.lite || { body: splitLite(M.body), wheel: splitLite(M.wheel).rest };
+    // (the imported M4 has its own wheel per corner; generated cars share one)
+    M.lite = M.lite || { body: splitLite(M.body), wheel: M.wheel ? splitLite(M.wheel).rest : null, wheels: M.wheelGeoms ? M.wheelGeoms.map(g => splitLite(g).rest) : null };
     body = new THREE.Mesh(M.lite.body.rest, LITE_MAT);
     if (M.lite.body.paint) { const pm = new THREE.Mesh(M.lite.body.paint, paint); pm.castShadow = true; root.add(pm); }
   } else body = new THREE.Mesh(M.body, mats);
@@ -722,7 +723,7 @@ function makeVehicle(key, paint, matOverrides, lite = false) {
     pivot.position.set(w.x, w.y ?? M.r, -w.f);
     pivot.rotation.y = base;
     const geo = M.wheelGeoms ? M.wheelGeoms[i] : M.wheel;
-    const mesh = lite ? new THREE.Mesh(M.lite.wheel, LITE_MAT) : new THREE.Mesh(geo, mats);
+    const mesh = lite ? new THREE.Mesh(M.lite.wheels ? M.lite.wheels[i] : M.lite.wheel, LITE_MAT) : new THREE.Mesh(geo, mats);
     mesh.castShadow = true;
     pivot.add(mesh); root.add(pivot);
     wheels.push({ pivot, mesh, side: w.side, front: !!w.front, base, spinSign: M.wheelGeoms ? 1 : w.side });

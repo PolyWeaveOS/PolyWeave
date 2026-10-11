@@ -661,7 +661,7 @@ function renderAccount() {
   }
 }
 Account.onChange = () => {
-  acctMsg = ''; renderAccount(); syncBest(game.mode === 'mp' ? 'mp' : 'sp');
+  acctMsg = ''; renderAccount(); syncBest(game.mode === 'mp' ? 'mp' : 'sp'); loadOwnerTools();
   if (game.mode === 'sp' && game.scored && !spToken) fetchSpToken();   // (signed in during a scored run: the next one counts)
 };
 Account.onMsg = t => { acctMsg = t; renderAccount(); };
@@ -1043,7 +1043,8 @@ Net.onRoster = () => {
 Net.ext = { front: M4_EXT.front, rear: M4_EXT.rear, hw: M4_EXT.hw };
 Net.refS = () => car.s;
 Net.onTraffic = m => traffic.applySnapshot(m);
-traffic.onReport = c => Net.reportCrash(c);
+// a friend hit that car first: on my screen it still reacts to me, but it's theirs to move for everyone
+Net.onWreckOwner = id => { const c = traffic.byId && traffic.byId.get(id); if (c && c.local) c.shadow = true; };
 traffic.onRecover = c => Net.reportRecover(c);
 traffic.onGone = c => Net.reportGone(c);
 Net.onJoined = (room, slot) => {
@@ -1512,10 +1513,11 @@ function driveStep(dt, ctl, paused) {
 
   // ---- traffic, collisions, scoring ----
   Net.tick(dt, netState());
-  // shared traffic is drawn at "now" like friends are: its 0.15 s buffer + the trip from the server
-  traffic.lead = traffic.remote ? 0.15 + (Net.rtt || 60) / 2000 : 0;
+  // shared traffic is drawn at "now" like friends are: its smoothing buffer + the trip from the server
+  traffic.lead = traffic.remote ? traffic.netDelay() + (Net.rtt || 60) / 2000 : 0;
   traffic.wreckPose = traffic.remote ? Net.wreckPoses() : null;   // (wrecks friends are simulating come from them)
   traffic.update(dt, proxy, game.density);
+  if (traffic.remote) Net.unoverlap(traffic.cars, trafficHull);    // (friends never drawn inside a car)
   const impact = traffic.collide(car, trafficHull);
   // friends: light bumps just push you around, a hard hit (> ~11 km/h difference) costs your streak
   const bump = Net.collide(car, trafficHull);
@@ -1571,6 +1573,9 @@ function frame(now) {
   requestAnimationFrame(frame);
   const dt = U.clamp((now - last) / 1000, 0, 0.05); last = Math.max(last, now);
   const ctl = Input.update(now, dt);
+  // owners' video recorder (tools/recorder.js, only loaded for their accounts): while its editor is open it
+  // draws the replay instead of the game
+  if (window.Recorder && Recorder.active) { Recorder.frame(dt); Input.endFrame(); return; }
   afkCheck(now);
 
   if (menuOpen) {
@@ -1623,7 +1628,23 @@ function frame(now) {
   drawMinimap(dt);
   sound.update(car, ctl.throttle, Settings.vol);
   Input.endFrame();
+  if (window.Recorder) Recorder.capture(dt);       // (owners: keeps the last minute for clips)
   renderFrame();
+}
+// Owner tools: the server only sends the recorder to the owners' signed-in accounts (anyone else gets a 404)
+let toolsFor = null;
+function loadOwnerTools() {
+  if (!Account.signedIn || !Account.session || toolsFor === Account.session || window.Recorder) return;
+  toolsFor = Account.session;
+  fetch((Account.base || '') + '/api/tools/recorder', { headers: { Authorization: 'Bearer ' + Account.session }, cache: 'no-store' })
+    .then(r => (r.ok ? r.text() : null))
+    .then(src => {
+      if (!src || window.Recorder) return;
+      const s = document.createElement('script');
+      s.src = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+      document.body.appendChild(s);
+    })
+    .catch(() => { toolsFor = null; });
 }
 // restore the last visual style (older saves used a toon on/off flag)
 setFx(Number.isInteger(Settings.fx) ? Settings.fx : (Settings.toon ? 1 : 0), true);

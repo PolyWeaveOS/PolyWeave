@@ -65,12 +65,18 @@ const Net = {
       const base = await this.findBase();
       if (!base) throw new Error('Multiplayer server not found. Open the game from its website link to play online.');
       const ws = new WebSocket(base.replace(/^http/, 'ws') + '/ws');
+      ws.binaryType = 'arraybuffer';                   // (traffic snapshots and positions come as compact binary)
       await new Promise((ok, bad) => {
         const t = setTimeout(() => bad(new Error('The multiplayer server did not answer. Try again in a moment.')), 60000);
         ws.onopen = () => { clearTimeout(t); ok(); };
         ws.onerror = () => { clearTimeout(t); bad(new Error('Could not connect to the multiplayer server.')); };
       });
-      ws.onmessage = e => { let m; try { m = JSON.parse(e.data); } catch (x) { return; } this.onData(m); };
+      ws.onmessage = e => {
+        let m;
+        if (typeof e.data !== 'string') m = NetCodec.decode(e.data);
+        else try { m = JSON.parse(e.data); } catch (x) { return; }
+        if (m) this.onData(m);
+      };
       // round trip to the server every 2 s (friends' cars are drawn ahead by the delay it implies)
       clearInterval(this._pingT);
       this._pingT = setInterval(() => this.send({ t: 'ping', c: performance.now() }), 2000);
@@ -103,15 +109,16 @@ const Net = {
   },
 
   // public server from the list / private server by code / new private server
-  joinServer(id, name, color) { return this.request({ t: 'join', room: id, name, color, ext: this.ext }, 'Joining…'); },
+  // (bin: this game reads the binary traffic snapshots and positions)
+  joinServer(id, name, color) { return this.request({ t: 'join', room: id, name, color, ext: this.ext, bin: 1 }, 'Joining…'); },
   joinCode(code, name, color) {
     const c = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (c.length !== 6) { this.status('Enter the 6-character code, e.g. K7P-2QX', 'err'); return; }
-    return this.request({ t: 'join', code: c, name, color, ext: this.ext }, 'Joining ' + c.slice(0, 3) + '-' + c.slice(3) + '…');
+    return this.request({ t: 'join', code: c, name, color, ext: this.ext, bin: 1 }, 'Joining ' + c.slice(0, 3) + '-' + c.slice(3) + '…');
   },
   // opts.scored: leaderboard server (60% traffic); otherwise free drive with opts.density traffic
   host(name, color, opts = {}) {
-    return this.request({ t: 'create', name, color, ext: this.ext, scored: !!opts.scored, density: opts.density,
+    return this.request({ t: 'create', name, color, ext: this.ext, bin: 1, scored: !!opts.scored, density: opts.density,
       listed: !!opts.listed, roomName: opts.roomName, theme: opts.theme, tod: opts.tod }, opts.listed ? 'Creating your public server…' : 'Creating your private server…');
   },
   leave() {
@@ -128,8 +135,7 @@ const Net = {
     this.room = null;
     this.changed();
   },
-  // a traffic car I crashed into: tell the server where it ends up (everyone sees the wreck there)
-  reportCrash(c) { this.send({ t: 'crash', id: c.id, s: +c.s.toFixed(2), d: +c.d.toFixed(2), ry: +U.wrap(c.yaw - ROAD.yaw(c.s)).toFixed(3) }); },
+  // (a traffic car I crash into goes to the server with my position: see traffic.localWrecks)
   // that car got going again (back in lane `lane` at speed v) / couldn't and disappeared
   reportRecover(c) { this.send({ t: 'recover', id: c.id, s: +c.s.toFixed(2), lane: c.lane, v: +c.v.toFixed(2) }); },
   reportGone(c) { this.send({ t: 'gone', id: c.id }); },
@@ -142,13 +148,15 @@ const Net = {
     else if (m.t === 'traffic') { if (this.room && this.onTraffic) this.onTraffic(m); }
     else if (m.t === 'pong') { const r = performance.now() - m.c; if (r >= 0 && r < 3000) this.rtt = this.rtt === undefined ? r : this.rtt * 0.8 + r * 0.2; }
     else if (m.t === 'bumped') { if (this.room && this.onBumped) this.onBumped(m.v || 0); }   // a friend hit me hard (they saw it)
+    else if (m.t === 'wreckOwner') { if (this.room && this.onWreckOwner) this.onWreckOwner(m.id); }   // a friend hit that car first: theirs to move
     else if (m.t === 'hello') this.myId = m.id;
     else if (m.t === 'joined') {
       this.clearRoom();
       this.myId = m.id; this.runToken = null;      // (the server sends this server's token next)
       // official: one of the game's own servers; listed: a player's public server (also joinable by code)
       this.room = { id: m.room, name: m.name, pub: !!(m.official ?? m.pub), official: !!(m.official ?? m.pub), listed: !!m.listed, code: m.code || '',
-        scored: !!m.scored, density: Number.isFinite(m.density) ? m.density : 0.6, theme: m.theme || 'grass', tod: m.tod || 'day' };
+        scored: !!m.scored, density: Number.isFinite(m.density) ? m.density : 0.6, theme: m.theme || 'grass', tod: m.tod || 'day',
+        bin: !!m.bin };                                // (this server reads binary positions; one from before the update doesn't)
       this.myBest = m.best || 0;
       this.status(this.room.official ? `Connected to ${m.name}` : `Connected to ${m.name} · code ${m.code}`, 'ok');
       this.changed();
@@ -198,6 +206,11 @@ const Net = {
     p.vis = makeVehicle('m4', paintMat(p.color || '#a6b0b8'));
     p.vis.root.position.z = CG_F;                 // body sits behind the centre of gravity, like yours
     p.g.add(p.vis.root);
+    // further away: the same car baked into 6 draw calls instead of ~30 (12 players add up)
+    p.visLite = makeVehicle('m4', paintMat(p.color || '#a6b0b8'), null, true);
+    p.visLite.root.position.z = CG_F; p.visLite.root.visible = false;
+    p.g.add(p.visLite.root);
+    p.visFull = p.vis;
     // floating name tag (with their title underneath, in its rarity colour; neon ones glow)
     const t = p.title && Titles.TITLE_BY_ID[p.title], rar = t && Titles.RARITIES[t.rarity];
     const c = document.createElement('canvas'); c.width = 256; c.height = t ? 96 : 64;
@@ -232,7 +245,12 @@ const Net = {
     p.g.visible = false;
     this.scene.add(p.g);
   },
-  removeVis(p) { if (p.g) { this.scene.remove(p.g); p.g = null; p.vis = null; } },
+  removeVis(p) {
+    if (!p.g) return;
+    this.scene.remove(p.g);
+    p.g.traverse(o => { if (o.isSprite) { o.material.map.dispose(); o.material.dispose(); } });   // (the name tag; car meshes are shared)
+    p.g = null; p.vis = p.visFull = p.visLite = null; p.sm = null;
+  },
 
   // friend's state right now: a little in the past on THEIR clock, interpolated between updates
   sample(p, dt) {
@@ -252,27 +270,71 @@ const Net = {
     // That is where they were a moment ago (network delay + the smoothing buffer): ~8 m behind at 200 km/h.
     // Carry them forward by that time, so a friend touching your bumper is drawn touching it (and the
     // proxy gap and bumps use where they really are).
-    const lag = U.clamp(p.delay + ((this.rtt || 60) + (c.rtt || this.rtt || 60)) / 2000, 0, 0.45);
+    const lagWant = U.clamp(p.delay + ((this.rtt || 60) + (c.rtt || this.rtt || 60)) / 2000, 0, 0.45);
+    const lag = p.lag = p.lag === undefined ? lagWant : U.damp(p.lag, lagWant, 1.5, dt);   // (ping readings change it gradually)
     const span = Math.max(c.t - a.t, 1e-3), dd = U.clamp((c.d - a.d) / span, -6, 6);   // sideways speed (m/s)
     // carry forward with their braking / accelerating too (a crash stops a car fast: without this it would
     // overshoot into the car it just hit, then snap back)
     const v = st.v || 0, acc = U.clamp(((c.v || 0) - (a.v || 0)) / span, -25, 10);
     st.s += acc < 0 && v + acc * lag < 0 ? v * v / (-2 * acc) : v * lag + 0.5 * acc * lag * lag;
     st.d += dd * lag * 0.8;
+    st.dd = dd;                                        // (sideways speed: lets the smoothing tell real movement from corrections)
     // wrecks they're simulating: same clock and same carry-forward as their car, so car and wreck line up
     if (c.w && c.w.length) {
       const prev = new Map((a.w || []).map(e => [e[0], e]));
-      // (their game sends each wreck's own speed and spin, so it's carried forward exactly, even on the first update)
+      // Their game sends each wreck's own speed and spin, so it's carried forward exactly, even on the first
+      // update - and with how fast that's changing (a wreck skids to a stop: carried on at full speed it
+      // would overshoot, then jump back with every update).
+      const go = (v, acc, t) => (acc * v < 0 && Math.abs(v) < Math.abs(acc) * t ? -v * v / (2 * acc) : v * t + 0.5 * acc * t * t);
       st.w = c.w.map(e => {
         const o = prev.get(e[0]), vs = U.clamp(e[4] || 0, -60, 90), vd = U.clamp(e[5] || 0, -15, 15), vr = U.clamp(e[6] || 0, -8, 8);
         let s, d, ry, extra;
         if (o && k <= 1) { s = o[1] + (e[1] - o[1]) * k; d = o[2] + (e[2] - o[2]) * k; ry = o[3] + U.wrap(e[3] - o[3]) * k; extra = 0; }
         else { s = e[1]; d = e[2]; ry = e[3]; extra = (k - 1) * span; }   // (new wreck / late update: from the newest pose, by its speed)
+        // (no earlier update for it yet: a fresh wreck is skidding, so assume the usual skid)
+        const as = o ? U.clamp((vs - o[4]) / span, -9, 7) : -4.5 * Math.sign(vs), ad = o ? U.clamp((vd - o[5]) / span, -12, 12) : -6 * Math.sign(vd),
+          ar = o ? U.clamp((vr - o[6]) / span, -8, 8) : -2.5 * Math.sign(vr);
         const L = lag + extra;
-        return { id: e[0], s: s + vs * L, d: d + vd * L, ry: ry + vr * L };
+        return { id: e[0], s: s + go(vs, as, L), d: d + go(vd, ad, L), ry: ry + go(vr, ar, L) };
       });
     } else st.w = null;
     return st;
+  },
+  // Their position is a prediction (where they are NOW), so every update corrects it a little - and after a
+  // crash or a sudden swerve, a lot. Corrections are eased in over ~0.1 s instead of jumping: whatever part of
+  // a frame's movement their speed doesn't explain is a correction, folded into an offset that fades away.
+  smooth(p, st, dt) {
+    const m = p.sm;
+    if (!m) { p.sm = { s: st.s, d: st.d, ry: st.ry, es: 0, ed: 0, er: 0 }; return; }
+    const js = st.s - m.s - (st.v || 0) * dt, jd = st.d - m.d - (st.dd || 0) * dt, jr = U.wrap(st.ry - m.ry);
+    m.s = st.s; m.d = st.d; m.ry = st.ry;
+    if (Math.abs(js) > 10 || Math.abs(jd) > 5) m.es = m.ed = m.er = 0;   // (moved somewhere else entirely: no easing)
+    else { m.es -= js; m.ed -= jd; if (Math.abs(jr) > 0.04) m.er -= jr; }   // (normal steering isn't a correction)
+    const k = Math.exp(-dt / 0.1);
+    m.es *= k; m.ed *= k; m.er *= k;
+    st.s += m.es; st.d += m.ed; st.ry += m.er;
+  },
+  // Never draw a friend inside a traffic car. On their screen they squeezed past it (or hit it and stopped);
+  // here they're predicted a moment ahead and can be drawn a little into it until the next update shows what
+  // happened. Pushed out of it instead, through the same easing (so they slide back, not jump).
+  unoverlap(cars, hull) {
+    if (!this.room) return;
+    for (const p of this.players.values()) {
+      const st = p.now, m = p.sm;
+      if (!st || !m || !p.g || !p.g.visible) continue;
+      let A = null, px = 0, pz = 0;
+      for (const c of cars) {
+        if (Math.abs(c.s - st.s) > 14 || Math.abs(c.d - st.d) > 6 || !c.vis.root.visible) continue;
+        A = SAT.toWorld(hull, p.x + px, p.z + pz, p.yaw, this._a);
+        const col = SAT.test(A, SAT.toWorld(c.hull, c.x, c.z, c.yaw, this._b));
+        if (!col) continue;
+        px -= col.nx * col.depth; pz -= col.nz * col.depth;
+      }
+      if (!px && !pz) continue;
+      const ry = ROAD.yaw(st.s), ds = px * Math.sin(ry) - pz * Math.cos(ry), dd = px * Math.cos(ry) + pz * Math.sin(ry);
+      m.es += ds; m.ed += dd; st.s += ds; st.d += dd;
+      p.x += px; p.z += pz; p.g.position.set(p.x, 0, p.z);
+    }
   },
   // every wreck a friend is simulating, by traffic-car id (drawn from them instead of the server's copy)
   wreckPoses() {
@@ -288,18 +350,24 @@ const Net = {
     this.sendT -= dt;
     if (this.sendT <= 0) {
       this.sendT += NET_RATE; if (this.sendT < 0) this.sendT = NET_RATE;
-      this.send({ t: 'state', st });
+      if (this.room.bin) { if (this.ws && this.ws.readyState === 1) this.ws.send(NetCodec.encodeState(st)); }   // (~42 bytes instead of ~190)
+      else this.send({ t: 'state', st });
     }
     // move friends' cars
+    const myS = this.refS();
     for (const p of this.players.values()) {
       const s = p.now = this.sample(p, dt);
       if (!p.g) continue;
-      if (!s) { p.g.visible = false; continue; }
+      if (!s) { p.g.visible = false; p.sm = null; continue; }
+      this.smooth(p, s, dt);
       const pos = ROAD.pos(s.s, s.d), yaw = ROAD.yaw(s.s) + (s.ry || 0);
       p.x = pos.x; p.z = pos.z; p.yaw = yaw;
       p.g.visible = true;
       p.g.position.set(pos.x, 0, pos.z);
       p.g.rotation.y = -yaw;
+      // detailed car up close, the baked one further away (switching with a little overlap so it doesn't flicker)
+      const ad = Math.abs(s.s - myS), lite = p.vis === p.visLite ? ad > 40 : ad > 50;
+      if (lite !== (p.vis === p.visLite)) { p.vis.root.visible = false; p.vis = lite ? p.visLite : p.visFull; p.vis.root.visible = true; p.vis.spin = (lite ? p.visFull : p.visLite).spin; }
       p.vis.brake.visible = !!s.brake;
       animateWheels(p.vis, (s.v || 0) * dt, s.steer || 0);
     }
