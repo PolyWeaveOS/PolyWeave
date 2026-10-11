@@ -275,6 +275,33 @@ const playerHull = playerVis.M.hull.map(([x, f]) => [x, f - CG_F]);
 const trafficHull = playerHull.map(([x, f]) => [x * 0.97, f * 0.983]);
 const M4_EXT = { front: playerVis.M.front - CG_F, rear: playerVis.M.rear - CG_F, hw: 0.95 };
 
+// ---------- motorcycle (only for these accounts: same physics as the car, its own model and hitbox) ----------
+// (the server checks the same list before showing a bike to other players)
+const BIKE_NAMES = ['curryeater', 'polyweave', 'codester'];
+const playerBike = makeBike(playerPaint); playerBike.root.visible = false; playerRoot.add(playerBike.root);
+const VEH = {
+  car: { hull: playerHull.map(p => p.slice()), ext: Object.assign({}, M4_EXT) },
+  bike: { hull: BIKE.hull.map(p => p.slice()), ext: { front: BIKE.front, rear: BIKE.rear, hw: BIKE.W } },
+};
+let vehicle = 'car';
+const canBike = () => !!(Account.user && Account.user.name && BIKE_NAMES.includes(Account.user.name.toLowerCase()));
+function setVehicle(v) {
+  vehicle = v === 'bike' && canBike() ? 'bike' : 'car';
+  const V = VEH[vehicle], bike = vehicle === 'bike';
+  playerVis.root.visible = !bike; playerBike.root.visible = bike;
+  playerHull.length = 0; for (const p of V.hull) playerHull.push(p.slice());
+  trafficHull.length = 0; for (const [x, f] of playerHull) trafficHull.push([x * 0.97, f * 0.983]);
+  Object.assign(M4_EXT, V.ext);
+  Object.assign(proxy, V.ext);
+  Net.ext = Object.assign({}, V.ext);
+  Net.setVehicle(vehicle);
+  // the motorcycle is just for fun: no personal bests, leaderboards, runs or stats (a streak with any of it on the
+  // bike counts for nothing, even after switching back to the car)
+  const was = score.funOnly; score.funOnly = bike;
+  if (bike) { if (score.score >= 1) score.fun = true; if (!was && game.mode !== 'menu') hud.message('MOTORCYCLE · JUST FOR FUN, NO STATS'); }
+  const row = document.getElementById('vehRow'); if (row) row.classList.toggle('hidden', !canBike());
+}
+
 function setPaint(hex) { Settings.color = hex; playerPaint.color.set(hex); playerPaintDS.color.set(hex); saveSettings(); }
 setPaint(Settings.color);
 
@@ -519,12 +546,14 @@ function updateCamera(dt) {
     camS.fov = U.damp(camS.fov, 60 + U.clamp((spd - 20) / 60, 0, 1) * 11, 3, dt);
   } else {
     // cockpit: driver's eye, with subtle head motion from g-forces
-    const lx = (Settings.rhd ? 0.37 : -0.37) - U.clamp(car.ay, -12, 12) * 0.004;   // (driver's seat: left or right)
-    const lf = -0.32 - CG_F - U.clamp(car.ax, -15, 12) * 0.006; // head pitches forward under braking
-    const y = 1.13 +Math.sin(time * 31) * Math.min(spd / 80, 1) * 0.0015;
+    const bike = vehicle === 'bike', lean = bike ? (camS.body && camS.body.lean) || 0 : 0;
+    // (motorcycle: the rider's helmet, tucked over the tank, tipping with the bike; car: the driver's seat)
+    const lx = bike ? Math.sin(lean) * -1.25 : (Settings.rhd ? 0.37 : -0.37) - U.clamp(car.ay, -12, 12) * 0.004;
+    const lf = (bike ? 0.2 : -0.32 - CG_F) - U.clamp(car.ax, -15, 12) * 0.006; // head pitches forward under braking
+    const y = (bike ? 1.3 * Math.cos(lean) : 1.13) + Math.sin(time * 31) * Math.min(spd / 80, 1) * (bike ? 0.003 : 0.0015);
     camera.position.set(car.x + lf * sy + lx * cy, y, car.z - lf * cy + lx * sy);
     camera.rotation.order = 'YXZ';
-    camera.rotation.set(-0.045, -car.visYaw, 0);   // level: no tilt from braking / cornering in the cockpit
+    camera.rotation.set(bike ? -0.09 : -0.045, -car.visYaw, lean * 0.7);   // car: level, no tilt from braking / cornering
     camS.fov = U.damp(camS.fov, 70 + U.clamp((spd - 20) / 60, 0, 1) * 5, 3, dt);
   }
   // near plane: far enough out in the chase view for good depth precision (no z-fighting
@@ -585,6 +614,8 @@ bindRange('chatSize', 'chatSize', v => v / 100, v => v + '%');   // multiplayer 
   const pick = (id, get, set) => { const el = $id(id); el.value = get(); el.addEventListener('change', () => { set(el.value); saveSettings(); }); };
   pick('mirrorQ', () => Settings.mirrors, v => { Settings.mirrors = v; MIRRORS.setQuality(v); });
   pick('units', () => Settings.units, v => { Settings.units = v; });  pick('rhd', () => (Settings.rhd ? 'right' : 'left'), v => { Settings.rhd = v === 'right'; MIRRORS.setSide(Settings.rhd); });
+  // car or motorcycle (the row only shows for the accounts allowed the bike: see setVehicle)
+  pick('vehSel', () => Settings.vehicle || 'car', v => { Settings.vehicle = v; setVehicle(v); });
 }
 { // motion blur 0..100 (stored as 0..100)
   const el = $id('blur'), lab = $id('blurV');
@@ -662,6 +693,7 @@ function renderAccount() {
 }
 Account.onChange = () => {
   acctMsg = ''; renderAccount(); syncBest(game.mode === 'mp' ? 'mp' : 'sp'); loadOwnerTools();
+  setVehicle(Settings.vehicle);                        // (the motorcycle only for its accounts; anyone else is in the car)
   if (game.mode === 'sp' && game.scored && !spToken) fetchSpToken();   // (signed in during a scored run: the next one counts)
 };
 Account.onMsg = t => { acctMsg = t; renderAccount(); };
@@ -706,15 +738,17 @@ function takeToken(mode) {
   if (mode === 'mp') { const t = Net.runToken; Net.runToken = null; Net.send({ t: 'runtoken' }); return t; }
   const t = spToken; fetchSpToken(); return t;
 }
-const runBody = (mode, token, run) => JSON.stringify({ session: Account.session, token, mode, score: run.score, dur: run.dur, dist: run.dist || 0, log: run.log });
+const runBody = (mode, token, run) => JSON.stringify({ session: Account.session, token, mode, score: run.score, dur: run.dur, dist: run.dist || 0, log: run.log, veh: vehicle });
 // time played (profile): reported about once a minute while you're driving, signed in, in any mode
 let playT = 0;
 function playBeat(dt) {
+  if (vehicle === 'bike') return;                      // (motorcycle: just for fun, not even time played)
   if (!Account.signedIn || !Net.base || (playT += dt) < 60) return;
   const s = playT; playT = 0;
   fetch(Net.base + '/api/playtime', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ session: Account.session, s }) }).catch(() => {});
 }
 score.onStreakEnd = run => {
+  if (run.fun) return;                                 // (motorcycle: just for fun, never saved anywhere)
   if (!game.scored || run.score < 100 || !run.log) return;
   if (!Account.signedIn) { if (Account.clientId) hud.message('SIGN IN TO SAVE SCORES'); return; }
   submitRun(game.mode === 'mp' ? 'mp' : 'sp', run);
@@ -734,7 +768,7 @@ async function submitRun(mode, run) {
 }
 // closing / leaving the page in the middle of a scored run: send it anyway
 addEventListener('pagehide', () => {
-  if (!game.scored || score.score < 100 || !Account.signedIn || !Net.base) return;
+  if (!game.scored || score.fun || score.score < 100 || !Account.signedIn || !Net.base) return;
   const mode = game.mode === 'mp' ? 'mp' : 'sp', token = mode === 'mp' ? Net.runToken : spToken, log = score.runEvents();
   if (!token || !log) return;
   if (mode === 'mp') Net.runToken = null; else spToken = null;
@@ -1113,8 +1147,8 @@ function proximity(kmh) {
   const len = M4_EXT.front - M4_EXT.rear;
   let best = 1;
   for (const p of Net.players.values()) {
-    const n = p.now; if (!n || Math.abs(n.s - car.s) > 40) continue;
-    const gs = Math.max(0, Math.abs(n.s - car.s) - len);             // gap along the road
+    const n = p.now; if (!n || Math.abs(n.s - car.s) > 40 || p.veh === 'bike') continue;   // (a motorcycle gives no bonus: just for fun)
+    const gs =Math.max(0, Math.abs(n.s - car.s) - len);             // gap along the road
     const gd = Math.max(0, Math.abs(n.d - car.d) - 2 * M4_EXT.hw);   // gap across it
     const gap = Math.hypot(gs, gd);
     if (gap > 25) continue;
@@ -1279,11 +1313,22 @@ function updatePlayerVisual(dt) {
   swMesh.rotation.z = -car.steer * M4.ratio / Settings.sens;
   // cockpit camera: the detailed interior + mirrors replace the simple one (which is only seen through the glass)
   const inCockpit = camMode === 1 && !menuOpen;
-  cockpit.visible = cockpitWheel.visible = inCockpit; interior.visible = swMesh.visible = !inCockpit;
+  const bike = vehicle === 'bike';
+  cockpit.visible = cockpitWheel.visible = inCockpit && !bike; interior.visible = swMesh.visible = !inCockpit;
   cockpitWheel.rotation.z = swMesh.rotation.z;
-  if (inCockpit) MIRRORS.drawGauge(dt);
+  if (inCockpit && !bike) MIRRORS.drawGauge(dt);
   playerVis.brake.visible = car.brakeOn && car.gear >= 0;
   playerGlass.opacity = camMode === 1 && !menuOpen ? 0.14 : 0.78;
+  if (bike) {
+    // the motorcycle leans into turns (the angle real bikes need for that turn, softened), nose dips the same as the car
+    const leanT = U.clamp(-Math.atan2(ayNow, 9.81) * 0.85, -0.72, 0.72);
+    bm.lean = dt > 0 ? U.damp(bm.lean || 0, leanT, 7, dt) : (bm.lean || 0);
+    playerBike.lean.rotation.z = bm.lean;
+    playerBike.root.rotation.x = level ? 0 : bm.pitch * 0.6;
+    animateWheels(playerBike, car.u * dt, car.steer * 0.55);
+    playerBike.brake.visible = car.brakeOn && car.gear >= 0;
+    playerBike.riderTop.visible = !inCockpit;              // (first person: your own arms on the bars, no helmet in the way)
+  }
 }
 
 // ---------- visual styles (T cycles): 0 = normal, 1 = toon, 2 = realistic ----------
@@ -1388,8 +1433,9 @@ const look = { theme: 'grass', tod: 'day', realistic: false };
 const headlights = (() => {
   const g = [];
   for (const sx of [-0.62, 0.62]) {
-    const l = new THREE.SpotLight(0xfff1d6, 0, 70, 0.42, 0.55, 1.4); l.position.set(sx, 0.75, -2.2);
-    l.target.position.set(sx * 1.4, 0, -22); playerVis.root.add(l, l.target); g.push(l);
+    // (on the car's root group, not its body: they stay on when riding the motorcycle)
+    const l = new THREE.SpotLight(0xfff1d6, 0, 70, 0.42, 0.55, 1.4); l.position.set(sx, 0.75, -2.2 + CG_F);
+    l.target.position.set(sx * 1.4, 0, -22 + CG_F); playerRoot.add(l, l.target); g.push(l);
   }
   return g;
 })();

@@ -22,6 +22,7 @@ const FILE = process.env.PW_DB || path.join(__dirname, 'polyweave.db');
 const SEASON = 0;                 // 0 = pre-season (beta). Seasons come later.
 const MODES = ['sp', 'mp'];
 const OWNER_NAMES = ['curryeater', 'polyweave'];   // get the Owner title (account names, any upper / lower case)
+const BIKE_NAMES = ['curryeater', 'polyweave', 'codester'];   // may ride the motorcycle (same list in js/main.js)
 
 const db = new DatabaseSync(FILE);
 db.exec(`
@@ -393,5 +394,5 @@ module.exports = {
   db, SEASON, SECRET, ensureUser, grant, gift, inboxOf, unclaimed, claim, top, around, rankOf, bestOf, addRun, spendToken, profile, addPlayTime,
   titlesOf, ownerCounts, alphaOpen, setAlphaOpen, resetTitles, statTitles, statsOf, pendingOf, equipped, equip, isBanned, setBanned, setRemoved, runsOf, runLog, recentRejected,
   areFriends, friendsOf, requestsIn, requestsOut, socialSettings, setSocialSettings, sendRequest, respond, cancelRequest, unfriend,
-  sendMessage, chatWith, markRead, unreadBy, OWNER_NAMES,
+  sendMessage, chatWith, markRead, unreadBy, OWNER_NAMES, BIKE_NAMES,
 };

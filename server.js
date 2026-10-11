@@ -85,6 +85,7 @@ function issueMpToken(p) {
 // a new position from p: add to their run record
 function trackRun(p, st) {
   const R = p.run; if (!R || R.closed || R.room !== p.room) return;
+  if (p.veh === 'bike') R.bike = true;                 // (on the motorcycle at any point: the run is just for fun)
   const prev = R.last; R.last = { s: st.s, t: st.t };
   if (!prev) return;
   const dt = st.t - prev.t;                            // (sender's clock)
@@ -100,8 +101,8 @@ function trackRun(p, st) {
   // between the two cars' bodies within 25 m, anywhere across the road), with a little room for lag
   const len = p.ext.front - p.ext.rear;
   for (const o of p.room.players.values()) {
-    if (o === p || !o.st) continue;
-    const ds2 = Math.abs(T ? T.wd(T.w(o.st.s), T.w(st.s)) : o.st.s - st.s);
+    if (o === p || !o.st || o.veh === 'bike') continue;   // (riding near a motorcycle earns nothing: it's just for fun)
+    const ds2 =Math.abs(T ? T.wd(T.w(o.st.s), T.w(st.s)) : o.st.s - st.s);
     if (ds2 > 48) continue;
     const gap = Math.hypot(Math.max(0, ds2 - len), Math.max(0, Math.abs(o.st.d - st.d) - 2 * p.ext.hw));
     if (gap < 30) { R.nearS += dt; break; }
@@ -182,7 +183,14 @@ function cleanState(st) {
 }
 
 // acct: signed in (their name is their account's, so it can open their profile; a guest's name could be anyone's)
-function roster(room) { return [...room.players.values()].map(p => ({ id: p.id, name: p.name, color: p.color, title: p.title || null, acct: !!(p.account && p.account.name) })); }
+function roster(room) { return [...room.players.values()].map(p => ({ id: p.id, name: p.name, color: p.color, title: p.title || null, acct: !!(p.account && p.account.name), veh: p.veh === 'bike' ? 'bike' : undefined })); }
+// the motorcycle: only for the accounts in DB.BIKE_NAMES (anyone else asking for it stays a car)
+const mayBike = p => !!(p.account && p.account.name && DB.BIKE_NAMES.includes(p.account.name.toLowerCase()));
+function cleanExt(p, e) {
+  if (!e || typeof e !== 'object') return;
+  // (a car can't claim to be motorcycle-sized: that would shrink its proximity / traffic gaps)
+  p.ext = { front: num(e.front, 1, 4), rear: num(e.rear, -4, -1), hw: num(e.hw, p.veh === 'bike' ? 0.35 : 0.85, 1.3) };
+}
 function send(ws, m) { if (ws.readyState === 1) ws.send(JSON.stringify(m)); }
 function broadcast(room, m, except) { const s = JSON.stringify(m); for (const p of room.players.values()) if (p !== except && p.ws.readyState === 1) p.ws.send(s); }
 // a player's position to everyone else in the room: binary for today's game, JSON for a page loaded before
@@ -469,6 +477,9 @@ const server = http.createServer((req, res) => {
       if (mode === 'mp' && !R) { json(400, { error: 'The server restarted during that run, so it can\'t be checked.' }); return; }
       const run = { score: Number(m.score), dur: Number(m.dur), log: m.log };
       if (!(run.score >= MIN_RUN)) { json(200, { rank: null }); return; }
+      // motorcycle runs are just for fun: no leaderboard, no run record, no stats (the game doesn't send them;
+      // a multiplayer run is also checked against what the server saw)
+      if (m.veh === 'bike' || (R && R.bike)) { if (R) R.closed = true; json(200, { rank: null, fun: true }); return; }
       if (!DB.spendToken(tok.n)) { json(409, { error: 'That run was already submitted.' }); return; }
       if (R) R.closed = true;
       const v = RunCheck.verify(run, { mode, wallS: (Date.now() - tok.t) / 1000, mp: R ? { dist: R.dist, nearS: R.nearS } : null });
@@ -519,7 +530,7 @@ wss.on('connection', ws => {
       const room = p.room; if (!room) return;
       const st = cleanState(m.st); if (!st) return;
       p.st = st;
-      if (st.score > p.best) { p.best = st.score; room.bests.set(p.name, p.best); }
+      if (st.score > p.best && p.veh !== 'bike') { p.best = st.score; room.bests.set(p.name, p.best); }   // (not on the motorcycle)
       trackRun(p, st);                                   // (the server's own record of the run, for checking it)
       claimWrecks(p, st.w);                              // (cars they hit: the shared traffic follows their crash)
       st.best = p.best;
@@ -538,7 +549,14 @@ wss.on('connection', ws => {
       else if (Number.isFinite(m.s) && Number.isInteger(m.lane) && m.lane >= 0 && m.lane < 4) room.traffic.recover(c, m.s, m.lane, num(m.v, 0, 40));
       return;
     }
-    if (m.t === 'runtoken') { issueMpToken(p); return; }   // a streak ended: a fresh token for the next run
+    if (m.t === 'runtoken') { issueMpToken(p); return; }
+    // switched between car and motorcycle while on a server: everyone's roster shows the new one
+    if (m.t === 'veh') {
+      p.veh = m.veh === 'bike' && mayBike(p) ? 'bike' : 'car';
+      cleanExt(p, m.ext);
+      if (p.room) broadcast(p.room, { t: 'roster', list: roster(p.room) });
+      return;
+    }   // a streak ended: a fresh token for the next run
     // server chat: "Name (Title): message" to everyone on the server, at most one message per 3 s per player
     if (m.t === 'chat') {
       const room = p.room; if (!room) return;
@@ -562,7 +580,8 @@ wss.on('connection', ws => {
     if (m.name !== undefined) p.name = p.account && p.account.name ? p.account.name : cleanName(m.name);
     if (m.color !== undefined) p.color = cleanColor(m.color);
     if (m.bin !== undefined) p.bin = m.bin === 1;      // (this game reads the binary snapshots / positions)
-    if (m.ext && typeof m.ext === 'object') p.ext ={ front: num(m.ext.front, 1, 4), rear: num(m.ext.rear, -4, -1), hw: num(m.ext.hw, 0.6, 1.3) };
+    if (m.veh !== undefined) p.veh = m.veh === 'bike' && mayBike(p) ? 'bike' : 'car';
+    cleanExt(p, m.ext);
     if (m.t === 'join') {
       const id = String(m.room || '');
       const code = String(m.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');

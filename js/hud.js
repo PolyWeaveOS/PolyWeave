@@ -50,7 +50,8 @@ class Score {
   add(pts) {
     const v = pts * this.mult * (this.prox || 1);     // prox: multiplayer proximity bonus (driving close to another player)
     if (!Number.isFinite(v)) return 0;          // never let a bad value poison the score
-    if (this.score < 1) { this.bestBefore = this.best; this.peakMult = 1; this.runTime = 0; this.runDist = 0; this.log = new RunLog(); }   // a new streak starts
+    if (this.score < 1) { this.bestBefore = this.best; this.peakMult = 1; this.runTime = 0; this.runDist = 0; this.log = new RunLog(); this.fun = false; }   // a new streak starts
+    if (this.funOnly) this.fun = true;          // (any of this streak on the motorcycle: just for fun, it counts for nothing)
     this.score += v; this.pot += v;
     this.peakMult = Math.max(this.peakMult || 1, this.mult);
     this.saveBest();
@@ -104,9 +105,9 @@ class Score {
   // a streak ends (crash or restart): show what it was worth before the score goes back to 0
   endStreak() {
     if (this.score < 1) return;
-    this.hud.showResult(this.score, this.peakMult || this.mult, this.score > (this.bestBefore ?? 0) + 0.5);
-    // (scored runs -> leaderboard, with the event log so the server can check the score)
-    if (this.onStreakEnd) this.onStreakEnd({ score: this.score, peak: this.peakMult || this.mult, dur: this.runTime || 0, dist: this.runDist || 0, log: this.runEvents() });
+    this.hud.showResult(this.score, this.peakMult || this.mult, !this.fun && this.score > (this.bestBefore ?? 0) + 0.5);
+    // (scored runs -> leaderboard, with the event log so the server can check the score; fun = motorcycle: not sent)
+    if (this.onStreakEnd) this.onStreakEnd({ score: this.score, peak: this.peakMult || this.mult, dur: this.runTime || 0, dist: this.runDist || 0, log: this.runEvents(), fun: !!this.fun });
   }
   // the current streak's scoring events, closed off (null when no streak is going)
   runEvents() { if (!this.log || this.score < 1) return null; this.log.now = this.runTime || 0; return this.log.finish().slice(); }
@@ -129,6 +130,7 @@ class Score {
     try { this.best = +(localStorage.getItem(this.bestKey) || 0) || 0; } catch (e) { this.best = 0; }
   }
   saveBest() {
+    if (this.fun) return;                       // (motorcycle streaks never set a personal best)
     if (this.score > this.best) { this.best = this.score; try { localStorage.setItem(this.bestKey, this.best); } catch (e) { /* ignore */ } }
   }
 }

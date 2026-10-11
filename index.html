@@ -186,6 +186,7 @@
         <label class="chk"><input type="checkbox" id="tc"> Traction control</label>
         <label class="chk"><input type="checkbox" id="manual"> Manual gearbox</label>
         <label class="chk"><input type="checkbox" id="minimapOn"> Minimap (multiplayer)</label>
+        <label class="row hidden" id="vehRow">Vehicle <select id="vehSel"><option value="car">Car</option><option value="bike">Motorcycle</option></select></label>
         <h2>Paint</h2>
         <div id="swatches"></div>
         <label class="row">Custom colour <input type="color" id="paint"></label>
@@ -340,7 +341,7 @@
   // Remove names from this list to take a vehicle out of traffic; with none loaded the old traffic returns.
   const VEHICLES = ['camry', 'civic', 'model3', 'golf', 'mini', 'mustang', 'p911', 'prius', 'charger', 'gtr',
     'rav4', 'wrangler', 'tahoe', 'f150', 'transit', 'odyssey', 'vwbus', 'boxtruck', 'cascadia'];
-  const files = ['js/core', 'js/zones', 'js/models', 'js/lowpoly', 'js/toykit', ...VEHICLES.map(k => 'js/vehicles/' + k), 'js/world', 'js/physics', 'js/traffic', 'js/input', 'js/titles', 'js/hud', 'js/netcodec', 'js/net', 'js/account', 'js/main', 'js/social', 'js/dropdown'];
+  const files = ['js/core', 'js/zones', 'js/models', 'js/bike', 'js/lowpoly', 'js/toykit', ...VEHICLES.map(k => 'js/vehicles/' + k), 'js/world', 'js/physics', 'js/traffic', 'js/input', 'js/titles', 'js/hud', 'js/netcodec', 'js/net', 'js/account', 'js/main', 'js/social', 'js/dropdown'];
   for (const f of files) {
     const s = document.createElement('script');
     s.src = `${f}.js?v=${v}`; s.async = false;

@@ -110,15 +110,15 @@ const Net = {
 
   // public server from the list / private server by code / new private server
   // (bin: this game reads the binary traffic snapshots and positions)
-  joinServer(id, name, color) { return this.request({ t: 'join', room: id, name, color, ext: this.ext, bin: 1 }, 'Joining…'); },
+  joinServer(id, name, color) { return this.request({ t: 'join', room: id, name, color, ext: this.ext, bin: 1, veh: this.veh }, 'Joining…'); },
   joinCode(code, name, color) {
     const c = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (c.length !== 6) { this.status('Enter the 6-character code, e.g. K7P-2QX', 'err'); return; }
-    return this.request({ t: 'join', code: c, name, color, ext: this.ext, bin: 1 }, 'Joining ' + c.slice(0, 3) + '-' + c.slice(3) + '…');
+    return this.request({ t: 'join', code: c, name, color, ext: this.ext, bin: 1, veh: this.veh }, 'Joining ' + c.slice(0, 3) + '-' + c.slice(3) + '…');
   },
   // opts.scored: leaderboard server (60% traffic); otherwise free drive with opts.density traffic
   host(name, color, opts = {}) {
-    return this.request({ t: 'create', name, color, ext: this.ext, bin: 1, scored: !!opts.scored, density: opts.density,
+    return this.request({ t: 'create', name, color, ext: this.ext, bin: 1, veh: this.veh, scored: !!opts.scored, density: opts.density,
       listed: !!opts.listed, roomName: opts.roomName, theme: opts.theme, tod: opts.tod }, opts.listed ? 'Creating your public server…' : 'Creating your private server…');
   },
   leave() {
@@ -135,6 +135,9 @@ const Net = {
     this.room = null;
     this.changed();
   },
+  // car or motorcycle (the server only lets the bike's accounts show a bike; everyone else stays a car)
+  veh: 'car',
+  setVehicle(v) { if (v === this.veh) return; this.veh = v; if (this.room) this.send({ t: 'veh', veh: v, ext: this.ext }); },
   // (a traffic car I crash into goes to the server with my position: see traffic.localWrecks)
   // that car got going again (back in lane `lane` at speed v) / couldn't and disappeared
   reportRecover(c) { this.send({ t: 'recover', id: c.id, s: +c.s.toFixed(2), lane: c.lane, v: +c.v.toFixed(2) }); },
@@ -167,20 +170,24 @@ const Net = {
     else if (m.t === 'chat' || m.t === 'chatwait') { if (this.room && this.onChat) this.onChat(m); }   // (server chat: social.js)
     else if (m.t === 'roster') {
       const keep = new Set();
-      for (const r of m.list) { if (r.id === this.myId) continue; keep.add(r.id); this.player(r.id, r.name, r.color, r.title).acct = !!r.acct; }
+      for (const r of m.list) { if (r.id === this.myId) continue; keep.add(r.id); this.player(r.id, r.name, r.color, r.title, r.veh).acct = !!r.acct; }
       for (const [id, p] of this.players) if (!keep.has(id)) { this.removeVis(p); this.players.delete(id); }
       this.changed();
     }
   },
 
   // ---------------------------------------------------------------- friends' cars
-  player(id, name, color, title) {
+  player(id, name, color, title, veh) {
     name = String(name || 'Driver').slice(0, 16);
     if (!/^#[0-9a-f]{6}$/i.test(color)) color = '#a6b0b8';   // only plain colours from other players
     title = Titles.TITLE_BY_ID[title] ? title : null;
+    veh = veh === 'bike' ? 'bike' : 'car';
     let p = this.players.get(id);
     if (!p) { p = { id, name, color, buf: [] }; this.players.set(id, p); }
-    if (p.name !== name || p.color !== color || p.title !== title || !p.g) { p.name = name; p.color = color; p.title = title; this.removeVis(p); this.makeVis(p); }
+    if (p.name !== name || p.color !== color || p.title !== title || p.veh !== veh || !p.g) { p.name = name; p.color = color; p.title = title; p.veh = veh; this.removeVis(p); this.makeVis(p); }
+    // their hitbox (bumps) and size (traffic, proximity) follow what they drive
+    p.hull = veh === 'bike' ? BIKE.hull : null;
+    p.ext = veh === 'bike' ? { front: BIKE.front, rear: BIKE.rear, hw: BIKE.W } : null;
     return p;
   },
   // Each update carries the sender's clock (t). The gap between their clock and ours is the network
@@ -203,14 +210,19 @@ const Net = {
   makeVis(p) {
     if (!this.scene) return;
     p.g = new THREE.Group();
-    p.vis = makeVehicle('m4', paintMat(p.color || '#a6b0b8'));
-    p.vis.root.position.z = CG_F;                 // body sits behind the centre of gravity, like yours
-    p.g.add(p.vis.root);
-    // further away: the same car baked into 6 draw calls instead of ~30 (12 players add up)
-    p.visLite = makeVehicle('m4', paintMat(p.color || '#a6b0b8'), null, true);
-    p.visLite.root.position.z = CG_F; p.visLite.root.visible = false;
-    p.g.add(p.visLite.root);
-    p.visFull = p.vis;
+    if (p.veh === 'bike') {                       // motorcycle (light already: no separate far model)
+      p.vis = p.visFull = p.visLite = makeBike(paintMat(p.color || '#a6b0b8'));
+      p.g.add(p.vis.root);
+    } else {
+      p.vis = makeVehicle('m4', paintMat(p.color || '#a6b0b8'));
+      p.vis.root.position.z = CG_F;               // body sits behind the centre of gravity, like yours
+      p.g.add(p.vis.root);
+      // further away: the same car baked into 6 draw calls instead of ~30 (12 players add up)
+      p.visLite = makeVehicle('m4', paintMat(p.color || '#a6b0b8'), null, true);
+      p.visLite.root.position.z = CG_F; p.visLite.root.visible = false;
+      p.g.add(p.visLite.root);
+      p.visFull = p.vis;
+    }
     // floating name tag (with their title underneath, in its rarity colour; neon ones glow)
     const t = p.title && Titles.TITLE_BY_ID[p.title], rar = t && Titles.RARITIES[t.rarity];
     const c = document.createElement('canvas'); c.width = 256; c.height = t ? 96 : 64;
@@ -325,7 +337,7 @@ const Net = {
       let A = null, px = 0, pz = 0;
       for (const c of cars) {
         if (Math.abs(c.s - st.s) > 14 || Math.abs(c.d - st.d) > 6 || !c.vis.root.visible) continue;
-        A = SAT.toWorld(hull, p.x + px, p.z + pz, p.yaw, this._a);
+        A = SAT.toWorld(p.hull || hull, p.x + px, p.z + pz, p.yaw, this._a);
         const col = SAT.test(A, SAT.toWorld(c.hull, c.x, c.z, c.yaw, this._b));
         if (!col) continue;
         px -= col.nx * col.depth; pz -= col.nz * col.depth;
@@ -367,9 +379,15 @@ const Net = {
       p.g.rotation.y = -yaw;
       // detailed car up close, the baked one further away (switching with a little overlap so it doesn't flicker)
       const ad = Math.abs(s.s - myS), lite = p.vis === p.visLite ? ad > 40 : ad > 50;
-      if (lite !== (p.vis === p.visLite)) { p.vis.root.visible = false; p.vis = lite ? p.visLite : p.visFull; p.vis.root.visible = true; p.vis.spin = (lite ? p.visFull : p.visLite).spin; }
+      if (p.visLite !== p.visFull && lite !== (p.vis === p.visLite)) { p.vis.root.visible = false; p.vis = lite ? p.visLite : p.visFull; p.vis.root.visible = true; p.vis.spin = (lite ? p.visFull : p.visLite).spin; }
       p.vis.brake.visible = !!s.brake;
-      animateWheels(p.vis, (s.v || 0) * dt, s.steer || 0);
+      if (p.veh === 'bike') {
+        // lean into the turn they're making: sideways acceleration from their speed and steering (2.8 m wheelbase physics)
+        const v = s.v || 0, ay = v * v * Math.tan(U.clamp(s.steer || 0, -0.6, 0.6)) / 2.8;
+        p.lean = U.damp(p.lean || 0, U.clamp(-Math.atan2(ay, 9.81) * 0.85, -0.72, 0.72), 6, dt);
+        p.vis.lean.rotation.z = p.lean;
+        animateWheels(p.vis, v * dt, (s.steer || 0) * 0.55);
+      } else animateWheels(p.vis, (s.v || 0) * dt, s.steer || 0);
     }
   },
 
@@ -377,7 +395,7 @@ const Net = {
   agents(ext) {
     const out = [];
     if (!this.room) return out;
-    for (const p of this.players.values()) if (p.now) out.push({ s: p.now.s, d: p.now.d, v: p.now.v || 0, front: ext.front, rear: ext.rear, hw: ext.hw, isPlayer: true, isRemote: true });
+    for (const p of this.players.values()) if (p.now) out.push({ s: p.now.s, d: p.now.d, v: p.now.v || 0, front: (p.ext || ext).front, rear: (p.ext || ext).rear, hw: (p.ext || ext).hw, isPlayer: true, isRemote: true });
     return out;
   },
 
@@ -392,7 +410,7 @@ const Net = {
       const dx = p.x - player.x, dz = p.z - player.z;
       if (dx * dx + dz * dz > 64) continue;
       const pb = player.toBody();
-      const A = SAT.toWorld(hull, pb.x, pb.z, player.visYaw, this._a), B = SAT.toWorld(hull, p.x, p.z, p.yaw, this._b);
+      const A = SAT.toWorld(hull, pb.x, pb.z, player.visYaw, this._a), B = SAT.toWorld(p.hull || hull, p.x, p.z, p.yaw, this._b);
       const col = SAT.test(A, B);
       if (!col) continue;
       const v = p.now.v || 0;
