@@ -196,7 +196,7 @@ class Hud {
     e.rpm.style.width = (U.clamp(car.rpm / M4.redline, 0, 1) * 100).toFixed(1) + '%';
     e.rpm.classList.toggle('limit', car.limiter);
     this.set('la', e.la, this.trafficLabel || `TRAFFIC ${Math.round(settings.density * 100)}%`);
-    this.set('tc', e.tc, (car.tc ? 'TC' : 'TC OFF') + (settings.assist > 0 ? ` · LANE ASSIST ${Math.round(settings.assist * 100)}%${steerCtl.assistActive > 0.05 ? ' ●' : ''}` : ''));
+    this.set('tc', e.tc, (car.tc ? 'TC' : 'TC OFF') + ((steerCtl.assistPct ?? settings.assist) > 0 ? ` · LANE ASSIST ${Math.round((steerCtl.assistPct ?? settings.assist) * 100)}%${steerCtl.assistActive > 0.05 ? ' ●' : ''}` : ''));
     this.set('pad', e.pad, Input.padKind === 'wheel' && Input.wheelUsed ? 'WHEEL' : Input.padKind === 'gamepad' ? 'PAD' : '');
   }
 }

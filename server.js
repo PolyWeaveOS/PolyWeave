@@ -27,6 +27,7 @@ const THEMES = ['grass', 'desert', 'snow'], TODS = ['day', 'sunset', 'night'];
 const SIM_DT = 0.1;                 // shared traffic: 10 steps (and snapshots) per second
 const SCORED_DENSITY = 0.6;         // traffic on scored (leaderboard) servers, same as scored singleplayer
 const MIN_RUN = 100;                // smallest drive that goes on a leaderboard
+const CHAT_GAP = 3000;              // server chat: at least this long (ms) between one player's messages
 
 // ---------------------------------------------------------------- static files
 const TYPES = {
@@ -190,13 +191,17 @@ function joinRoom(p, room) {
     scored: room.scored, density: room.density, theme: room.theme, tod: room.tod });
   issueMpToken(p);                                     // (scored server + signed in: runs can go on the leaderboard)
   broadcast(room, { t: 'roster', list: roster(room) });
+  broadcast(room, { t: 'chat', sys: 'join', name: p.name, title: p.title || null });   // "Name (Title) joined the server"
   if (p.account) presenceChanged(p.account.id);        // (friends see which server)
 }
 function leaveRoom(p) {
   const room = p.room; if (!room) return;
   if (p.run) p.run.closed = true;                      // (a run in progress can still be submitted)
   room.players.delete(p.id); p.room = null; p.agent = null;
-  if (room.players.size) broadcast(room, { t: 'roster', list: roster(room) });
+  if (room.players.size) {
+    broadcast(room, { t: 'roster', list: roster(room) });
+    broadcast(room, { t: 'chat', sys: 'leave', name: p.name, title: p.title || null });
+  }
   else { room.emptySince = Date.now(); room.traffic = null; }   // nobody left: drop the traffic
   if (p.account) presenceChanged(p.account.id);
 }
@@ -262,6 +267,12 @@ const server = http.createServer((req, res) => {
       DB.addPlayTime(u.id, num(+m.s, 0, 75));
       json(200, { ok: true });
     });
+    return;
+  }
+  // ---- achievements: GET /api/achievements (Bearer) -> your stats + which title rewards you own / have waiting
+  if (route === '/api/achievements') {
+    const u = bearer(); if (!u) { json(401, { error: 'Sign in to see your achievements.' }); return; }
+    json(200, { stats: DB.statsOf(u.id), owned: DB.titlesOf(u.id), pending: DB.pendingOf(u.id) });
     return;
   }
   // ---- inbox: GET /api/inbox (Bearer) -> items; POST /api/inbox/claim {session, id}
@@ -483,6 +494,16 @@ wss.on('connection', ws => {
       return;
     }
     if (m.t === 'runtoken') { issueMpToken(p); return; }   // a streak ended: a fresh token for the next run
+    // server chat: "Name (Title): message" to everyone on the server, at most one message per 3 s per player
+    if (m.t === 'chat') {
+      const room = p.room; if (!room) return;
+      const text = cleanText(m.text).slice(0, 120); if (!text) return;
+      const now = Date.now(), wait = (p.chatT || 0) + CHAT_GAP - now;
+      if (wait > 0) { send(ws, { t: 'chatwait', ms: wait }); return; }
+      p.chatT = now;
+      broadcast(room, { t: 'chat', id: p.id, name: p.name, title: p.title || null, text });
+      return;
+    }
     // signed-in game: online for friends (sent on connecting, and again after signing in / out)
     if (m.t === 'auth') { setAccount(p, Accounts.bySession(m.session)); send(ws, { t: 'authed', ok: !!p.account }); return; }
     // what I'm doing outside servers: menu / singleplayer (world, time of day, scored); servers are known here

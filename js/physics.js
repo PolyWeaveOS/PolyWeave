@@ -56,6 +56,12 @@ const M4 = {
   kbAlign: 0,       // with no key pressed, steer the car back in line with the road (0 = off, 1 = full)
   kbAlignTau: 0.6,  // ...taking about this long to line up
   kbAlignMax: 0.35, // ...using at most this much of a full turn
+  kbCounter: 1,     // steering back against the way the car points (switching sides / straightening out) pulls this much harder
+  kbTurnCap: 0,     // keyboard's own cornering ceiling (g) while swinging back / straightening; 0 = the same as the wheel (turnG)
+  kbPressCap: 0,    // ...and while simply turning with a key held (0 = turnG)
+  kbEase: 0,        // eased (critically damped) steering: speed factor vs the plain smoothing rates; 0 = off (instant-start smoothing)
+  kbCapBlend: 0,    // how quickly those grip ceilings blend from one to another (per second); 0 = at once
+  kbSlew: 0,        // hand speed: most the steering can move per second (in full turns); 0 = no limit
   // (the keyboard values above are overwritten by the preset picked in Settings - see KB_PRESETS)
   ratio: 14.5,    // steering ratio (wheel deg : road-wheel deg)
   brakeGrip: 1.23, // braking grip multiplier on top of the tyre grip (stronger, shorter stops)
@@ -67,18 +73,40 @@ const KB_PRESETS = {
   classic: {
     kbFirst: 0.5, kbBuild: 0.6, kbSmooth: 18, kbReturn: 10, kbReturnTail: 3, kbTailAt: 0.1,
     kbFlipSmooth: 12, kbFlipBoost: 1.2, kbFlipTime: 0.12, kbGrace: 0.12,
-    kbTurnG: [[0, 4.35], [40, 4.05], [100, 3.9], [300, 3.7]], kbAlign: 0,
+    kbTurnG: [[0, 4.35], [40, 4.05], [100, 3.9], [300, 3.7]], kbAlign: 0, kbAlignTau: 0.6, kbAlignMax: 0.35,
+    kbCounter: 1, kbTurnCap: 0, kbPressCap: 0,
   },
   // Max control: letting go lines the car back up with the road by itself (no counter-steering
   // needed to straighten out), and the steering comes back to centre crisply - no lingering turn.
+  // (saved 2026-10-10 before "snappy": the Max control tuning as it was, to switch back to)
   control: {
     kbFirst: 0.5, kbBuild: 0.6, kbSmooth: 18, kbReturn: 14, kbReturnTail: 14, kbTailAt: 0.1,
     kbFlipSmooth: 12, kbFlipBoost: 1.2, kbFlipTime: 0.12, kbGrace: 0.12,
-    kbTurnG: [[0, 4.35], [40, 4.05], [100, 3.9], [300, 3.7]], kbAlign: 1,
+    kbTurnG: [[0, 4.35], [40, 4.05], [100, 3.9], [300, 3.7]], kbAlign: 1, kbAlignTau: 0.6, kbAlignMax: 0.35,
+    kbCounter: 1, kbTurnCap: 0, kbPressCap: 0,
+  },
+  // Snappy (default): no heavy half-second when switching sides, no drifting on after letting go.
+  // Steering back against the way the car points pulls harder, and letting go lines the car up quickly.
+  // (measured at 200 km/h after a 0.3 s tap: the car changes direction 0.26 s after switching, was 0.38 s;
+  //  letting go, it's straight again in 0.87 s, was 1.31 s; holding 0.6 s then letting go still carries you
+  //  ~2.5 lanes across. A first, stronger version (0.15 s / 0.22 s / only 1.5 lanes) was too snappy.)
+  //  Then a stronger initial turn: a press starts at 60.5% of the full turn (was 50%) with extra grip for its
+  //  first ~0.4 s (kbPressCap). (tried 85% / 3.6 g, then 71% / 3.17 g; both too much, so halved again)
+  //  Turning vs speed (kbTurnG, km/h -> sideways g): asking for the same g at every speed made the car rotate
+  //  2.5x faster at 40 mph than at 100 mph (turn rate = g / speed), which looked unnatural. Now the g eases off
+  //  below 100 mph: a quick tap at 40 mph turns ~1.4x what it does at 100 mph (30 mph ~1.6x). 100 mph and up
+  //  are unchanged; parking-lot speeds are limited by the steering lock (kbLowLock) as before.
+  snappy: {
+    kbFirst: 0.605, kbBuild: 0.6, kbSmooth: 18, kbReturn: 15, kbReturnTail: 15, kbTailAt: 0.1,
+    kbFlipSmooth: 18, kbFlipBoost: 1.2, kbFlipTime: 0.12, kbGrace: 0.12,
+    kbTurnG: [[0, 1.3], [48, 1.65], [64, 1.9], [97, 2.5], [129, 3.2], [161, 3.84], [300, 3.7]], kbAlign: 1, kbAlignTau: 0.35, kbAlignMax: 0.5,
+    kbCounter: 1.6, kbTurnCap: 3.2, kbPressCap: 2.85,
   },
 };
-function setKbStyle(name) { Object.assign(M4, KB_PRESETS[name] || KB_PRESETS.control); }
-setKbStyle('control');
+// To go back to the previous keyboard feel, change 'snappy' to 'control' here.
+const KB_STYLE = 'snappy';
+function setKbStyle(name) { Object.assign(M4, KB_PRESETS[name] || KB_PRESETS[KB_STYLE]); }
+setKbStyle(KB_STYLE);
 
 function engineTorque(rpm) {
   const t = M4.torque;
@@ -235,7 +263,7 @@ class PlayerCar {
     // natural understeer gradient: same wheel angle turns a bit less at high speed (real cars, AC tyres)
     let kin = this.u / L * Math.tan(d) / (1 + M4.usK * this.u * this.u);
     if (Math.abs(this.u) > 3) {
-      const cap = 9.81 * M4.turnG;
+      const cap = 9.81 * (this.turnCapG || M4.turnG);   // (keyboard can have its own ceiling; the wheel always uses turnG)
       kin = cap * Math.tanh(this.u * kin / cap) / this.u;
     }
     const tau = M4.yawTau0 + M4.yawTauV * Math.abs(this.u);
@@ -355,11 +383,38 @@ class SteerController {
       }
       // just switched sides (still swinging over): pull a bit harder so the car changes direction sooner
       const flipping = t !== 0 && this.kbFlip && (Math.sign(this.k1) !== Math.sign(t) || this.kbSwitchT < M4.kbFlipTime);
-      const target = t === 0 ? 0 : t * this.key * (flipping ? M4.kbFlipBoost : 1);
+      // steering back against the way the car still points (switching sides, straightening out of a lane
+      // change): pull harder until it points down the road again, so the car swings over without a heavy delay
+      let counter = 1;
+      if (t !== 0 && M4.kbCounter > 1 && car.u > 9) {
+        const p = ROAD.project(car.x, car.z), eYaw = U.wrap(car.yaw - ROAD.yaw(p.s));   // (car heading vs the road)
+        if (Math.sign(t) !== Math.sign(eYaw) && Math.abs(eYaw) > 0.004) counter = U.lerp(1, M4.kbCounter, U.smooth(0.004, 0.03, Math.abs(eYaw)));
+      }
+      const target = t === 0 ? 0 : t * this.key * Math.max(flipping ? M4.kbFlipBoost : 1, counter);
       // letting go: drops away quickly, then the last little bit of turn slides gently back to centre
       const wRet = U.lerp(M4.kbReturnTail, M4.kbReturn, U.smooth(0, M4.kbTailAt * 2, Math.abs(this.k1)));
-      const w = t === 0 ? wRet : flipping ? M4.kbFlipSmooth : M4.kbSmooth;
-      this.k1 += (target - this.k1) * (1 - Math.exp(-dt * w));
+      const w = t === 0 ? wRet : flipping || counter > 1 ? M4.kbFlipSmooth : M4.kbSmooth;
+      // the keyboard's higher cornering ceiling only while swinging back / straightening, so ordinary held
+      // turns stay exactly as sharp as before
+      // (a fresh press gets extra grip for its first moments - a strong initial turn - fading back to the normal
+      //  ceiling by ~0.6 s, so long held turns stay as they were)
+      this.kbHeld = t === 0 ? 0 : (this.kbHeld || 0) + dt;
+      const pressCap = M4.kbPressCap > 0 ? M4.turnG + (M4.kbPressCap - M4.turnG) * (1 - U.smooth(0.25, 0.6, this.kbHeld)) : 0;
+      this.kbCap = counter > 1 || t === 0 ? M4.kbTurnCap : pressCap;
+      if (M4.kbEase > 0) {
+        // eased steering: the steering speeds up into a turn and slows as it arrives, like hands on a real wheel
+        // (critically damped - no overshoot, no instant kick when a key goes down or comes up)
+        const wn = w * M4.kbEase, acc = wn * wn * (target - this.k1) - 2 * wn * (this.k1v || 0);
+        this.k1v = (this.k1v || 0) + acc * dt;
+        this.k1 += this.k1v * dt;
+      } else {
+        const was = this.k1;
+        this.k1 += (target - this.k1) * (1 - Math.exp(-dt * w));
+        // hand speed: the steering can only move so fast (a full turn's worth in 1 / kbSlew s), so a switch from
+        // one side to the other is a quick sweep, not a snap - the sideways force builds and fades like a real car
+        if (M4.kbSlew > 0) this.k1 = was + U.clamp(this.k1 - was, -M4.kbSlew * dt, M4.kbSlew * dt);
+        this.k1v = 0;
+      }
       if (this._kbKeys !== M4.kbTurnG) { this._kbKeys = M4.kbTurnG; this._kbG = mcurve(M4.kbTurnG); }
       const kbSens = settings.kbSens || 1;   // keyboard has its own sensitivity (the wheel's slider doesn't touch it)
       const v = Math.max(spd, 1), turn = this._kbG(spd * 3.6) * 9.81 * kbSens;   // full-key sideways accel (m/s^2)
@@ -367,18 +422,35 @@ class SteerController {
       // straighten-out help (Max control): with no key held the car steers itself back in line with the
       // road's curve, so after a lane change or a swerve you don't have to counter-steer to recover.
       // Pressing any key hands control straight back.
+      // (this IS lane assist for keyboard / gamepad: Settings "Lane assist (keyboard / gamepad)", 100% by default
+      //  = the full tuned help, 0% = off - the car keeps whatever angle you leave it at)
       let alignT = 0;
-      if (t === 0 && M4.kbAlign > 0 && car.u > 9) {
+      const kbAssist = settings.laneCentre ? 1 : settings.assistKb ?? 1;
+      if (t === 0 && M4.kbAlign * kbAssist > 0 && car.u > 9) {
         const p = ROAD.project(car.x, car.z), eYaw = U.wrap(car.yaw - ROAD.yaw(p.s));
         if (Math.abs(eYaw) < 0.6 && p.d > ROAD.edgeL - 3 && p.d < ROAD.edgeR + 3) {
           const us = 1 + M4.usK * car.u * car.u;
           const ang = Math.atan(M4.wheelbase * ROAD.kappa(p.s) * us) - M4.wheelbase * us * eYaw / (M4.kbAlignTau * car.u);
-          alignT = M4.kbAlign * U.clamp(ang, -M4.kbAlignMax * full, M4.kbAlignMax * full);
+          alignT = M4.kbAlign * kbAssist * U.clamp(ang, -M4.kbAlignMax * full, M4.kbAlignMax * full);
         }
       }
-      this.kAl = (this.kAl || 0) + (alignT - (this.kAl || 0)) * (1 - Math.exp(-dt * (t === 0 ? M4.kbReturn : M4.kbSmooth * 2)));
+      const wA = t === 0 ? M4.kbReturn : M4.kbSmooth * 2;
+      if (M4.kbEase > 0) {                       // (the straighten-up help eases in and out the same way)
+        const wn = wA * M4.kbEase, acc = wn * wn * (alignT - (this.kAl || 0)) - 2 * wn * (this.kAlv || 0);
+        this.kAlv = (this.kAlv || 0) + acc * dt;
+        this.kAl = (this.kAl || 0) + this.kAlv * dt;
+      } else this.kAl = (this.kAl || 0) + (alignT - (this.kAl || 0)) * (1 - Math.exp(-dt * wA));
       drv = this.k1 * full + this.kAl;
       intent = Math.abs(t);
+      this.assistPct = kbAssist;                 // (HUD: "LANE ASSIST 100%", lit while it's straightening the car)
+      this.kbAssisting = t === 0 && Math.abs(this.kAl) > 0.0005;
+    }
+    // keyboard: its own grip ceilings while turning / swinging back (blended, never switched in one step); wheel = M4.turnG
+    if (wheel) { car.turnCapG = 0; this.capF = 0; }
+    else {
+      const want = this.kbCap || M4.turnG;
+      this.capF = this.capF ? this.capF + (want - this.capF) * (1 - Math.exp(-dt * (M4.kbCapBlend || 1e9))) : want;
+      car.turnCapG = this.capF;
     }
     drv = U.clamp(drv, -M4.maxLock, M4.maxLock);
 
@@ -387,9 +459,12 @@ class SteerController {
     // into a lane). The moment you steer it lets go completely, and it only eases back in once your
     // steering has settled, so it never fights a turn or a quick left-right weave.
     // (settings.laneCentre: also holds the nearest lane - only used while the menu is open on a server)
-    const S = settings.assist;
+    // This road-following assist is the STEERING WHEEL's lane assist (Settings "Lane assist (steering wheel)");
+    // keyboard / gamepad have their own (the straighten-up help above), so it stays out of their way.
+    const S = wheel || settings.laneCentre ? settings.assist : 0;
+    if (wheel) this.assistPct = settings.assist;
     let out = drv;
-    this.assistActive = 0;
+    this.assistActive = !wheel && this.kbAssisting ? 1 : 0;
     const steering = intent > 0.01 || (!wheel && Math.abs(this.k1) > 0.03);
     this.assistGate = steering ? 0 : Math.min(1, (this.assistGate ?? 1) + dt / M4.assistBack);
     if (S > 0 && car.u > 9 && this.assistGate > 0) {

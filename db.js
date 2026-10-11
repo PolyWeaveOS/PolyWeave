@@ -56,7 +56,7 @@ db.exec(`
 {
   const have = new Set(db.prepare('PRAGMA table_info(users)').all().map(c => c.name));
   for (const [col, def] of [['best_rank_sp', 'INTEGER'], ['best_rank_mp', 'INTEGER'],
-    ['allow_requests', 'INTEGER NOT NULL DEFAULT 1'], ['hide_activity', 'INTEGER NOT NULL DEFAULT 0']]) if (!have.has(col)) db.exec(`ALTER TABLE users ADD COLUMN ${col} ${def}`);
+    ['allow_requests', 'INTEGER NOT NULL DEFAULT 1'], ['hide_activity', 'INTEGER NOT NULL DEFAULT 0'], ['best_team', 'REAL NOT NULL DEFAULT 0']]) if (!have.has(col)) db.exec(`ALTER TABLE users ADD COLUMN ${col} ${def}`);
   const haveR = new Set(db.prepare('PRAGMA table_info(runs)').all().map(c => c.name));
   if (!haveR.has('dist')) db.exec('ALTER TABLE runs ADD COLUMN dist REAL');
   if (!haveR.has('room')) db.exec('ALTER TABLE runs ADD COLUMN room TEXT');   // (multiplayer: which server, for team runs)
@@ -85,7 +85,9 @@ function gift(uid, title) {
 }
 const inboxOf = uid => db.prepare('SELECT id, kind, item, t, claimed FROM inbox WHERE uid = ? ORDER BY claimed IS NOT NULL, t DESC LIMIT 60').all(uid)
   .filter(r => r.kind !== 'title' || Titles.TITLE_BY_ID[r.item]);
-const unclaimed = uid => db.prepare('SELECT COUNT(*) AS n FROM inbox WHERE uid = ? AND claimed IS NULL').get(uid).n;
+const pendingOf = uid => db.prepare("SELECT item FROM inbox WHERE uid = ? AND kind = 'title' AND claimed IS NULL").all(uid).map(r => r.item).filter(id => Titles.TITLE_BY_ID[id]);   // (waiting in the inbox)
+// (only titles that still exist: a removed title left in someone's inbox doesn't count)
+const unclaimed = uid => db.prepare('SELECT item FROM inbox WHERE uid = ? AND claimed IS NULL').all(uid).filter(r => Titles.TITLE_BY_ID[r.item]).length;
 // claim one: the title becomes theirs. Returns the item, or null
 function claim(uid, id) {
   const r = db.prepare('SELECT * FROM inbox WHERE id = ? AND uid = ? AND claimed IS NULL').get(id, uid);
@@ -237,12 +239,24 @@ function addRun(r) {
   const team = r.mode === 'mp' && r.room ? teamRun(r.room, now - (r.dur || 0) * 1000, now) : null;
   return { rank, best: Math.max(before, Math.round(r.score)), improved, newTitles, team };
 }
-// Career totals (near misses, distance in scored runs, friends, best multiplier): sends any titles they've
-// reached to the inbox. Returns the titles just sent.
+// A player's achievement stats: near misses and distance (totals), farthest single run, multiplayer runs, best
+// multiplier, friends, best single-run score (any counted run) and best team run.
+function statsOf(uid) {
+  const s = db.prepare(`SELECT SUM(near) AS near, SUM(dist) AS dist, MAX(dist) AS runDist, MAX(peak) AS peak,
+                        SUM(CASE WHEN mode = 'mp' THEN 1 ELSE 0 END) AS mpRuns FROM runs WHERE uid = ? AND removed = 0 AND verified = 1`).get(uid) || {};
+  const best = db.prepare('SELECT MAX(score) AS s FROM runs WHERE uid = ? AND removed = 0 AND verified >= 0').get(uid);
+  const u = db.prepare('SELECT best_team FROM users WHERE uid = ?').get(uid);
+  return {
+    near: s.near || 0, dist: s.dist || 0, runDist: s.runDist || 0, peak: s.peak || 0, mpRuns: s.mpRuns || 0,
+    friends: db.prepare('SELECT COUNT(*) AS n FROM friends WHERE uid = ?').get(uid).n,
+    score: (best && best.s) || 0, team: (u && u.best_team) || 0,
+  };
+}
+// every achievement title their stats have reached (stat titles, best single run, best team run) goes to the
+// inbox. Returns the titles just sent.
 function statTitles(uid) {
-  const s = db.prepare('SELECT SUM(near) AS near, SUM(dist) AS dist, MAX(peak) AS peak FROM runs WHERE uid = ? AND removed = 0 AND verified = 1').get(uid) || {};
-  s.friends = db.prepare('SELECT COUNT(*) AS n FROM friends WHERE uid = ?').get(uid).n;
-  return Titles.titlesForStats(s).filter(id => gift(uid, id));
+  const s = statsOf(uid);
+  return Titles.titlesForStats(s).concat(Titles.titlesForRun(s.score), Titles.titlesForTeam(s.team)).filter(id => gift(uid, id));
 }
 // Team run: every signed-in player whose verified run on the same server overlapped this one in time. Their
 // runs add up (each player's best overlapping run counts once); 2+ players reaching a team goal all get it.
@@ -251,7 +265,10 @@ function teamRun(room, start, end) {
                            AND t - dur * 1000 < ? AND t > ? GROUP BY uid`).all(room, end, start);
   if (rows.length < 2) return null;
   const total = rows.reduce((n, x) => n + x.s, 0), ids = Titles.titlesForTeam(total), gifted = {};   // uid -> titles just sent
-  for (const x of rows) { const got = ids.filter(id => gift(x.uid, id)); if (got.length) gifted[x.uid] = got; }
+  for (const x of rows) {
+    db.prepare('UPDATE users SET best_team = MAX(best_team, ?) WHERE uid = ?').run(total, x.uid);   // (Achievements: best team run)
+    const got = ids.filter(id => gift(x.uid, id)); if (got.length) gifted[x.uid] = got;
+  }
   return { total, players: rows.length, gifted };
 }
 // highest leaderboard spot ever (a run can only climb when it improves, so this is checked then)
@@ -369,12 +386,12 @@ const runsOf = (uid, n = 30) => db.prepare('SELECT id, mode, score, dur, near, t
 const runLog = id => { const r = db.prepare('SELECT log FROM runs WHERE id = ?').get(id); return r && r.log ? JSON.parse(zlib.gunzipSync(r.log)) : null; };
 const recentRejected = (n = 30) => db.prepare('SELECT id, uid, mode, score, dur, t, note FROM runs WHERE verified = -1 ORDER BY t DESC LIMIT ?').all(n);
 
-// titles v4 (once): new rarities + new titles - every title wiped and sent back (after everything above is defined)
-if (!getMeta('titles_v4')) { setMeta('titles_v3', Date.now()); setMeta('titles_v4', Date.now()); resetTitles(); }
+// titles v5 (once): achievements + new titles - every title wiped and sent back (after everything above is defined)
+if (!getMeta('titles_v5')) { for (const k of ['titles_v3', 'titles_v4', 'titles_v5']) setMeta(k, Date.now()); resetTitles(); }
 
 module.exports = {
   db, SEASON, SECRET, ensureUser, grant, gift, inboxOf, unclaimed, claim, top, around, rankOf, bestOf, addRun, spendToken, profile, addPlayTime,
-  titlesOf, ownerCounts, alphaOpen, setAlphaOpen, resetTitles, statTitles, equipped, equip, isBanned, setBanned, setRemoved, runsOf, runLog, recentRejected,
+  titlesOf, ownerCounts, alphaOpen, setAlphaOpen, resetTitles, statTitles, statsOf, pendingOf, equipped, equip, isBanned, setBanned, setRemoved, runsOf, runLog, recentRejected,
   areFriends, friendsOf, requestsIn, requestsOut, socialSettings, setSocialSettings, sendRequest, respond, cancelRequest, unfriend,
   sendMessage, chatWith, markRead, unreadBy,
 };

@@ -4,7 +4,7 @@
 // =====================================================================
 
 // ---------- settings ----------
-const DEFAULTS = { density: 0.55, assist: 0, sens: 1.0, kbSens: 1.0, blur: 0, world: 'grass', tod: 'day', hostVis: 'public', hostWorld: 'grass', hostTod: 'day', hostName: '', mirrors: 'medium', units: 'mph', rhd: false, vol: 0.6, tc: true, manual: false, color: '#a6b0b8', mpDensity: 0.55, minimap: true };
+const DEFAULTS = { density: 0.55, assist: 0, sens: 1.0, kbSens: 1.0, blur: 0, world: 'grass', tod: 'day', hostVis: 'public', hostWorld: 'grass', hostTod: 'day', hostName: '', mirrors: 'medium', units: 'mph', rhd: false, vol: 0.6, tc: true, manual: false, color: '#a6b0b8', mpDensity: 0.55, minimap: true, chatSize: 1.2, assistKb: 1 };   // (assist: steering wheel lane assist; assistKb: keyboard / gamepad, 100% = the tuned straighten-up help)
 const SCORED_DENSITY = 0.6;               // scored (leaderboard) runs always use this much traffic
 const Settings = Object.assign({}, DEFAULTS);
 try { Object.assign(Settings, JSON.parse(localStorage.getItem('tw_settings2') || '{}')); } catch (e) { /* ignore */ }
@@ -65,7 +65,13 @@ const camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.05, 3
 addEventListener('resize', () => { renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); });
 // HUD size (score, near miss / crash messages, run result, speedometer...) follows the window: full size with
 // about 1250 px of height (a big monitor), smaller on laptops, never under half (style.css --hud)
-function hudScale() { document.documentElement.style.setProperty('--hud', U.clamp(Math.min(innerHeight / 1250, innerWidth / 2000), 0.5, 1.1).toFixed(3)); }
+// The main menu page (logo, big buttons, friends / inbox) scales the same way: full size on a big monitor,
+// down to ~0.62 on a small laptop (style.css --ui)
+function hudScale() {
+  const s = document.documentElement.style;
+  s.setProperty('--hud', U.clamp(Math.min(innerHeight / 1250, innerWidth / 2000), 0.5, 1.1).toFixed(3));
+  s.setProperty('--ui', U.clamp(Math.min(innerHeight / 1000, innerWidth / 1650), 0.62, 1).toFixed(3));
+}
 hudScale(); addEventListener('resize', hudScale);
 
 // ---------- game objects ----------
@@ -285,7 +291,7 @@ function startPosition() {
   car.place(40, ROAD.lane(2), 100 / 3.6);
   car.tc = Settings.tc; car.manual = Settings.manual; car.hitT = 0;
   camS.yaw = car.yaw; camS.shift = 0;
-  steerCtl.key = 0; steerCtl.k1 = 0; steerCtl.wheelF = 0; steerCtl.kAl = 0;
+  steerCtl.key = 0; steerCtl.k1 = 0; steerCtl.wheelF = 0; steerCtl.kAl = 0; steerCtl.k1v = 0; steerCtl.kAlv = 0;
   traffic.clear();
   const p = ROAD.project(car.x, car.z); car.s = p.s; car.d = p.d; ROAD.hintS = car.s;
   Object.assign(proxy, { s: car.s, d: car.d, v: car.u });
@@ -303,7 +309,7 @@ function resetCar() {
   car.place(p.s, ROAD.lane(2), 100 / 3.6);
   car.tc = Settings.tc; car.manual = Settings.manual; car.hitT = 0;
   car.s = p.s; car.d = ROAD.lane(2); ROAD.hintS = car.s;
-  steerCtl.key = 0; steerCtl.k1 = 0; steerCtl.wheelF = 0; steerCtl.kAl = 0;
+  steerCtl.key = 0; steerCtl.k1 = 0; steerCtl.wheelF = 0; steerCtl.kAl = 0; steerCtl.k1v = 0; steerCtl.kAlv = 0;
   camS.yaw = car.yaw; camS.shift = 0;
   Object.assign(proxy, { s: car.s, d: car.d, v: car.u });
   if (!traffic.remote) { traffic.clear(); traffic.maintain(proxy, game.density); }   // (online the traffic is shared)
@@ -392,7 +398,7 @@ function spawnInLot(slot) {
   car.place(sp.s, sp.d, 0);
   car.tc = Settings.tc; car.manual = Settings.manual; car.hitT = 0;
   car.s = sp.s; car.d = sp.d; ROAD.hintS = sp.s; lastGoodS = sp.s;
-  steerCtl.key = 0; steerCtl.k1 = 0; steerCtl.wheelF = 0; steerCtl.kAl = 0;
+  steerCtl.key = 0; steerCtl.k1 = 0; steerCtl.wheelF = 0; steerCtl.kAl = 0; steerCtl.k1v = 0; steerCtl.kAlv = 0;
   camS.yaw = car.yaw; camS.shift = 0;
   world.fillAll(car.s);
   Object.assign(proxy, { s: car.s, d: car.d, v: 0 });
@@ -455,7 +461,7 @@ function backOnRoad() {
   const u = Math.max(0, car.u);
   car.place(car.s, ROAD.lane(lane), u); car.hitT = 0;
   car.d = ROAD.lane(lane);
-  steerCtl.key = 0; steerCtl.k1 = 0; steerCtl.wheelF = 0; steerCtl.kAl = 0;
+  steerCtl.key = 0; steerCtl.k1 = 0; steerCtl.wheelF = 0; steerCtl.kAl = 0; steerCtl.k1v = 0; steerCtl.kAlv = 0;
   camS.yaw = car.yaw; camS.shift = 0;
   Object.assign(proxy, { s: car.s, d: car.d, v: u, ry: 0 });
   score.lose('SHOULDER, STREAK LOST');
@@ -567,11 +573,14 @@ const bindRange = (id, key, toVal, fmt) => {
 };
 bindRange('fdDens', 'density', v => v / 100, v => v + '%');        // singleplayer free drive traffic
 bindRange('mpDens', 'mpDensity', v => v / 100, v => v + '%');      // free drive server traffic
-bindRange('la', 'assist', v => v / 100, v => (v === 0 ? 'Off' : v + '%'));
+bindRange('laKb', 'assistKb', v => v / 100, v => (v === 0 ? 'Off' : v + '%'));   // keyboard / gamepad (100% by default)
+bindRange('la', 'assist', v => v / 100, v => (v === 0 ? 'Off' : v + '%'));       // steering wheel
 bindRange('sens', 'sens', v => v / 100, v => (v / 100).toFixed(2) + '×');       // wheel / controller
 bindRange('kbSens', 'kbSens', v => v / 100, v => (v / 100).toFixed(2) + '×');   // keyboard
-setKbStyle('control');   // keyboard steering: always "Max control" (the older "classic" preset stays in physics.js, unused)
+setKbStyle(KB_STYLE);   // keyboard steering preset (physics.js KB_STYLE: 'snappy'; 'control' and 'classic' are kept to switch back)
 bindRange('vol', 'vol', v => v / 100, v => v + '%');
+bindRange('chatSize', 'chatSize', v => v / 100, v => v + '%');   // multiplayer chat size (style.css --chat)
+{ const applyChat = () => document.documentElement.style.setProperty('--chat', Settings.chatSize); $id('chatSize').addEventListener('input', applyChat); applyChat(); }
 { // drop-downs: mirror quality, speed units, driver side
   const pick = (id, get, set) => { const el = $id(id); el.value = get(); el.addEventListener('change', () => { set(el.value); saveSettings(); }); };
   pick('mirrorQ', () => Settings.mirrors, v => { Settings.mirrors = v; MIRRORS.setQuality(v); });
@@ -763,6 +772,13 @@ document.querySelectorAll('[data-lbview]').forEach(b => b.addEventListener('clic
   loadLeaderboard();
 }));
 const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt !== undefined) e.textContent = txt; return e; };
+// simple white line icons (they take the text colour, so they grey out with whatever they're in)
+const ICONS = {
+  tag: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 12.2V4.5A1.5 1.5 0 0 1 4.5 3h7.7l9 9-9.2 9.2z"/><circle cx="7.8" cy="7.8" r="1.6" fill="currentColor" stroke="none"/></svg>',
+  lock: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><rect x="5" y="11" width="14" height="10" rx="2.2"/><path d="M8.5 11V7.5a3.5 3.5 0 0 1 7 0V11"/></svg>',
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
+};
+const icon = (name, cls = '') => { const s = el('span', 'ico-' + name + (cls ? ' ' + cls : '')); s.innerHTML = ICONS[name]; return s; };
 // a title as a coloured label (rarity colour; neon ones glow)
 function titleEl(id, cls = 'ttl') {
   const t = Titles.TITLE_BY_ID[id]; if (!t) return null;
@@ -927,7 +943,8 @@ function renderTitles() {
   for (const t of all) {
     const have = owned.has(t.id), b = el('button', 'titleOpt' + (have ? '' : ' locked') + (p.title === t.id ? ' sel' : ''));
     const n = (p.owners && p.owners[t.id]) || 0;            // how many accounts own it
-    b.append(titleEl(t.id), el('span', 'desc', (have ? '' : '🔒 ') + Titles.desc(t, Settings.units)), el('span', 'owners', `${U.fmt(n)} ${n === 1 ? 'owner' : 'owners'}`));
+    const d = el('span', 'desc', Titles.desc(t, Settings.units)); if (!have) d.prepend(icon('lock'));
+    b.append(titleEl(t.id), d, el('span', 'owners', `${U.fmt(n)} ${n === 1 ? 'owner' : 'owners'}`));
     if (have) b.onclick = () => pick(t.id); else b.disabled = true;
     list.appendChild(b);
   }
@@ -1485,7 +1502,7 @@ function driveStep(dt, ctl, paused) {
   // safety net: if the car state ever becomes invalid (NaN), put it back on the road
   if (![car.x, car.z, car.u, car.v, car.r, car.yaw, car.steer].every(Number.isFinite)) {
     car.place(Number.isFinite(lastGoodS) ? lastGoodS : 40, ROAD.lane(2), 100 / 3.6);
-    car.wImp = 0; car.rK = 0; steerCtl.key = steerCtl.k1 = steerCtl.wheelF = 0; steerCtl.kAl = 0;
+    car.wImp = 0; car.rK = 0; steerCtl.key = steerCtl.k1 = steerCtl.wheelF = 0; steerCtl.kAl = 0; steerCtl.k1v = 0; steerCtl.kAlv = 0;
   }
   const pr = ROAD.project(car.x, car.z);
   car.s = pr.s; car.d = pr.d; lastGoodS = pr.s;

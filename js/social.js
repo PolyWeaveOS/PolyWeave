@@ -80,7 +80,8 @@ const Social = {
       const t = it.kind === 'title' && Titles.TITLE_BY_ID[it.item]; if (!t) continue;
       const row = el('div', 'ibItem' + (it.claimed ? ' done' : ''));
       const what = el('div', 'what'); what.append(el('small', '', it.claimed ? 'Title claimed' : 'New title'), titleEl(t.id), el('span', 'd', Titles.desc(t, Settings.units)));
-      row.append(el('div', 'ico', '🏷️'), what);
+      const ico = el('div', 'ico'); ico.append(icon('tag'));          // (simple white tag; greys out once claimed)
+      row.append(ico, what);
       if (it.claimed) row.append(el('span', 'got', 'CLAIMED ✓'));
       else { const b = el('button', 'go', 'CLAIM'); b.onclick = () => this.claim(it, b); row.append(b); }
       box.appendChild(row);
@@ -102,8 +103,12 @@ const Social = {
     fx.style.setProperty('--rc', Titles.RARITIES[t.rarity].color);
     const box = $id('cfTitle'); box.innerHTML = ''; box.append(titleEl(id));
     $id('cfDesc').textContent = Titles.desc(t, Settings.units);
+    // always a fresh start: cancel a close still in progress, and hide + show so every animation (ring, glow,
+    // title) plays from the beginning even if the last reveal was still open
+    clearTimeout(this._cfT);
+    fx.classList.add('hidden'); void fx.offsetWidth;
     fx.classList.remove('hidden', 'closing');
-    const close = () => { fx.classList.add('closing'); setTimeout(() => fx.classList.add('hidden'), 220); };
+    const close = () => { fx.classList.add('closing'); clearTimeout(this._cfT); this._cfT = setTimeout(() => fx.classList.add('hidden'), 220); };
     $id('cfOk').onclick = close;
     $id('cfEquip').onclick = async () => {
       try {
@@ -258,6 +263,114 @@ const Social = {
     if (k !== this.actKey) { this.actKey = k; Net.send({ t: 'activity', a }); }
   },
 };
+
+// ---------------------------------------------------------------- achievements (Brawl Stars "records" style)
+// Each track is a stat with tiers (1/3, 2/3, 3/3); each tier rewards a title. Past the last tier the stat keeps
+// counting (MAX).
+const Achievements = {
+  async open() {
+    show('scrAch');
+    const note = $id('achNote'), list = $id('achList');
+    list.innerHTML = '';
+    if (!Account.signedIn) { note.textContent = 'Sign in with Google on the main menu to track achievements and earn titles.'; return; }
+    note.textContent = 'Loading…';
+    let d;
+    try { d = await Social.api('/api/achievements'); } catch (e) { note.textContent = 'Could not reach the server.'; return; }
+    if (screen !== 'scrAch') return;
+    if (d.error) { note.textContent = d.error; return; }
+    note.textContent = 'Reach each goal to earn its title. Titles arrive in your inbox.';
+    for (const a of Titles.ACHIEVEMENTS) list.appendChild(this.card(a, d));
+  },
+  // a stat in the player's units: points, x multiplier, a count, or distance (mi / km)
+  fmt(a, v) {
+    if (a.unit === 'dist') { const mi = Settings.units !== 'kmh'; const n = v / (mi ? Titles.MILE : 1000); return (n >= 100 ? Math.floor(n).toLocaleString('en-US') : (Math.floor(n * 10) / 10).toString()) + (mi ? ' mi' : ' km'); }
+    if (a.unit === 'x') return 'x' + (Math.floor(v * 10) / 10);
+    return Math.floor(v).toLocaleString('en-US');
+  },
+  goal(a, t) {
+    if (a.unit === 'pts') { const v = t.value; return v >= 1e9 ? v / 1e9 + 'B' : v >= 1e6 ? v / 1e6 + 'M' : v >= 1e3 ? v / 1e3 + 'K' : String(v); }   // (100K, 1M, 10M, 1B)
+    const g = Titles.goalText(t, Settings.units);
+    return a.unit === 'dist' ? g + (Settings.units === 'kmh' ? ' km' : ' mi') : a.unit === 'x' ? 'x' + g : g;
+  },
+  card(a, d) {
+    const v = d.stats[a.stat] || 0, owned = new Set(d.owned), pending = new Set(d.pending);
+    const tiers = a.tiers.map(id => Titles.TITLE_BY_ID[id]);
+    const done = tiers.filter(t => v >= t.value || owned.has(t.id) || pending.has(t.id)).length, max = done === tiers.length;
+    const next = tiers[done];
+    const card = el('div', 'achCard' + (max ? ' max' : ''));
+    const head = el('div', 'achHead');
+    head.append(el('b', '', a.name), el('span', 'achTier' + (max ? ' max' : ''), max ? 'MAX' : `${done}/${tiers.length}`));
+    card.append(head, el('div', 'achDesc', a.desc));
+    // progress toward the next tier (from the last one reached); full once maxed
+    const from = done ? tiers[done - 1].value : 0, frac = max ? 1 : U.clamp((v - from) / (next.value - from), 0, 1);
+    const bar = el('div', 'achBar'), fill = el('i'); fill.style.width = (frac * 100).toFixed(1) + '%'; bar.append(fill);
+    card.append(bar, el('div', 'achNum', max ? `${this.fmt(a, v)} · all done` : `${this.fmt(a, v)} / ${this.goal(a, next)}`));
+    // the rewards: each tier's goal and title (owned / waiting in the inbox / still to earn)
+    const rw = el('div', 'achRewards');
+    tiers.forEach((t, i) => {
+      const got = owned.has(t.id), wait = pending.has(t.id) || (!got && v >= t.value);
+      const row = el('div', 'achReward' + (got ? ' got' : wait ? ' wait' : ' locked'));
+      const st = got ? icon('check') : wait ? icon('tag') : icon('lock');
+      row.append(el('span', 'achStep', `${i + 1}`), el('span', 'achGoal', this.goal(a, t)), titleEl(t.id), st);
+      if (wait) row.title = 'Waiting in your inbox: claim it there';
+      rw.appendChild(row);
+    });
+    card.appendChild(rw);
+    return card;
+  },
+};
+$id('achCard').onclick = () => Achievements.open();
+
+// ---------------------------------------------------------------- server chat (multiplayer)
+// "Name[Title] joined the server" / "Name [Title] : message" (your exact format). Enter opens the box, Enter sends, Esc cancels.
+// One message per 3 s (the server enforces it too). Lines fade after 12 s; all show again while typing.
+const MpChat = {
+  GAP: 3000, last: 0,
+  box: $id('mpChat'), lines: $id('mpChatLines'), form: $id('mpChatForm'), input: $id('mpChatInput'), hint: $id('mpChatHint'),
+  get open() { return !this.form.classList.contains('hidden'); },
+  who(name, title, gap) {                    // "Name[Title]" (gap: "Name [Title]"), the title in its rarity colour
+    const f = document.createDocumentFragment(); f.append(el('b', '', name));
+    const t = titleEl(title); if (t) f.append(gap ? ' [' : '[', t, ']');
+    return f;
+  },
+  add(m) {
+    const line = el('div', 'mcLine' + (m.sys ? ' sys' : ''));
+    if (m.sys) line.append(this.who(m.name, m.title, false), m.sys === 'join' ? ' joined the server' : ' left the server');
+    else line.append(this.who(m.name, m.title, true), ' : ', m.text);
+    this.lines.appendChild(line);
+    while (this.lines.children.length > 60) this.lines.firstChild.remove();
+    this.lines.scrollTop = this.lines.scrollHeight;
+    setTimeout(() => line.classList.add('old'), 12000);
+  },
+  onNet(m) {
+    if (m.t === 'chatwait') { this.wait(m.ms); return; }
+    this.add(m);
+  },
+  wait(ms) { this.hint.textContent = `Wait ${Math.ceil(ms / 1000)} s before sending another message`; clearTimeout(this._h); this._h = setTimeout(() => (this.hint.textContent = ''), Math.min(ms, 3000)); },
+  show(on) { this.box.classList.toggle('open', on); this.form.classList.toggle('hidden', !on); if (on) this.input.focus(); else { this.input.blur(); this.hint.textContent = ''; } },
+  send() {
+    const text = this.input.value.trim();
+    if (!text) { this.show(false); return; }
+    const left = this.last + this.GAP - Date.now();
+    if (left > 0) { this.wait(left); return; }              // (keeps the text: send it once the wait is over)
+    this.last = Date.now();
+    Net.send({ t: 'chat', text });
+    this.input.value = ''; this.show(false);
+  },
+  clear() { this.lines.innerHTML = ''; this.show(false); },
+};
+Net.onChat = m => MpChat.onNet(m);
+MpChat.form.onsubmit = e => { e.preventDefault(); MpChat.send(); };
+MpChat.input.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); MpChat.input.value = ''; MpChat.show(false); } });
+// Enter while driving on a server: open the chat (not while a menu or another text box is in use)
+addEventListener('keydown', e => {
+  if (e.key !== 'Enter' || MpChat.open || menuOpen || game.mode !== 'mp' || !Net.active()) return;
+  if (e.target && e.target.tagName === 'INPUT') return;
+  e.preventDefault(); MpChat.show(true);
+});
+// shown only while on a server; a fresh, empty chat for each server
+{ const prev = Net.onRoster; Net.onRoster = () => { if (prev) prev(); MpChat.box.classList.toggle('hidden', !Net.active()); if (!Net.active()) MpChat.clear(); }; }
+{ const prev = Net.onJoined; Net.onJoined = (room, slot) => { MpChat.clear(); MpChat.last = 0; if (prev) prev(room, slot); }; }
 
 // ---------------------------------------------------------------- wiring
 $id('inboxBtn').onclick = () => Social.open('inbox');

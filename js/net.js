@@ -156,6 +156,7 @@ const Net = {
     } else if (m.t === 'error') this.status(m.msg, 'err');
     else if (m.t === 'runtoken') this.runToken = typeof m.token === 'string' ? m.token : null;   // (lets my next scored run count)
     else if (m.t === 'presence' || m.t === 'msg' || m.t === 'social' || m.t === 'inbox') { if (this.onSocial) this.onSocial(m); }   // (friends: social.js)
+    else if (m.t === 'chat' || m.t === 'chatwait') { if (this.room && this.onChat) this.onChat(m); }   // (server chat: social.js)
     else if (m.t === 'roster') {
       const keep = new Set();
       for (const r of m.list) { if (r.id === this.myId) continue; keep.add(r.id); this.player(r.id, r.name, r.color, r.title).acct = !!r.acct; }
