@@ -61,6 +61,8 @@ db.exec(`
   const haveR = new Set(db.prepare('PRAGMA table_info(runs)').all().map(c => c.name));
   if (!haveR.has('dist')) db.exec('ALTER TABLE runs ADD COLUMN dist REAL');
   if (!haveR.has('room')) db.exec('ALTER TABLE runs ADD COLUMN room TEXT');   // (multiplayer: which server, for team runs)
+  const haveI = new Set(db.prepare('PRAGMA table_info(inbox)').all().map(c => c.name));
+  if (!haveI.has('note')) db.exec('ALTER TABLE inbox ADD COLUMN note TEXT');  // (an optional message with an inbox item)
 }
 
 const getMeta = k => { const r = db.prepare('SELECT v FROM meta WHERE k = ?').get(k); return r ? r.v : null; };
@@ -77,14 +79,15 @@ const readAccounts = () => { try { return JSON.parse(fs.readFileSync(path.join(_
 // ---------------------------------------------------------------- inbox (titles to claim)
 const owns = (uid, title) => !!db.prepare('SELECT 1 FROM user_titles WHERE uid = ? AND title = ?').get(uid, title);
 const pending = (uid, title) => !!db.prepare("SELECT 1 FROM inbox WHERE uid = ? AND kind = 'title' AND item = ? AND claimed IS NULL").get(uid, title);
-// send a title to someone's inbox (not if they have it or it's already waiting); returns true if sent
-function gift(uid, title) {
+// send a title to someone's inbox (not if they have it or it's already waiting), with an optional message shown
+// with it; returns true if sent
+function gift(uid, title, note = null) {
   if (!Titles.TITLE_BY_ID[title] || owns(uid, title) || pending(uid, title)) return false;
   ensureUser(uid);
-  db.prepare("INSERT INTO inbox (uid, kind, item, t) VALUES (?, 'title', ?, ?)").run(uid, title, Date.now());
+  db.prepare("INSERT INTO inbox (uid, kind, item, t, note) VALUES (?, 'title', ?, ?, ?)").run(uid, title, Date.now(), note ? String(note).slice(0, 500) : null);
   return true;
 }
-const inboxOf = uid => db.prepare('SELECT id, kind, item, t, claimed FROM inbox WHERE uid = ? ORDER BY claimed IS NOT NULL, t DESC LIMIT 60').all(uid)
+const inboxOf = uid => db.prepare('SELECT id, kind, item, t, claimed, note FROM inbox WHERE uid = ? ORDER BY claimed IS NOT NULL, t DESC LIMIT 60').all(uid)
   .filter(r => r.kind !== 'title' || Titles.TITLE_BY_ID[r.item]);
 const pendingOf = uid => db.prepare("SELECT item FROM inbox WHERE uid = ? AND kind = 'title' AND claimed IS NULL").all(uid).map(r => r.item).filter(id => Titles.TITLE_BY_ID[id]);   // (waiting in the inbox)
 // (only titles that still exist: a removed title left in someone's inbox doesn't count)
@@ -386,13 +389,31 @@ function setRemoved(id, on) { const n = db.prepare('UPDATE runs SET removed = ? 
 const runsOf = (uid, n = 30) => db.prepare('SELECT id, mode, score, dur, near, top_kmh, peak, server, t, verified, removed, note FROM runs WHERE uid = ? ORDER BY t DESC LIMIT ?').all(uid, n);
 const runLog = id => { const r = db.prepare('SELECT log FROM runs WHERE id = ?').get(id); return r && r.log ? JSON.parse(zlib.gunzipSync(r.log)) : null; };
 const recentRejected = (n = 30) => db.prepare('SELECT id, uid, mode, score, dur, t, note FROM runs WHERE verified = -1 ORDER BY t DESC LIMIT ?').all(n);
+// take every run of one player above a score off the boards (mode 'sp' / 'mp'); returns how many
+function removeAbove(uid, mode, max) {
+  const n = db.prepare('UPDATE runs SET removed = 1 WHERE uid = ? AND mode = ? AND score > ? AND removed = 0').run(uid, mode, max).changes;
+  cache.clear(); return n;
+}
 
 // titles v5 (once): achievements + new titles - every title wiped and sent back (after everything above is defined)
 if (!getMeta('titles_v5')) { for (const k of ['titles_v3', 'titles_v4', 'titles_v5']) setMeta(k, Date.now()); resetTitles(); }
 
+// edge-line exploit (once, 2026-10-11): Codester found that sitting exactly on the white line between the road and
+// the shoulder gave endless near misses with no risk of crashing (fixed in the game). His runs above 82k
+// (multiplayer) and 85k (singleplayer) come off the boards; the rest stay. He gets Bug Hunter for reporting it.
+if (!getMeta('edgeline_fix_v1')) {
+  setMeta('edgeline_fix_v1', Date.now());
+  const u = Object.values(readAccounts()).find(a => a && a.name && a.name.toLowerCase() === 'codester');
+  if (u) {
+    const mp = removeAbove(u.id, 'mp', 82000), sp = removeAbove(u.id, 'sp', 85000);
+    const sent = gift(u.id, 'bughunter', 'Thank you for helping improve the game\n-PolyWeave');
+    console.log(`edge-line fix: Codester - ${mp} multiplayer and ${sp} singleplayer runs removed; Bug Hunter ${sent ? 'sent' : 'already had / waiting'}`);
+  } else console.log('edge-line fix: no Codester account here (nothing to do)');
+}
+
 module.exports = {
   db, SEASON, SECRET, ensureUser, grant, gift, inboxOf, unclaimed, claim, top, around, rankOf, bestOf, addRun, spendToken, profile, addPlayTime,
-  titlesOf, ownerCounts, alphaOpen, setAlphaOpen, resetTitles, statTitles, statsOf, pendingOf, equipped, equip, isBanned, setBanned, setRemoved, runsOf, runLog, recentRejected,
+  titlesOf, ownerCounts, alphaOpen, setAlphaOpen, resetTitles, statTitles, statsOf, pendingOf, equipped, equip, isBanned, setBanned, setRemoved, removeAbove, runsOf, runLog, recentRejected,
   areFriends, friendsOf, requestsIn, requestsOut, socialSettings, setSocialSettings, sendRequest, respond, cancelRequest, unfriend,
   sendMessage, chatWith, markRead, unreadBy, OWNER_NAMES, BIKE_NAMES,
 };

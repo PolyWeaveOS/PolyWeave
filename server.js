@@ -329,7 +329,7 @@ const server = http.createServer((req, res) => {
   // ---- inbox: GET /api/inbox (Bearer) -> items; POST /api/inbox/claim {session, id}
   if (route === '/api/inbox') {
     const u = bearer(); if (!u) { json(401, { error: 'Sign in to see your inbox.' }); return; }
-    json(200, { items: DB.inboxOf(u.id).map(r => ({ id: r.id, kind: r.kind, item: r.item, t: r.t, claimed: !!r.claimed })) });
+    json(200, { items: DB.inboxOf(u.id).map(r => ({ id: r.id, kind: r.kind, item: r.item, t: r.t, claimed: !!r.claimed, note: r.note || null })) });
     return;
   }
   if (route === '/api/inbox/claim' && req.method === 'POST') {

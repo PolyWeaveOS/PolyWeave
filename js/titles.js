@@ -32,7 +32,7 @@ const MILE = 1609.344;
 const distGoal = (km, mi) => Math.min(km * 1000, mi * MILE);
 const TITLES = [
   { id: 'owner',       name: 'Owner',                  rarity: 'divine',    how: 'grant', desc: 'Made PolyWeave' },
-  { id: 'bughunter',   name: 'Bug Hunter',             rarity: 'mythic',    how: 'grant', show: true, desc: 'First to report a new bug (it has to be an original find)' },
+  { id: 'bughunter',   name: 'Bug Hunter',             rarity: 'exotic',    how: 'grant', show: true, desc: 'First to report a new bug (it has to be an original find)' },
   { id: 'alpha',       name: 'Alpha Tester',           rarity: 'mythic',    how: 'grant', desc: 'Played PolyWeave during the alpha' },
   { id: 'verified',    name: 'Verified',               rarity: 'common',    how: 'grant', desc: 'Signed in with Google' },
   // best single run (either mode)

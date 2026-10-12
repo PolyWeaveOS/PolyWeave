@@ -16,11 +16,11 @@ const PAD_DEFAULTS = {
 // keyboard actions -> keys (first key can be changed in Settings; arrows stay as a backup for driving)
 const KEY_DEFAULTS = {
   throttle: ['KeyW', 'ArrowUp'], brake: ['KeyS', 'ArrowDown'], left: ['KeyA', 'ArrowLeft'], right: ['KeyD', 'ArrowRight'],
-  handbrake: ['Space'], shiftUp: ['KeyE'], shiftDown: ['KeyQ'], gearbox: ['KeyG'], camera: ['KeyC'], reset: ['KeyR'], style: ['KeyT'],
+  shiftUp: ['KeyE'], shiftDown: ['KeyQ'], gearbox: ['KeyG'], camera: ['KeyC'], reset: ['KeyR'], style: ['KeyT'],
   map: ['KeyM'],
 };
 const KEY_NAMES = {
-  throttle: 'Throttle', brake: 'Brake / reverse', left: 'Steer left', right: 'Steer right', handbrake: 'Handbrake',
+  throttle: 'Throttle', brake: 'Brake / reverse', left: 'Steer left', right: 'Steer right',
   shiftUp: 'Shift up', shiftDown: 'Shift down', gearbox: 'Auto / manual gearbox', camera: 'Camera (1st / 3rd person)',
   reset: 'Reset car', style: 'Visual style', map: 'Big map (multiplayer)',
 };
@@ -35,7 +35,7 @@ const Input = {
   binds: JSON.parse(JSON.stringify(KEY_DEFAULTS)), capture: null,
   moved: {}, rest0: null, lastBtns: [], wheelUsed: false, lastWheelMove: -1e9,
   cal: null,
-  out: { steer: 0, throttle: 0, brake: 0, handbrake: 0, source: 'keys' },
+  out: { steer: 0, throttle: 0, brake: 0, source: 'keys' },
 
   down(a) { for (const c of this.binds[a]) if (this.keys[c]) return true; return false; },
   tap(a) { for (const c of this.binds[a]) if (this.pressed[c]) return true; return false; },
@@ -102,7 +102,7 @@ const Input = {
     // keyboard pedals ramp so taps feel analog
     o.kt = U.clamp((o.kt || 0) + (kt ? 4.5 : -7) * dt, 0, 1);
     o.kb = U.clamp((o.kb || 0) + (kb ? 9 : -9) * dt, 0, 1); // brake bites in ~0.1 s
-    o.steer = ks; o.throttle = o.kt; o.brake = o.kb; o.handbrake = this.down('handbrake') ? 1 : 0;
+    o.steer = ks; o.throttle = o.kt; o.brake = o.kb;
     o.source = 'keys';
     o.camBtn = false; o.up = false; o.down = false; o.reset = false;
 
@@ -115,7 +115,6 @@ const Input = {
         if (Math.abs(sx) > 0 && !ks) { o.steer = sx; }
         if (gt > 0.02) o.throttle = Math.max(o.throttle, gt);
         if (gb > 0.02) o.brake = Math.max(o.brake, gb);
-        if (p.buttons[0] && p.buttons[0].pressed) o.handbrake = 1;
         o.camBtn = this.btnEdge(p, 3); o.up = this.btnEdge(p, 5); o.down = this.btnEdge(p, 4); o.reset = this.btnEdge(p, 8);
       } else {
         const c = this.cfg;

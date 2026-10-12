@@ -1272,8 +1272,7 @@ function openMenu(id = 'scrPause') {
 function closeMenu() {
   menuOpen = false; menu.classList.add('hidden'); document.getElementById('hud').classList.remove('hidden');
   $id('hint').textContent = hintText();
-  hud.trafficLabel = game.mode === 'mp' ? (game.scored ? 'SCORED SERVER' : `SHARED TRAFFIC ${Math.round(game.density * 100)}%`)
-    : game.scored ? 'SCORED · 60% TRAFFIC' : `FREE DRIVE · ${Math.round(game.density * 100)}%`;
+  hud.trafficLabel = game.scored ? 'SCORED' : 'FREE DRIVE';   // (just which kind of run, above the speedo)
   sound.init(); sound.suspend(false);
   started = true; last = performance.now();
 }
@@ -1534,7 +1533,7 @@ function renderFrame() {
 // ---------- one step of driving: physics, traffic, collisions, scoring ----------
 // paused = the menu is open on a server: the car keeps rolling (no throttle or brake, lane keeping
 // steers it down its lane) so it never just stops in the middle of shared traffic. No points meanwhile.
-const COAST = { steer: 0, throttle: 0, brake: 0, handbrake: 0, source: 'keys' };
+const COAST = { steer: 0, throttle: 0, brake: 0, source: 'keys' };
 function driveStep(dt, ctl, paused) {
   // ---- physics (fixed-size substeps that exactly cover the frame) ----
   const n = Math.max(1, Math.ceil(dt / SUB)), h = dt / n;
@@ -1585,7 +1584,10 @@ function driveStep(dt, ctl, paused) {
   if (pe.classList.contains('on') !== score.prox > 1) pe.classList.toggle('on', score.prox > 1);
   if (score.prox > 1) hud.set('prox', pe.firstElementChild, '×' + score.prox.toFixed(1));
   // Shoulder: car centre past the outer edge lines -> no points, and lose 10% of points per second
-  const onShoulder = Math.abs(car.d) > 2 * ROAD.LW + 0.25 && Math.abs(car.u) > 2 && !inStartArea(car.s, car.d);
+  // (the edge line counts as shoulder too, from outer wheels ~40 cm over it: the outer lane's traffic passes exactly
+  //  one car-width from that line, so sitting on it gave a perfect near miss on every car with no way to crash -
+  //  found by Codester)
+  const onShoulder = Math.abs(car.d) > 2 * ROAD.LW - 0.55 && Math.abs(car.u) > 2 && !inStartArea(car.s, car.d);
   if (!onShoulder) {
     for (const nm of misses) if (time - lastCrash > 1.5) score.nearMiss(nm.gap, kmh);
     if (time - lastCrash > 1.5) score.speed(dt, kmh);
@@ -1654,7 +1656,7 @@ function frame(now) {
   if (game.mode === 'sp' && !game.scored && (Input.hit('BracketLeft') || Input.hit('BracketRight'))) { // [ ] traffic (free drive only)
     game.density = U.clamp(Math.round(game.density * 10 + (Input.hit('BracketRight') ? 1 : -1)) / 10, 0, 1);
     const el = $id('fdDens'); el.value = Math.round(game.density * 100); el.dispatchEvent(new Event('input'));
-    hud.trafficLabel = `FREE DRIVE · ${Math.round(game.density * 100)}%`;
+    hud.message(`TRAFFIC ${Math.round(game.density * 100)}%`);   // (shown briefly when you change it)
   }
   if (Input.tap('gearbox')) { car.manual = Settings.manual = !car.manual; manEl.checked = car.manual; saveSettings(); hud.message(car.manual ? 'MANUAL' : 'AUTO'); }
   if (Input.tap('map') && game.mode === 'mp') bigMap = !bigMap;

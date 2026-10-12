@@ -4,7 +4,7 @@
 //  - Dynamic bicycle model with Pacejka-style tyre curves
 //  - Longitudinal weight transfer, friction-circle combined slip
 //  - S58 torque curve, 8-speed M Steptronic, RWD, rev limiter
-//  - ABS, optional traction control, handbrake
+//  - ABS, optional traction control
 //  Frame: u = forward speed, v = lateral (right +), r = yaw rate (right turn +)
 // =====================================================================
 
@@ -169,7 +169,7 @@ class PlayerCar {
     }
   }
 
-  // inp: {throttle 0..1, brake 0..1, handbrake 0..1, steer (rad, front wheel)}
+  // inp: {throttle 0..1, brake 0..1, steer (rad, front wheel)}
   step(dt, inp) {
     const m = M4.mass, g = 9.81, L = M4.wheelbase;
     let throttle = inp.throttle;
@@ -240,11 +240,6 @@ class PlayerCar {
     }
     Fxr += Fx_r_drive;
 
-    // handbrake: strong rear brake only (no drift)
-    if (inp.handbrake > 0.1 && Math.abs(this.u) > 0.5) {
-      Fxr = -sgnU * muR * 0.8 * inp.handbrake;
-    } else if (inp.handbrake > 0.1) { this.u *= 0.9; }
-
     Fxf = U.clamp(Fxf, -muF * bk, muF * bk); Fxr = U.clamp(Fxr, -muR * bk, muR * bk);
 
     // ---- turning ----
@@ -289,7 +284,7 @@ class PlayerCar {
     const u0 = this.u;
     this.u += Fx / m * dt;
     // braking never reverses direction by itself
-    if ((brake > 0 || inp.handbrake > 0.1 || (this.gear === 0)) && Math.sign(this.u) !== Math.sign(u0) && u0 !== 0) this.u = 0;
+    if ((brake > 0 || (this.gear === 0)) && Math.sign(this.u) !== Math.sign(u0) && u0 !== 0) this.u = 0;
     if (Math.abs(this.u) < 0.05 && thr < 0.02 && brake > 0.02) this.u = 0;
 
     this.ax = U.lerp(this.ax, Fx / m, Math.min(1, dt * 10));

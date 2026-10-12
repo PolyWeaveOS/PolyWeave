@@ -7,7 +7,9 @@
 //    sudo -u polyweave node admin.js log <runId>          the event log of a run (kept for personal bests / rejected runs)
 //    sudo -u polyweave node admin.js remove <runId>       take a run off the leaderboard (restore <runId> undoes it)
 //    sudo -u polyweave node admin.js ban <name>           hide all their runs and block new ones (unban <name> undoes it)
-//    sudo -u polyweave node admin.js grant <name> <title> send a title to their inbox (revoke <name> <title> takes it away)
+//    sudo -u polyweave node admin.js trim <name> sp|mp <max>  take all their runs above <max> points off the board
+//    sudo -u polyweave node admin.js grant <name> <title> ["message"]  send a title to their inbox, with an optional
+//                                                         message (\n = new line); revoke <name> <title> takes it away
 //    sudo -u polyweave node admin.js titles               every title id
 //    sudo -u polyweave node admin.js alpha off            stop giving Alpha Tester to new accounts (alpha on / alpha)
 //    sudo -u polyweave node admin.js retitle              wipe every title and send them all back to inboxes
@@ -16,7 +18,7 @@ const DB = require('./db');
 const Accounts = require('./accounts');
 const Titles = require('./js/titles');
 
-const [cmd, a, b] = process.argv.slice(2);
+const [cmd, a, b, c] = process.argv.slice(2);
 const day = t => new Date(t).toISOString().replace('T', ' ').slice(0, 16);
 const fmt = n => Math.round(n).toLocaleString('en-US');
 function who(name) {
@@ -61,11 +63,21 @@ switch (cmd) {
   case 'grant': case 'revoke': {
     const u = who(a);
     if (!Titles.TITLE_BY_ID[b]) { console.log(`Unknown title "${b}". Run: node admin.js titles`); process.exit(1); }
-    if (cmd === 'grant') { console.log(DB.gift(u.id, b) ? `${u.name}: "${Titles.TITLE_BY_ID[b].name}" sent to their inbox (they claim it there).` : `${u.name} already has "${Titles.TITLE_BY_ID[b].name}" (or it's waiting in their inbox).`); break; }
+    if (cmd === 'grant') {
+      const note = c ? c.replace(/\\n/g, '\n') : null;
+      console.log(DB.gift(u.id, b, note) ? `${u.name}: "${Titles.TITLE_BY_ID[b].name}" sent to their inbox${note ? ' with your message' : ''} (they claim it there).` : `${u.name} already has "${Titles.TITLE_BY_ID[b].name}" (or it's waiting in their inbox).`);
+      break;
+    }
     DB.db.prepare('DELETE FROM user_titles WHERE uid = ? AND title = ?').run(u.id, b);
     DB.db.prepare("DELETE FROM inbox WHERE uid = ? AND kind = 'title' AND item = ? AND claimed IS NULL").run(u.id, b);
     if (DB.equipped(u.id) === b) DB.equip(u.id, null);
     console.log(`${u.name}: lost "${Titles.TITLE_BY_ID[b].name}".`);
+    break;
+  }
+  case 'trim': {   // all of one player's runs above a score off the board (e.g. after an exploit)
+    const u = who(a), mode = b === 'mp' ? 'mp' : b === 'sp' ? 'sp' : null, max = Number(c);
+    if (!mode || !Number.isFinite(max)) { console.log('Usage: node admin.js trim <name> sp|mp <max points>'); process.exit(1); }
+    console.log(`${u.name}: ${DB.removeAbove(u.id, mode, max)} ${mode} runs above ${fmt(max)} removed. New best: ${fmt(DB.bestOf(mode, u.id))}.`);
     break;
   }
   case 'retitle':   // wipe every title and send them all back to inboxes (players claim them again)
@@ -79,6 +91,6 @@ switch (cmd) {
     for (const t of Titles.TITLES) console.log(`${t.id.padEnd(12)} ${t.name.padEnd(20)} ${Titles.RARITIES[t.rarity].name.padEnd(12)} ${Titles.desc(t, 'kmh')}`);
     break;
   default:
-    console.log('Commands: top sp|mp · player <name> · rejected · log <runId> · remove|restore <runId> · ban|unban <name> · grant|revoke <name> <title> · titles · alpha on|off · retitle');
+    console.log('Commands: top sp|mp · player <name> · rejected · log <runId> · remove|restore <runId> · trim <name> sp|mp <max> · ban|unban <name> · grant <name> <title> ["message"] · revoke <name> <title> · titles · alpha on|off · retitle');
 }
 process.exit(0);

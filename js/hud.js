@@ -138,7 +138,7 @@ class Score {
 class Hud {
   constructor() {
     this.el = { score: $('scoreVal'), best: $('best'), pot: $('potVal'), mult: $('mult'), potRow: $('potRow'), bar: $('barFill'), msgs: $('msgs'),
-      spd: $('spdVal'), gear: $('gear'), mode: $('gearMode'), rpm: $('rpmFill'), la: $('tagLA'), tc: $('tagTC'), pad: $('tagPad') };
+      spd: $('spdVal'), gear: $('gear'), mode: $('gearMode'), rpm: $('rpmFill'), la: $('tagLA') };
     this.shownScore = 0; this.last = {};
   }
   set(key, el, val, prop = 'textContent') { if (this.last[key] !== val) { this.last[key] = val; el[prop] = val; } }
@@ -197,9 +197,7 @@ class Hud {
     this.set('mode', e.mode, car.manual ? 'MANUAL' : 'AUTO');
     e.rpm.style.width = (U.clamp(car.rpm / M4.redline, 0, 1) * 100).toFixed(1) + '%';
     e.rpm.classList.toggle('limit', car.limiter);
-    this.set('la', e.la, this.trafficLabel || `TRAFFIC ${Math.round(settings.density * 100)}%`);
-    this.set('tc', e.tc, (car.tc ? 'TC' : 'TC OFF') + ((steerCtl.assistPct ?? settings.assist) > 0 ? ` · LANE ASSIST ${Math.round((steerCtl.assistPct ?? settings.assist) * 100)}%${steerCtl.assistActive > 0.05 ? ' ●' : ''}` : ''));
-    this.set('pad', e.pad, Input.padKind === 'wheel' && Input.wheelUsed ? 'WHEEL' : Input.padKind === 'gamepad' ? 'PAD' : '');
+    this.set('la', e.la, this.trafficLabel || '');   // (scored / free drive)
   }
 }
 

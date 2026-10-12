@@ -80,6 +80,7 @@ const Social = {
       const t = it.kind === 'title' && Titles.TITLE_BY_ID[it.item]; if (!t) continue;
       const row = el('div', 'ibItem' + (it.claimed ? ' done' : ''));
       const what = el('div', 'what'); what.append(el('small', '', it.claimed ? 'Title claimed' : 'New title'), titleEl(t.id), el('span', 'd', Titles.desc(t, Settings.units)));
+      if (it.note) what.append(el('div', 'note', String(it.note)));   // (a message that came with it, as text)
       const ico = el('div', 'ico'); ico.append(icon('tag'));          // (simple white tag; greys out once claimed)
       row.append(ico, what);
       if (it.claimed) row.append(el('span', 'got', 'CLAIMED ✓'));
