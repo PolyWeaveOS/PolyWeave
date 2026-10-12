@@ -32,8 +32,9 @@ const MILE = 1609.344;
 const distGoal = (km, mi) => Math.min(km * 1000, mi * MILE);
 const TITLES = [
   { id: 'owner',       name: 'Owner',                  rarity: 'divine',    how: 'grant', desc: 'Made PolyWeave' },
-  { id: 'bughunter',   name: 'Bug Hunter',             rarity: 'exotic',    how: 'grant', show: true, desc: 'First to report a new bug (it has to be an original find)' },
-  { id: 'alpha',       name: 'Alpha Tester',           rarity: 'mythic',    how: 'grant', desc: 'Played PolyWeave during the alpha' },
+  { id: 'bughunter',   name: 'Bug Hunter',             rarity: 'legendary', how: 'grant', show: true, desc: 'First to report a new bug (it has to be an original find)' },
+  { id: 'alpha',       name: 'Alpha Tester',           rarity: 'exotic',    how: 'grant', desc: 'Played PolyWeave during the alpha' },
+  { id: 'beta',        name: 'Beta Tester',            rarity: 'epic',      how: 'grant', desc: 'Played PolyWeave during the beta' },
   { id: 'verified',    name: 'Verified',               rarity: 'common',    how: 'grant', desc: 'Signed in with Google' },
   // best single run (either mode)
   { id: 'sixfig',      name: 'Six Figures',            rarity: 'rare',      how: 'run',  score: 1e5, stat: 'score', value: 1e5, desc: '100,000 points in one run' },

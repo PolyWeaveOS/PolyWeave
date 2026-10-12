@@ -234,21 +234,23 @@ const Net = {
     w = Math.min(250, w + 34);
     const h = t ? 74 : 44;
     g.fillStyle = 'rgba(14,18,26,0.6)'; g.fillRect(128 - w / 2, 10, w, h);
-    g.fillStyle = p.color || '#fff'; g.fillRect(128 - w / 2, 10, 6, h);
-    g.font = '800 30px Segoe UI, Arial'; g.fillStyle = '#fff'; g.fillText(p.name, 131, 33);
+    g.font = '800 30px Segoe UI, Arial'; g.fillStyle = '#fff'; g.fillText(p.name, 128, 33);
     if (t) {
       g.font = '800 19px Segoe UI, Arial'; g.fillStyle = rar.color;
       const tw = g.measureText(t.name.toUpperCase()).width, grad = stops => {
-        const gr = g.createLinearGradient(131 - tw / 2, 0, 131 + tw / 2, 0); stops.forEach((c, i) => gr.addColorStop(i / (stops.length - 1), c)); return gr;
+        const gr = g.createLinearGradient(128 - tw / 2, 0, 128 + tw / 2, 0); stops.forEach((c, i) => gr.addColorStop(i / (stops.length - 1), c)); return gr;
       };
-      if (t.rarity === 'epic') g.fillStyle = grad(['#c08cff', '#ff8cd2']);   // (the purple-pink mix, like in the menus)
+      if (t.rarity === 'epic') {                    // (the purple-pink mix, like in the menus, with its faint glow)
+        g.fillStyle = grad(['#c08cff', '#ff8cd2']);
+        g.save(); g.shadowColor = 'rgba(208,140,255,.8)'; g.shadowBlur = 6; g.globalAlpha = 0.6; g.fillText(t.name.toUpperCase(), 128, 64); g.restore();
+      }
       if (rar.neon) {                               // glowing: a soft halo, then a crisp bright core on top (readable)
         const exotic = t.rarity === 'exotic';         // (deep crimson: a brighter, wider halo so it glows like the rest)
-        g.save(); g.shadowColor = exotic ? '#ff2350' : rar.color; g.shadowBlur = exotic ? 16 : 12; g.globalAlpha = rar.pearl ? 0.6 : exotic ? 0.9 : 0.75; g.fillText(t.name.toUpperCase(), 131, 64); g.restore();
+        g.save(); g.shadowColor = exotic ? '#ff2350' : rar.color; g.shadowBlur = exotic ? 16 : 12; g.globalAlpha = rar.pearl ? 0.6 : exotic ? 0.9 : 0.75; g.fillText(t.name.toUpperCase(), 128, 64); g.restore();
         const c = new THREE.Color(rar.color).lerp(new THREE.Color('#ffffff'), t.rarity === 'exotic' ? 0.12 : 0.28); g.fillStyle = '#' + c.getHexString();   // (crimson stays deep)
         if (rar.pearl) g.fillStyle = grad(['#fbfaf6', '#f8cde1', '#c6e6fb', '#fbfaf6', '#d9cbfb', '#c9f2d8', '#fad9bd']);   // (pearl: soft colours)
       }
-      g.fillText(t.name.toUpperCase(), 131, 64);
+      g.fillText(t.name.toUpperCase(), 128, 64);
     }
     const tex = new THREE.CanvasTexture(c); tex.encoding = THREE.sRGBEncoding;
     const tag = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthWrite: false, transparent: true, fog: false }));

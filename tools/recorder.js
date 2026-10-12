@@ -6,6 +6,9 @@
 //  - Export replays the clip one frame at a time (exactly 1/60 s apart) at 1080p / 1440p / 4K and saves an
 //    MP4 (WebCodecs + mp4-muxer). It doesn't matter how fast the computer is: a slow one just takes longer.
 //  - No sound (add music / audio in a video editor).
+//  - F8: the screen recorder, for everything the replay can't film (menus, leaderboards, profile, inbox...).
+//    It records this browser tab as it is, live, with nothing of its own on screen while recording; F8 again stops
+//    and saves the video.
 // =====================================================================
 (() => {
   if (window.Recorder) return;
@@ -26,8 +29,12 @@
   const clips = [];
 
   function paintOf(vis) { const c0 = vis.root.children[0]; return c0 && c0 !== vis.body && c0.material ? c0.material : null; }
+  let capMap = null;
   function capture(dt) {
     if (!Account.signedIn || game.mode === 'menu' || menuOpen) return;
+    // a different map or world (joined / left a server): start a new buffer, a clip never mixes two roads
+    const map = (ROAD.loop ? 'loop:' : 'road:') + world.theme;
+    if (map !== capMap) { buf = []; start = 0; events = []; capMap = map; }
     clock += dt;
     const q = camera.quaternion, p = camera.position;
     const tr = [];
@@ -76,7 +83,7 @@
       name: `Clip ${clips.length + 1} · ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`,
       samples: s.map(o => Object.assign({}, o, { t: o.t - t0 })), dur: t1 - t0,
       events: events.filter(e => e.t >= t0 - 6).map(e => Object.assign({}, e, { t: e.t - t0 })),
-      theme: world.theme, units: Settings.units, inT: 0, outT: t1 - t0,
+      theme: world.theme, loop: !!ROAD.loop, units: Settings.units, inT: 0, outT: t1 - t0,
     };
     clips.push(clip);
     toast(`Saved ${clip.name} (${Math.round(clip.dur)} s) · F10 to edit`);
@@ -304,7 +311,7 @@
   #recBusy button { font: inherit; color: #fff; background: rgba(255,255,255,.1); border: 1px solid rgba(255,255,255,.2); border-radius: 7px; padding: 7px 16px; cursor: pointer; }`;
   const st = document.createElement('style'); st.textContent = css; document.head.appendChild(st);
   // (a reminder for the first few seconds only: it would show up in screen recordings / streams)
-  const badge = document.createElement('div'); badge.id = 'recBadge'; badge.innerHTML = '<i></i>REC · F9 SAVE CLIP · F10 EDIT'; document.body.appendChild(badge);
+  const badge = document.createElement('div'); badge.id = 'recBadge'; badge.innerHTML = '<i></i>REC · F9 SAVE CLIP · F10 EDIT · F8 SCREEN'; document.body.appendChild(badge);
   setTimeout(() => badge.remove(), 12000);
   let toastT = 0;
   function toast(msg) {
@@ -316,12 +323,17 @@
   const R = { active: false, clip: null, t: 0, playing: true, mode: 'game', speed: 1, hud: true, res: '1440p', q: 1, exporting: false };
   let ed = null, hudCv = null, saved = null;
   function hidden(el, on) { if (el) el.style.visibility = on ? 'hidden' : ''; }
+  // the road the clip was driven on (loop circuit or endless highway) and its world type
+  function useClipWorld(clip) {
+    if (!!ROAD.loop !== !!clip.loop) { ROAD.setLoop(!!clip.loop); world.reset(); }
+    if (clip.theme !== world.theme) world.setTheme(clip.theme);
+  }
   function open() {
     if (R.active || R.exporting) return;
     if (!clips.length && !saveClip()) return;
     R.active = true; R.clip = R.clip && clips.includes(R.clip) ? R.clip : clips[clips.length - 1];
     R.t = R.clip.inT; R.playing = true; resetCams();
-    saved = { origin: ROAD.origin, hintS: ROAD.hintS, theme: world.theme, camNear: camera.near, fov: camera.fov,
+    saved = { loop: !!ROAD.loop, origin: ROAD.origin, hintS: ROAD.hintS, theme: world.theme, camNear: camera.near, fov: camera.fov,
       pos: camera.position.clone(), quat: camera.quaternion.clone(), menuVis: document.getElementById('menu').style.visibility };
     try { sound.suspend(true); } catch (e) { /* (no audio yet) */ }
     saved.shown = traffic.cars.filter(c => c.vis.root.visible);       // (put back on close: wrecks don't redo it themselves)
@@ -330,7 +342,7 @@
     zoneProps.group && (zoneProps.group.visible = false);
     rg.visible = true;
     hidden(document.getElementById('hud'), true); hidden(document.getElementById('menu'), true); hidden(badge, true);
-    if (R.clip.theme !== world.theme) world.setTheme(R.clip.theme);
+    useClipWorld(R.clip);
     hudCv = document.createElement('canvas'); hudCv.id = 'recHud'; document.body.appendChild(hudCv); sizeHud();
     buildEditor();
   }
@@ -340,6 +352,7 @@
     rg.visible = false;
     for (const f of fpool.values()) Net.removeVis(f);
     fpool.clear();
+    if (!!ROAD.loop !== saved.loop) { ROAD.setLoop(saved.loop); world.reset(); }   // (before the origin: setLoop zeroes it)
     ROAD.origin = saved.origin; ROAD.hintS = saved.hintS;
     if (world.theme !== saved.theme) world.setTheme(saved.theme);
     camera.position.copy(saved.pos); camera.quaternion.copy(saved.quat); camera.near = saved.camNear; camera.fov = saved.fov; camera.updateProjectionMatrix();
@@ -381,7 +394,7 @@
     const $ = k => ed.querySelector(`[data-k="${k}"]`);
     const fillClips = () => { $('clip').innerHTML = clips.map((c, i) => `<option value="${i}"${c === R.clip ? ' selected' : ''}>${c.name} (${Math.round(c.dur)} s)</option>`).join(''); };
     fillClips();
-    $('clip').onchange = e => { R.clip = clips[+e.target.value]; R.t = R.clip.inT; resetCams(); };
+    $('clip').onchange = e => { R.clip = clips[+e.target.value]; useClipWorld(R.clip); R.t = R.clip.inT; resetCams(); };
     $('play').onclick = () => { R.playing = !R.playing; };
     $('mode').onchange = e => { R.mode = e.target.value; resetCams(); };
     $('speed').onchange = e => { R.speed = +e.target.value; };
@@ -394,7 +407,7 @@
       const i = clips.indexOf(R.clip); if (i < 0) return;
       clips.splice(i, 1);
       if (!clips.length) { close(); toast('Clip deleted'); return; }
-      R.clip = clips[Math.min(i, clips.length - 1)]; R.t = R.clip.inT; fillClips();
+      R.clip = clips[Math.min(i, clips.length - 1)]; useClipWorld(R.clip); R.t = R.clip.inT; fillClips();
     };
     $('close').onclick = () => close();
     ed.querySelectorAll('select, button, input').forEach(el => el.addEventListener('keydown', e => e.stopPropagation()));
@@ -526,10 +539,79 @@
     }
   }
 
+  // ---------------------------------------------------------------- screen recorder (F8): menus, leaderboards, profile...
+  // Records this tab live (the browser's own tab capture + its hardware video encoder). The panel and every hint
+  // disappear the moment recording starts, so the video is just the game; F8 (or the browser's "Stop sharing")
+  // stops it and the video goes to Downloads.
+  const SR = { rec: null, stream: null, chunks: [], t0: 0, panel: null, fps: 60, q: 1 };
+  const srMime = () => ['video/mp4;codecs=avc1.640033', 'video/mp4;codecs=avc1', 'video/mp4', 'video/webm;codecs=vp9', 'video/webm']
+    .find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
+  function srPanel() {
+    if (SR.panel) { SR.panel.remove(); SR.panel = null; return; }
+    const p = document.createElement('div'); p.id = 'recScreen';
+    p.style.cssText = 'position:fixed;top:16px;right:16px;z-index:95;width:300px;padding:16px 18px;border-radius:12px;background:rgba(10,13,19,.94);'
+      + 'box-shadow:0 8px 30px rgba(0,0,0,.45);font:600 13px "Segoe UI",Arial,sans-serif;color:#fff;display:flex;flex-direction:column;gap:10px';
+    const sel = (opts, cur) => `<select style="font:inherit;color:#fff;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.16);border-radius:7px;padding:5px 8px">${opts.map(([v, l]) => `<option value="${v}" style="background:#161b24"${String(v) === String(cur) ? ' selected' : ''}>${l}</option>`).join('')}</select>`;
+    p.innerHTML = `<div style="font-weight:800;letter-spacing:1.5px">SCREEN RECORDER</div>
+      <div style="opacity:.75;font-weight:500;line-height:1.4">Records the game as you see it: menus, leaderboards, profile, inbox, driving. Nothing of this shows in the video. Press <b>F8</b> to stop.</div>
+      <label style="display:flex;justify-content:space-between;align-items:center">Frame rate ${sel([[60, '60 fps'], [30, '30 fps']], SR.fps)}</label>
+      <label style="display:flex;justify-content:space-between;align-items:center">Quality ${sel([[1, 'High'], [1.6, 'Very high']], SR.q)}</label>
+      <button style="font:inherit;font-weight:800;padding:9px;border-radius:8px;border:0;background:#ff4d4d;color:#fff;cursor:pointer">● START RECORDING</button>
+      <div style="opacity:.55;font-size:11.5px;line-height:1.35">Your browser asks what to share: pick <b>this tab</b>. Tip: make the window full screen first (F11) for the biggest video.</div>`;
+    const [fpsSel, qSel] = p.querySelectorAll('select');
+    fpsSel.onchange = () => (SR.fps = +fpsSel.value); qSel.onchange = () => (SR.q = +qSel.value);
+    p.querySelectorAll('select').forEach(s => s.addEventListener('keydown', e => e.stopPropagation()));
+    p.querySelector('button').onclick = () => srStart();
+    document.body.appendChild(p); SR.panel = p;
+  }
+  async function srStart() {
+    if (SR.rec) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia || !window.MediaRecorder) { toast('This browser can\'t record the screen: use Chrome or Edge'); return; }
+    let stream;
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: SR.fps, max: SR.fps }, width: { ideal: 3840 }, height: { ideal: 2160 }, displaySurface: 'browser', cursor: 'never' },
+        audio: false, preferCurrentTab: true, selfBrowserSurface: 'include', surfaceSwitching: 'exclude',
+      });
+    } catch (e) { toast('Recording cancelled'); return; }
+    const track = stream.getVideoTracks()[0], set = track.getSettings ? track.getSettings() : {};
+    const px = (set.width || 1920) * (set.height || 1080);
+    const mime = srMime(), bitrate = Math.round(Math.min(60e6, px / (2560 * 1440) * 28e6) * SR.q * (SR.fps / 60 * 0.5 + 0.5));
+    let rec;
+    try { rec = new MediaRecorder(stream, Object.assign({ videoBitsPerSecond: Math.max(8e6, bitrate) }, mime ? { mimeType: mime } : {})); }
+    catch (e) { stream.getTracks().forEach(t => t.stop()); toast('Could not start recording: ' + e.message); return; }
+    SR.rec = rec; SR.stream = stream; SR.chunks = []; SR.t0 = performance.now();
+    rec.ondataavailable = e => { if (e.data && e.data.size) SR.chunks.push(e.data); };
+    rec.onstop = srSave;
+    track.onended = () => srStop();                  // (the browser's own "Stop sharing" button)
+    if (SR.panel) { SR.panel.remove(); SR.panel = null; }
+    const t = document.getElementById('recToast'); if (t) t.style.opacity = 0;   // (nothing of the recorder in the video)
+    rec.start(1000);
+    SR.size = `${set.width || '?'}x${set.height || '?'} at ${Math.round(set.frameRate || SR.fps)} fps`;
+  }
+  function srStop() {
+    if (!SR.rec) return;
+    if (SR.rec.state !== 'inactive') SR.rec.stop();
+    SR.stream.getTracks().forEach(t => t.stop());
+  }
+  function srSave() {
+    const rec = SR.rec, secs = (performance.now() - SR.t0) / 1000; SR.rec = null;
+    const type = (rec.mimeType || 'video/webm').split(';')[0], ext = type.includes('mp4') ? 'mp4' : 'webm';
+    const blob = new Blob(SR.chunks, { type }); SR.chunks = [];
+    if (!blob.size) { toast('Nothing was recorded'); return; }
+    const a = document.createElement('a'), d = new Date(), p2 = x => String(x).padStart(2, '0');
+    a.href = URL.createObjectURL(blob);
+    a.download = `PolyWeave screen ${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}-${p2(d.getMinutes())}-${p2(d.getSeconds())}.${ext}`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    toast(`Saved ${Math.round(secs)} s screen recording (${SR.size}, ${(blob.size / 1048576).toFixed(0)} MB) to your Downloads`);
+  }
+
   // ---------------------------------------------------------------- keys
   addEventListener('keydown', e => {
     if (!Account.signedIn) return;
     const typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement && document.activeElement.tagName) && document.activeElement.type !== 'checkbox';
+    if (e.code === 'F8' && !typing) { e.preventDefault(); if (SR.rec) srStop(); else if (!R.active) srPanel(); return; }
     if (e.code === 'F9' && !typing) { e.preventDefault(); if (!R.active) saveClip(); return; }
     if (e.code === 'F10' && !typing) { e.preventDefault(); R.active ? close() : open(); return; }
     if (!R.active || R.exporting || typing) return;
@@ -541,5 +623,5 @@
   }, true);
 
   window.Recorder = { capture, frame, open, close, saveClip, clips, get active() { return R.active; } };
-  toast('Recorder ready · F9 saves the last minute · F10 opens the editor');
+  toast('Recorder ready · F9 saves the last minute · F10 opens the editor · F8 records the screen (menus)');
 })();

@@ -276,6 +276,9 @@ button:disabled { opacity: .45; cursor: default; }
 .r-rare { color: #9fd8ff; }
 .r-srare { color: #5b95ff; }
 .r-epic { background: linear-gradient(90deg, #c08cff, #ff8cd2); -webkit-background-clip: text; background-clip: text; color: transparent; }
+/* Epic: a faint purple-pink glow - just a hint of the glowing rarities above it (drop-shadow works with the gradient) */
+.ttl.r-epic { filter: drop-shadow(0 0 2.5px rgba(208, 140, 255, .55)) drop-shadow(0 0 6px rgba(255, 140, 210, .22)); }
+.titleOpt.locked .ttl.r-epic, .achReward.locked .ttl.r-epic { filter: grayscale(.4) drop-shadow(0 0 2.5px rgba(208, 140, 255, .3)); }
 /* glowing: a bright, readable core with one soft halo in the title's colour (crimson keeps more of its own deep
    colour in the core, so it stays clearly darker than Mythic red) */
 .r-mythic { --c: #ff4a42; } .r-exotic { --c: #c8143c; --mix: 88%; } .r-legendary { --c: #ffd84a; }
