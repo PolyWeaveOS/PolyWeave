@@ -9,7 +9,8 @@
 //  - used_tokens: run tokens already spent (a run can only be submitted once).
 //  First start: imports leaderboard.json + accounts.json. Titles (v2): every title is wiped once and sent
 //  again through the inbox: Alpha Tester to every existing account, Owner to CurryEater and PolyWeave, and
-//  any money titles players' runs have earned. New accounts get Alpha Tester too while alpha_open is on.
+//  any money titles players' runs have earned. New accounts got Alpha Tester while alpha_open was on; since beta_v1
+//  (alpha closed, Beta Tester sent to every account) they get Beta Tester while beta_open is on.
 // =====================================================================
 const fs = require('fs');
 const path = require('path');
@@ -163,6 +164,21 @@ verifiedV1();
 // Alpha Tester for new accounts too, until it's switched off: node admin.js alpha off
 const alphaOpen = () => getMeta('alpha_open') !== '0';
 const setAlphaOpen = on => setMeta('alpha_open', on ? '1' : '0');
+// Beta Tester for new accounts, until it's switched off: node admin.js beta off
+const betaOpen = () => getMeta('beta_open') !== '0';
+const setBetaOpen = on => setMeta('beta_open', on ? '1' : '0');
+
+// Beta (once): the alpha is over. Stop giving out Alpha Tester (players who have it keep it) and send
+// Beta Tester to every account that exists; new accounts get it at sign-in (server.js)
+function betaV1() {
+  if (getMeta('beta_v1')) return;
+  setAlphaOpen(false);
+  let n = 0;
+  for (const u of Object.values(readAccounts())) if (u && u.id && gift(u.id, 'beta')) n++;
+  setMeta('beta_v1', Date.now());
+  console.log(`database: alpha closed (no more Alpha Tester); Beta Tester sent to ${n} inboxes`);
+}
+betaV1();
 
 // Reset titles: wipe every title (and equipped title), then send them all back to inboxes straight away:
 // handed-out ones each player had (Owner, Alpha Tester, admin grants...), Verified for every account, Owner for
@@ -179,6 +195,7 @@ function resetTitles() {
     for (const u of accounts) {
       gift(u.id, 'verified');
       if (alphaOpen()) gift(u.id, 'alpha');
+      if (betaOpen()) gift(u.id, 'beta');
       if (u.name && OWNER_NAMES.includes(u.name.toLowerCase())) gift(u.id, 'owner');
     }
     for (const r of db.prepare('SELECT uid, MAX(score) AS s FROM runs WHERE removed = 0 AND verified >= 0 GROUP BY uid').all())
@@ -413,7 +430,7 @@ if (!getMeta('edgeline_fix_v1')) {
 
 module.exports = {
   db, SEASON, SECRET, ensureUser, grant, gift, inboxOf, unclaimed, claim, top, around, rankOf, bestOf, addRun, spendToken, profile, addPlayTime,
-  titlesOf, ownerCounts, alphaOpen, setAlphaOpen, resetTitles, statTitles, statsOf, pendingOf, equipped, equip, isBanned, setBanned, setRemoved, removeAbove, runsOf, runLog, recentRejected,
+  titlesOf, ownerCounts, alphaOpen, setAlphaOpen, betaOpen, setBetaOpen, resetTitles, statTitles, statsOf, pendingOf, equipped, equip, isBanned, setBanned, setRemoved, removeAbove, runsOf, runLog, recentRejected,
   areFriends, friendsOf, requestsIn, requestsOut, socialSettings, setSocialSettings, sendRequest, respond, cancelRequest, unfriend,
   sendMessage, chatWith, markRead, unreadBy, OWNER_NAMES, BIKE_NAMES,
 };

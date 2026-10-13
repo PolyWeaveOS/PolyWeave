@@ -12,6 +12,7 @@
 //                                                         message (\n = new line); revoke <name> <title> takes it away
 //    sudo -u polyweave node admin.js titles               every title id
 //    sudo -u polyweave node admin.js alpha off            stop giving Alpha Tester to new accounts (alpha on / alpha)
+//    sudo -u polyweave node admin.js beta off             stop giving Beta Tester to new accounts (beta on / beta)
 //    sudo -u polyweave node admin.js retitle              wipe every title and send them all back to inboxes
 // =====================================================================
 const DB = require('./db');
@@ -87,10 +88,14 @@ switch (cmd) {
     if (a === 'on' || a === 'off') DB.setAlphaOpen(a === 'on');
     console.log(`New accounts ${DB.alphaOpen() ? 'GET' : 'do NOT get'} Alpha Tester.` + (a ? '' : ' (change it: alpha on / alpha off)'));
     break;
+  case 'beta':    // new accounts get Beta Tester: on (default) / off
+    if (a === 'on' || a === 'off') DB.setBetaOpen(a === 'on');
+    console.log(`New accounts ${DB.betaOpen() ? 'GET' : 'do NOT get'} Beta Tester.` + (a ? '' : ' (change it: beta on / beta off)'));
+    break;
   case 'titles':
     for (const t of Titles.TITLES) console.log(`${t.id.padEnd(12)} ${t.name.padEnd(20)} ${Titles.RARITIES[t.rarity].name.padEnd(12)} ${Titles.desc(t, 'kmh')}`);
     break;
   default:
-    console.log('Commands: top sp|mp · player <name> · rejected · log <runId> · remove|restore <runId> · trim <name> sp|mp <max> · ban|unban <name> · grant <name> <title> ["message"] · revoke <name> <title> · titles · alpha on|off · retitle');
+    console.log('Commands: top sp|mp · player <name> · rejected · log <runId> · remove|restore <runId> · trim <name> sp|mp <max> · ban|unban <name> · grant <name> <title> ["message"] · revoke <name> <title> · titles · alpha on|off · beta on|off · retitle');
 }
 process.exit(0);

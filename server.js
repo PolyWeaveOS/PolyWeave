@@ -274,7 +274,8 @@ const server = http.createServer((req, res) => {
     body(m => {
       if (tooFast('auth:' + ip, 1500)) { json(429, { error: 'Too many sign-in attempts. Wait a moment.' }); return; }
       Accounts.login(m.credential).then(({ token, user, isNew }) => {
-        if (isNew && DB.alphaOpen()) DB.gift(user.id, 'alpha');   // (new players get Alpha Tester until it's switched off)
+        if (isNew && DB.alphaOpen()) DB.gift(user.id, 'alpha');   // (Alpha Tester: switched off since the beta)
+        if (isNew && DB.betaOpen()) DB.gift(user.id, 'beta');     // (new players get Beta Tester until it's switched off)
         DB.gift(user.id, 'verified');                           // (signed in with Google; only sent once)
         json(200, { session: token, name: user.name, title: DB.equipped(user.id) });
       })
