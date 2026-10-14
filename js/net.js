@@ -31,7 +31,8 @@ const Net = {
   async findBase() {
     if (this.base) return this.base;
     const tries = [];
-    if (/^https?:$/.test(location.protocol)) tries.push(location.origin);
+    if (PW_SERVER) tries.push(PW_SERVER);                    // (CrazyGames version: always polyweave.org)
+    else if (/^https?:$/.test(location.protocol)) tries.push(location.origin);
     if (NET_ONLINE) tries.push(NET_ONLINE.replace(/\/+$/, ''));
     for (const b of tries) {
       try {

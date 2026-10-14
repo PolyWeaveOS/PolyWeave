@@ -1583,11 +1583,11 @@ function driveStep(dt, ctl, paused) {
   const pe = $id('prox');
   if (pe.classList.contains('on') !== score.prox > 1) pe.classList.toggle('on', score.prox > 1);
   if (score.prox > 1) hud.set('prox', pe.firstElementChild, '×' + score.prox.toFixed(1));
-  // Shoulder: car centre past the outer edge lines -> no points, and lose 10% of points per second
-  // (the edge line counts as shoulder too, from outer wheels ~40 cm over it: the outer lane's traffic passes exactly
-  //  one car-width from that line, so sitting on it gave a perfect near miss on every car with no way to crash -
-  //  found by Codester)
-  const onShoulder = Math.abs(car.d) > 2 * ROAD.LW - 0.55 && Math.abs(car.u) > 2 && !inStartArea(car.s, car.d);
+  // Shoulder: car centre on / past the edge line (about half the car over it) -> no points, and lose 10% of points
+  // per second. (Sitting exactly on the edge line used to give a perfect near miss on every car with no way to
+  // crash - found by Codester. It counted as shoulder for a while; now traffic sways within its lane
+  // (traffic.js), so outer-lane cars drifting over clip a car parked on the line, and this can be less touchy.)
+  const onShoulder = Math.abs(car.d) > 2 * ROAD.LW + 0.15 && Math.abs(car.u) > 2 && !inStartArea(car.s, car.d);
   if (!onShoulder) {
     for (const nm of misses) if (time - lastCrash > 1.5) score.nearMiss(nm.gap, kmh);
     if (time - lastCrash > 1.5) score.speed(dt, kmh);

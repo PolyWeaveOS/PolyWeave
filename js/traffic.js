@@ -39,6 +39,7 @@ const TRUCK_COLORS = [{ w: 6, c: 0xf0f1ef }, { w: 2, c: 0xb22a25 }, { w: 2, c: 0
 // lane flow speeds (km/h), lane 0 = far left (fast) ... lane 3 = far right (slow); trucks keep to lanes 2-3
 const LANE_KMH = [124, 110, 97, 86];
 const TRUCK_LANES = 2;
+const LC_RATE = 1.4;                                     // how often drivers change lane on their own (waits between changes / this)
 const WIN_BACK = 330, WIN_AHEAD = 960;                 // traffic lives in this window around the player
 const DRAW_DIST = 750;                                   // ...but cars further than this are tiny specks in the haze: not drawn
 const TRAFFIC_SCALE = 1.16;                              // overall traffic amount (sets the opening fill)
@@ -70,10 +71,13 @@ class TrafficCar {
     this.seeAt = U.rand(110, 380);                       // how far ahead they notice something stopped / slow and move over
     // state
     this.s = s; this.lane = lane; this.tgt = lane; this.d = ROAD.lane(lane); this.latV = 0;
+    // sway: drivers don't hold the exact lane centre; each drifts slowly to its own spot in the lane and
+    // stays there a while (offset from the lane centre, m: where it's heading / where it is now)
+    this.offW = 0; this.off = 0; this.offT = U.rand(0, 8);
     this.v0 = this.laneV0(lane); this.v = this.v0; this.acc = 0; this.relYaw = 0;
     this.ind = 0; this.indT = 0; this.indWait = 0; this.forced = false;
-    this.cool = U.rand(3, 24); this.check = U.rand(0, 1);
-    this.wish = 0; this.wishT = U.rand(9, 75);
+    this.cool = U.rand(3, 24) / LC_RATE; this.check = U.rand(0, 1);
+    this.wish = 0; this.wishT = U.rand(9, 75) / LC_RATE;
     this.crashed = false; this.body = null; this.yaw = 0; this.crashT = 0;
     this.nm = { active: false, done: false, min: 9 };
     this.x = 0; this.z = 0;
@@ -590,7 +594,7 @@ class Traffic {
       c.v0 = U.damp(c.v0, c.laneV0(c.tgt), 0.25, dt);
       c.wishT -= dt;
       if (c.wishT <= 0) {
-        c.wishT = U.rand(18, 66) * (this.inPostZone(c.s) ? 2 : 1);
+        c.wishT = U.rand(18, 66) / LC_RATE * (this.inPostZone(c.s) ? 2 : 1);
         c.wish = Math.random() < 0.5 ? -1 : 1;
         c.wishLeft = 10;
       }
@@ -648,7 +652,7 @@ class Traffic {
           } else ok = c.blocked ? this.safeIn(c, c.pending, 6, 3) : this.safeIn(c, c.pending, 3, 2.5);   // (stuck: pulls out if the car behind can brake for it)
           if (ok && (c.v > 3 || c.forced || c.blocked)) this.startChange(c, c.pending);
           // (a stuck car keeps signalling for longer, while someone makes room for it)
-          else if (!c.forced && (c.indWait += dt) > (c.blocked ? 14 : 6)) { c.cool = c.blocked ? U.rand(0.5, 2) : U.rand(8, 20); c.ind = 0; c.blocked = false; c.around = false; }
+          else if (!c.forced && (c.indWait += dt) > (c.blocked ? 14 : 6)) { c.cool = c.blocked ? U.rand(0.5, 2) : U.rand(8, 20) / LC_RATE; c.ind = 0; c.blocked = false; c.around = false; }
         }
       }
 
@@ -667,7 +671,17 @@ class Traffic {
           c.tgt = c.lane; c.ind = 0; c.cool = U.rand(3, 6); c.around = false;
         }
       }
-      const err = ROAD.lane(c.tgt) - c.d;
+      // sway within the lane: every 5-14 s a new spot, up to ~60 cm off centre (less for wide trucks: the body
+      // always stays ~25 cm inside the lines), drifted to at walking pace (a few cm per second, never twitchy).
+      // Someone alongside in the next lane: drivers give them room. Not while changing lane or slow in a queue.
+      const room = Math.max(0, Math.min(0.6, ROAD.LW / 2 - c.hw - 0.25));
+      if ((c.offT -= dt) <= 0) { c.offT = U.rand(5, 14); c.offW = Math.random() < 0.25 ? 0 : U.rand(-1, 1) * room; }
+      let offW = c.changing || c.v < 8 ? 0 : c.offW;
+      const along = Q => Q && Q.s + Q.front > c.s + c.rear && Q.s + Q.rear < c.s + c.front && Math.abs(Q.d - c.d) > 1.5 && Math.abs(Q.d - c.d) < 4.2;
+      const nb = along(P) ? P : (others || this.players || []).find(along);   // (server: the room's players)
+      if (nb && Math.sign(offW) !== -Math.sign(nb.d - c.d)) offW = -Math.sign(nb.d - c.d) * room * 0.5;
+      c.off += U.clamp(offW - c.off, -0.12 * dt, 0.12 * dt);
+      const err = ROAD.lane(c.tgt) + c.off - c.d;
       // (a car pulling out of a queue turns the wheel hard and noses out at walking pace, like a real driver)
       const cap = Math.min(c.latMax, (c.blocked || c.forced) && c.v < 5 ? 0.5 * c.v + 0.5 : 0.1 * c.v + 0.04);
       // S-curve: ease in, cross at a steady rate, then ease out so it arrives exactly in the lane centre
@@ -677,11 +691,11 @@ class Traffic {
       c.latV += U.clamp(want - c.latV, -aLat * dt, aLat * dt);
       c.d += c.latV * dt;
       if (c.changing && Math.abs(err) < 0.05 && Math.abs(c.latV) < 0.2) {
-        c.d = ROAD.lane(c.tgt); c.latV = 0; c.lane = c.tgt; c.ind = 0; c.forced = false; c.blocked = false;
+        c.d = ROAD.lane(c.tgt) + c.off; c.latV = 0; c.lane = c.tgt; c.ind = 0; c.forced = false; c.blocked = false;
         // (just went round something: soon ready to move back into the empty lane in front of it)
-        c.cool = c.around ? U.rand(0.5, 2.5) : U.rand(9, 27) * (this.inPostZone(c.s) ? 2 : 1);
+        c.cool = c.around ? U.rand(0.5, 2.5) : U.rand(9, 27) / LC_RATE * (this.inPostZone(c.s) ? 2 : 1);
         c.around = false;
-      } else if (!c.changing && Math.abs(err) < 0.02 && Math.abs(c.latV) < 0.05) { c.d = ROAD.lane(c.lane); c.latV = 0; }
+      } else if (!c.changing && Math.abs(err) < 0.02 && Math.abs(c.latV) < 0.05) { c.d = ROAD.lane(c.lane) + c.off; c.latV = 0; }
       const latRate = (c.d - pd) / Math.max(dt, 1e-4);
       c.relYaw = U.damp(c.relYaw, Math.atan2(latRate, Math.max(c.v, 2)), 8, dt);
 
@@ -778,7 +792,7 @@ class Traffic {
     if (r.t < r.T) return;
     // back to normal driving
     c.crashed = false; c.body = null; c.rec = null; c.crashT = 0;
-    c.lane = c.tgt = r.lane; c.d = ROAD.lane(r.lane); c.relYaw = 0; c.latV = 0; c.acc = 0;
+    c.lane = c.tgt = r.lane; c.d = ROAD.lane(r.lane); c.off = c.offW = 0; c.relYaw = 0; c.latV = 0; c.acc = 0;
     c.ind = 0; c.forced = false; c.blocked = false; c.pending = undefined; c.cool = U.rand(3, 6); c.check = 1;
     c.nm = { active: false, done: true, min: 9 };
     vis.indL.visible = vis.indR.visible = false;

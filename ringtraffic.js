@@ -237,7 +237,7 @@ class RingTraffic extends Traffic {
   // the player who hit it got it going again: back in `lane`, driving on at speed v
   recover(c, s, lane, v) {
     if (!c.crashed) return;
-    c.crashed = false; c.crashT = 0; c.owner = null; c.s = this.w(s); c.lane = c.tgt = lane; c.d = ROAD.lane(lane);
+    c.crashed = false; c.crashT = 0; c.owner = null; c.s = this.w(s); c.lane = c.tgt = lane; c.d = ROAD.lane(lane); c.off = c.offW = 0;
     c.v = v; c.acc = 0; c.latV = 0; c.relYaw = 0; c.ind = 0; c.forced = false; c.blocked = false; c.pending = undefined;
     c.cool = U.rand(3, 6); c.check = 1;
     this.gridMove(c);

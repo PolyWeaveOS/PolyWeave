@@ -340,14 +340,14 @@
   // Remove names from this list to take a vehicle out of traffic; with none loaded the old traffic returns.
   const VEHICLES = ['camry', 'civic', 'model3', 'golf', 'mini', 'mustang', 'p911', 'prius', 'charger', 'gtr',
     'rav4', 'wrangler', 'tahoe', 'f150', 'transit', 'odyssey', 'vwbus', 'boxtruck', 'cascadia'];
-  const files = ['js/core', 'js/zones', 'js/models', 'js/bike', 'js/lowpoly', 'js/toykit', ...VEHICLES.map(k => 'js/vehicles/' + k), 'js/world', 'js/physics', 'js/traffic', 'js/input', 'js/titles', 'js/hud', 'js/netcodec', 'js/net', 'js/account', 'js/main', 'js/social', 'js/dropdown'];
+  const files = ['js/platform', 'js/core','js/zones', 'js/models', 'js/bike', 'js/lowpoly', 'js/toykit', ...VEHICLES.map(k => 'js/vehicles/' + k), 'js/world', 'js/physics', 'js/traffic', 'js/input', 'js/titles', 'js/hud', 'js/netcodec', 'js/net', 'js/account', 'js/main', 'js/social', 'js/dropdown', 'js/crazygames'];
   for (const f of files) {
     const s = document.createElement('script');
     s.src = `${f}.js?v=${v}`; s.async = false;
     document.body.appendChild(s);
   }
-  // app install support (only works when the game is opened from its website)
-  if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+  // app install support (only works when the game is opened from its website; never in the CrazyGames build)
+  if ('serviceWorker' in navigator && location.protocol === 'https:' && !window.PW_PLATFORM) navigator.serviceWorker.register('sw.js').catch(() => {});
 </script>
 </body>
 </html>

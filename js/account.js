@@ -13,6 +13,8 @@ const Account = {
   msg(t) { if (this.onMsg) this.onMsg(t); },
 
   async init() {
+    // CrazyGames version: guests only (CrazyGames doesn't allow outside logins such as Google)
+    if (CG) { this.base = await Net.findBase(); this.ready = true; this.changed(); return; }
     try { this.session = localStorage.getItem('pw_session'); } catch (e) { /* ignore */ }
     this.base = await Net.findBase();
     if (!this.base) { this.ready = true; this.changed(); return; }

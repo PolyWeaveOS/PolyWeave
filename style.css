@@ -605,3 +605,14 @@ select option { background: #1d2733; color: #fff; }
 
 button.big { display: block; margin: 24px auto 0; font-size: 20px; letter-spacing: 4px; padding: 14px 60px; background: var(--accent); color: #1a1f28; border: none; }
 button.big:hover { background: #ffe37a; }
+
+/* CrazyGames version (js/platform.js puts .cg on <html>): guests only, so no account features, sign-in,
+   install button or chat */
+.cg #friendsBtn, .cg #inboxBtn, .cg #profileCard, .cg #achCard, .cg .card[data-go="scrLB"], .cg #installBtn,
+.cg [data-acct], .cg .acctNote, .cg #mpChatForm, .cg #mpChatHint { display: none !important; }
+/* CrazyGames version: how to drive, shown at the start (js/crazygames.js) */
+#cgHelp { position: fixed; left: 50%; top: 21%; transform: translateX(-50%); z-index: 5; padding: 10px 18px; border-radius: 10px;
+  background: rgba(16, 20, 28, .62); color: #fff; font: 800 15px "Segoe UI", Arial, sans-serif; letter-spacing: 1px; line-height: 2;
+  text-align: center; white-space: nowrap; pointer-events: none; transition: opacity .5s; }
+#cgHelp b { display: inline-block; min-width: 24px; padding: 0 6px; margin: 0 2px; border-radius: 5px; background: rgba(255, 255, 255, .17); line-height: 1.6; }
+#cgHelp.off { opacity: 0; }

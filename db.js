@@ -428,6 +428,16 @@ if (!getMeta('edgeline_fix_v1')) {
   } else console.log('edge-line fix: no Codester account here (nothing to do)');
 }
 
+// Bug Hunter for Chickle (once, 2026-10-13), with the same thank-you note. (Waits until the account exists here.)
+if (!getMeta('bughunter_chickle_v1')) {
+  const u = Object.values(readAccounts()).find(a => a && a.name && a.name.toLowerCase() === 'chickle');
+  if (u) {
+    setMeta('bughunter_chickle_v1', Date.now());
+    const sent = gift(u.id, 'bughunter', 'Thank you for helping improve the game\n-PolyWeave');
+    console.log(`Bug Hunter for Chickle: ${sent ? 'sent' : 'already had / waiting'}`);
+  }
+}
+
 module.exports = {
   db, SEASON, SECRET, ensureUser, grant, gift, inboxOf, unclaimed, claim, top, around, rankOf, bestOf, addRun, spendToken, profile, addPlayTime,
   titlesOf, ownerCounts, alphaOpen, setAlphaOpen, betaOpen, setBetaOpen, resetTitles, statTitles, statsOf, pendingOf, equipped, equip, isBanned, setBanned, setRemoved, removeAbove, runsOf, runLog, recentRejected,
