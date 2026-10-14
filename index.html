@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>PolyWeave</title>
 <link rel="stylesheet" href="style.css">
 <!-- installable as an app (Chrome / Edge: "Install PolyWeave") -->
@@ -340,7 +340,7 @@
   // Remove names from this list to take a vehicle out of traffic; with none loaded the old traffic returns.
   const VEHICLES = ['camry', 'civic', 'model3', 'golf', 'mini', 'mustang', 'p911', 'prius', 'charger', 'gtr',
     'rav4', 'wrangler', 'tahoe', 'f150', 'transit', 'odyssey', 'vwbus', 'boxtruck', 'cascadia'];
-  const files = ['js/platform', 'js/core','js/zones', 'js/models', 'js/bike', 'js/lowpoly', 'js/toykit', ...VEHICLES.map(k => 'js/vehicles/' + k), 'js/world', 'js/physics', 'js/traffic', 'js/input', 'js/titles', 'js/hud', 'js/netcodec', 'js/net', 'js/account', 'js/main', 'js/social', 'js/dropdown', 'js/crazygames'];
+  const files = ['js/platform', 'js/core','js/zones', 'js/models', 'js/bike', 'js/lowpoly', 'js/toykit', ...VEHICLES.map(k => 'js/vehicles/' + k), 'js/world', 'js/physics', 'js/traffic', 'js/input', 'js/titles', 'js/hud', 'js/netcodec', 'js/net', 'js/account', 'js/main', 'js/social', 'js/dropdown', 'js/touch', 'js/crazygames'];
   for (const f of files) {
     const s = document.createElement('script');
     s.src = `${f}.js?v=${v}`; s.async = false;

@@ -616,3 +616,45 @@ button.big:hover { background: #ffe37a; }
   text-align: center; white-space: nowrap; pointer-events: none; transition: opacity .5s; }
 #cgHelp b { display: inline-block; min-width: 24px; padding: 0 6px; margin: 0 2px; border-radius: 5px; background: rgba(255, 255, 255, .17); line-height: 1.6; }
 #cgHelp.off { opacity: 0; }
+
+/* ---------- Phones / tablets (js/touch.js puts .touch on <html>) ---------- */
+#touchUI, #rotateMsg { display: none; }
+.touch body { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.touch #touchUI { display: block; position: fixed; inset: 0; z-index: 4; pointer-events: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+#touchUI > * { pointer-events: auto; touch-action: none; }
+#touchUI .tTop { position: absolute; top: calc(10px + env(safe-area-inset-top)); left: calc(10px + env(safe-area-inset-left)); display: flex; gap: 8px; pointer-events: none; }
+#touchUI .tTop button { pointer-events: auto; touch-action: none; width: 44px; height: 44px; padding: 10px; border-radius: 12px; border: 1px solid rgba(255,255,255,.16);
+  background: rgba(14, 18, 26, .42); color: #fff; fill: #fff; backdrop-filter: blur(3px); }
+#touchUI .tTop button svg { width: 100%; height: 100%; display: block; }
+#touchUI .tChat { display: none; }
+#touchUI.mp .tChat { display: block; }
+#tSteer { position: absolute; left: calc(14px + env(safe-area-inset-left)); bottom: calc(14px + env(safe-area-inset-bottom)); display: flex; gap: 10px; }
+#tSteer .tHalf { width: clamp(70px, 23vh, 118px); height: clamp(70px, 23vh, 118px); border-radius: 50%; display: grid; place-items: center;
+  background: rgba(14, 18, 26, .38); border: 2px solid rgba(255,255,255,.22); fill: rgba(255,255,255,.9); transition: background .08s, transform .08s; }
+#tSteer .tHalf svg { width: 46%; height: 46%; }
+#tSteer .tHalf.on { background: rgba(255,255,255,.28); transform: scale(.96); }
+#tPedals { position: absolute; right: calc(14px + env(safe-area-inset-right)); bottom: calc(14px + env(safe-area-inset-bottom)); display: flex; gap: 10px; align-items: flex-end; }
+.tPedal { display: grid; place-items: center; border-radius: 18px; font-weight: 900; letter-spacing: 1.5px; font-size: clamp(11px, 3.4vh, 15px);
+  background: rgba(14, 18, 26, .38); border: 2px solid rgba(255,255,255,.22); color: rgba(255,255,255,.9); transition: background .08s, transform .08s; }
+#tBrake { width: clamp(64px, 20vh, 100px); height: clamp(70px, 23vh, 118px); }
+#tGas { width: clamp(76px, 24vh, 124px); height: clamp(110px, 40vh, 200px); border-color: rgba(255, 216, 74, .55); }
+#tBrake.on { background: rgba(255, 90, 70, .45); transform: scale(.97); }
+#tGas.on { background: rgba(255, 216, 74, .42); transform: scale(.97); }
+/* HUD rearranged around the controls */
+.touch #hint { display: none; }
+.touch #speedo { right: auto; left: 50%; transform: translateX(-50%) scale(var(--hud, 1)); transform-origin: bottom center; }
+.touch #tags { right: auto; left: 50%; transform: translateX(-50%) scale(var(--hud, 1)); transform-origin: bottom center; }
+.touch #mpHud { top: calc(64px + env(safe-area-inset-top)); left: calc(10px + env(safe-area-inset-left)); transform: scale(.78); transform-origin: top left; }
+.touch #minimap { left: auto; bottom: auto; right: calc(10px + env(safe-area-inset-right)); top: calc(10px + env(safe-area-inset-top)); width: 120px !important; height: 120px !important; }   /* (main.js sizes it inline) */
+.touch #mpChat { bottom: calc(clamp(70px, 23vh, 118px) + 40px); }
+.touch #scrSettings .grid > section:nth-child(2) { display: none; }   /* (keyboard keys / wheel calibration) */
+@media (max-height: 520px) { .touch .screen.panel { zoom: .8; } }
+/* portrait phone: ask to turn it */
+@media (orientation: portrait) {
+  .touch #rotateMsg { display: flex; position: fixed; inset: 0; z-index: 200; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+    background: #12161e; color: #fff; text-align: center; padding: 24px; }
+  .touch #rotateMsg svg { width: 72px; height: 72px; color: var(--accent, #ffd84a); }
+  .touch #rotateMsg b { font-size: 20px; letter-spacing: 1px; }
+  .touch #rotateMsg span { opacity: .7; font-size: 14px; }
+}
+.touch #tags { display: none; }   /* (SCORED / FREE DRIVE label: would sit on the car) */

@@ -63,12 +63,14 @@
   // ---- straight into gameplay: a scored singleplayer run, with the controls shown
   // (the browser only allows sound after a key press or click, so it starts on the first one)
   const wake = () => { if (!menuOpen && sound.ctx && sound.ctx.state === 'suspended') sound.ctx.resume(); };
-  addEventListener('keydown', wake); addEventListener('pointerdown', wake);
+  for (const ev of ['keydown', 'pointerdown', 'touchend', 'click']) addEventListener(ev, wake);   // (iPhones: touchend / click)
   startSingle(true);
   // how to drive, until they've driven a bit (steered and used the throttle) or 20 s have gone by
   const k = a => `<b>${keyLabel(Input.binds[a][0])}</b>`;
   const help = document.createElement('div'); help.id = 'cgHelp';
-  help.innerHTML = `${k('throttle')}${k('left')}${k('brake')}${k('right')} or <b>↑</b><b>←</b><b>↓</b><b>→</b> to drive · weave past cars for points<br><b>Esc</b> menu`;
+  help.innerHTML = Touch.on
+    ? 'Hold <b>GAS</b> · steer with <b>◀</b><b>▶</b> · weave past cars for points'
+    : `${k('throttle')}${k('left')}${k('brake')}${k('right')} or <b>↑</b><b>←</b><b>↓</b><b>→</b> to drive · weave past cars for points<br><b>Esc</b> menu`;
   document.body.appendChild(help);
   let steered = false, throttled = false;
   const t0 = performance.now(), poll = setInterval(() => {
