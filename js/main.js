@@ -303,6 +303,7 @@ const VEH = {
 let vehicle = 'car';
 const canBike = () => !!(Account.user && Account.user.name && BIKE_NAMES.includes(Account.user.name.toLowerCase()));
 function setVehicle(v) {
+  const van = v === 'van' && canBike();
   vehicle = v === 'bike' && canBike() ? 'bike' : 'car';
   const V = VEH[vehicle], bike = vehicle === 'bike';
   playerVis.root.visible = !bike; playerBike.root.visible = bike;
@@ -317,8 +318,58 @@ function setVehicle(v) {
   const was = score.funOnly; score.funOnly = bike;
   if (bike) { if (score.score >= 1) score.fun = true; if (!was && game.mode !== 'menu') hud.message('MOTORCYCLE · JUST FOR FUN, NO STATS'); }
   const row = document.getElementById('vehRow'); if (row) row.classList.toggle('hidden', !canBike());
+  showVan(van);
 }
 
+// ---------- the owners' van (same accounts as the motorcycle): a ready-made textured model (assets/owner_van.glb)
+// shown exactly as it is (its own colours and textures) in the car's place, with the car's physics and hitbox. The file (7.5 MB) is only loaded when the
+// van is picked. While driving it, the chase camera sits higher and looks down more (see VAN_CAM), so you can see
+// over it ----------
+const VAN = { file: 'assets/owner_van.glb', length: 4.79, yaw: -Math.PI / 2 };  // (the model's length is along its x)
+let ownerVan = null, vanOn = false, vanLoading = false;
+// a minimal reader for this kind of file: one mesh (positions, normals, uv, indices), colour / metal-rough / normal maps
+async function loadVan() {
+  const buf = await (await fetch(VAN.file + '?v=' + Date.now())).arrayBuffer(), dv = new DataView(buf);
+  const jl = dv.getUint32(12, true), J = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 20, jl))), bin = 20 + jl + 8;
+  const bytes = i => { const bv = J.bufferViews[i]; return buf.slice(bin + (bv.byteOffset || 0), bin + (bv.byteOffset || 0) + bv.byteLength); };
+  const acc = i => { const a = J.accessors[i], T = { 5126: Float32Array, 5125: Uint32Array, 5123: Uint16Array, 5121: Uint8Array }[a.componentType];
+    const n = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 }[a.type], all = bytes(a.bufferView); return new T(all, a.byteOffset || 0, a.count * n); };
+  const pr = J.meshes[0].primitives[0], g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(acc(pr.attributes.POSITION), 3));
+  if (pr.attributes.NORMAL !== undefined) g.setAttribute('normal', new THREE.BufferAttribute(acc(pr.attributes.NORMAL), 3));
+  if (pr.attributes.TEXCOORD_0 !== undefined) g.setAttribute('uv', new THREE.BufferAttribute(acc(pr.attributes.TEXCOORD_0), 2));
+  if (pr.indices !== undefined) g.setIndex(new THREE.BufferAttribute(acc(pr.indices), 1));
+  // turn it to face forward, scale to the car's length, stand it on the ground, centred
+  g.rotateY(VAN.yaw); g.computeBoundingBox();
+  let bb = g.boundingBox; g.scale(...Array(3).fill(VAN.length / (bb.max.z - bb.min.z))); g.computeBoundingBox(); bb = g.boundingBox;
+  g.translate(-(bb.min.x + bb.max.x) / 2, -bb.min.y, -(bb.min.z + bb.max.z) / 2); g.computeBoundingSphere();
+  if (!g.attributes.normal) g.computeVertexNormals();
+  const tex = async (ti, srgb) => {
+    if (ti === undefined) return null;
+    const im = J.images[J.textures[ti].source], url = URL.createObjectURL(new Blob([bytes(im.bufferView)], { type: im.mimeType }));
+    const t = await new THREE.TextureLoader().loadAsync(url); URL.revokeObjectURL(url);
+    t.flipY = false; if (srgb) t.encoding = THREE.sRGBEncoding; t.anisotropy = 4; return t;
+  };
+  // the model's own materials, as they come: colour, metal / roughness and normal maps
+  const m = J.materials[pr.material] || {}, pb = m.pbrMetallicRoughness || {};
+  const map = await tex(pb.baseColorTexture && pb.baseColorTexture.index, true), mr = await tex(pb.metallicRoughnessTexture && pb.metallicRoughnessTexture.index, false);
+  const nm = await tex(m.normalTexture && m.normalTexture.index, false);
+  const mat = new THREE.MeshStandardMaterial({ map, metalnessMap: mr, roughnessMap: mr, normalMap: nm, metalness: pb.metallicFactor ?? 1, roughness: pb.roughnessFactor ?? 1, side: THREE.DoubleSide });  ownerVan = new THREE.Mesh(g, mat); ownerVan.castShadow = true; ownerVan.visible = false;
+  playerVis.root.add(ownerVan);
+}
+function showVan(on) {
+  vanOn = on;
+  if (on && !ownerVan) {          // (first time: load the model, then show it; the car stays until it's here)
+    if (!vanLoading) { vanLoading = true; loadVan().then(() => { vanLoading = false; showVan(vanOn); }, e => { vanLoading = false; console.warn('van model', e); }); }
+    return;
+  }
+  if (ownerVan) ownerVan.visible = on;
+  playerVis.body.visible = !on;
+  for (const w of playerVis.wheels) w.pivot.visible = !on;
+  if (on) playerVis.indL.visible = playerVis.indR.visible = playerVis.brake.visible = false;
+}
+// the van's chase camera: higher and looking further down the road, so you can see over its roof
+const VAN_CAM = { dist: 6.0, hgt: 4.4, look: 8.0, lookY: 0.3 };
 function setPaint(hex) { Settings.color = hex; playerPaint.color.set(hex); playerPaintDS.color.set(hex); saveSettings(); }
 
 // ---------- the car you drive (Garage: M4 / 911 GT3 / R8, paint + finish, wheels, calipers, window tint) ----------
@@ -604,8 +655,9 @@ function updateCamera(dt) {
     const sp = U.clamp(spd / 80, 0, 1);
     // camera has inertia: it lags back when accelerating and surges toward the car under braking
     const brk = U.clamp(-car.ax / 13, 0, 1);
-    const dist = 5.7 + sp * 0.9 + U.clamp(car.ax, -15, 9) * 0.05;
-    const hgt = 1.72 + sp * 0.12;
+    const vc = vanOn ? VAN_CAM : null;
+    const dist = (vc ? vc.dist : 5.7) + sp * 0.9 + U.clamp(car.ax, -15, 9) * 0.05;
+    const hgt = (vc ? vc.hgt : 1.72) + sp * 0.12;
     const cyw = Math.cos(camS.yaw), syw = Math.sin(camS.yaw);
     const ox = -syw * dist + cyw * camS.shift, oz = cyw * dist + syw * camS.shift;
     camS.off.x = U.damp(camS.off.x, ox, 14, dt);
@@ -621,9 +673,9 @@ function updateCamera(dt) {
       shx += Math.sin(time * 61) * k; shy += Math.sin(time * 47 + 2) * k;
     }
     camera.position.set(car.x + camS.off.x + shx, camS.off.y + camS.lift + shy, car.z + camS.off.z);
-    const la = 3.2, lx = camS.shift * 0.6;
+    const la = vc ? vc.look : 3.2, lx = camS.shift * 0.6;
     camS.dip = U.damp(camS.dip || 0, brk * 0.35, 8, dt); // view tips forward with the nose
-    camera.lookAt(car.x + syw * la + cyw * lx, 0.95 - camS.dip, car.z - cyw * la + syw * lx);
+    camera.lookAt(car.x + syw * la + cyw * lx, (vc ? vc.lookY : 0.95) - camS.dip, car.z - cyw * la + syw * lx);
     camS.fov = U.damp(camS.fov, 60 + U.clamp((spd - 20) / 60, 0, 1) * 11, 3, dt);
   } else {
     // cockpit: driver's eye, with subtle head motion from g-forces
@@ -1464,10 +1516,10 @@ function updatePlayerVisual(dt) {
   // cockpit camera: the detailed interior + mirrors replace the simple one (which is only seen through the glass)
   const inCockpit = camMode === 1 && !menuOpen;
   const bike = vehicle === 'bike';
-  cockpit.visible = cockpitWheel.visible = inCockpit && !bike; interior.visible = swMesh.visible = !inCockpit;
+  cockpit.visible = cockpitWheel.visible = inCockpit && !bike; interior.visible = swMesh.visible = !inCockpit && !vanOn;
   cockpitWheel.rotation.z = swMesh.rotation.z;
   if (inCockpit && !bike) MIRRORS.drawGauge(dt);
-  playerVis.brake.visible = car.brakeOn && car.gear >= 0;
+  playerVis.brake.visible = !vanOn && car.brakeOn && car.gear >= 0;
   playerGlass.opacity = camMode === 1 && !menuOpen ? 0.14 : glassOut;   // (outside: the Garage window tint)
   if (bike) {
     // the motorcycle leans into turns (the angle real bikes need for that turn, softened), nose dips the same as the car
