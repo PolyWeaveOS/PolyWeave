@@ -23,7 +23,7 @@ const FILE = process.env.PW_DB || path.join(__dirname, 'polyweave.db');
 const SEASON = 0;                 // 0 = pre-season (beta). Seasons come later.
 const MODES = ['sp', 'mp'];
 const OWNER_NAMES = ['curryeater', 'polyweave'];   // get the Owner title (account names, any upper / lower case)
-const BIKE_NAMES = ['curryeater', 'polyweave', 'codester'];   // may ride the motorcycle (same list in js/main.js)
+const BIKE_NAMES = ['curryeater', 'polyweave'];   // may ride the motorcycle (owners only, not released yet; same list in js/main.js)
 
 const db = new DatabaseSync(FILE);
 db.exec(`

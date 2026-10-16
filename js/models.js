@@ -210,6 +210,33 @@ function wheelGeometry(r, w, style) {
     }
     gb.cyl(ox - 0.03, 0, 0, 0.075, 0.075, 0.05, 10, SLOT.RIM, 0, 0, Math.PI / 2);
     gb.cyl(ox - 0.005, 0, 0, 0.035, 0.035, 0.01, 8, SLOT.DARK, 0, 0, Math.PI / 2);
+  } else if (style === 'gt3') {
+    // centre-lock: 10 slim straight spokes, deep dark barrel, big centre-lock nut
+    gb.geom(new THREE.CylinderGeometry(rr, rr, 0.05, 20, 1, true), gb.xf(ox - 0.03, 0, 0, 0, 0, Math.PI / 2), SLOT.RIM);
+    gb.cyl(ox - 0.11, 0, 0, rr * 0.98, rr * 0.98, 0.01, 20, SLOT.DARK, 0, 0, Math.PI / 2);
+    for (let i = 0; i < 10; i++) { const a = i / 10 * Math.PI * 2, len = rr * 0.84; gb.box(ox - 0.035, Math.cos(a) * len / 2, Math.sin(a) * len / 2, 0.035, len, 0.026, SLOT.RIM, a, 0, 0); }
+    gb.cyl(ox - 0.03, 0, 0, 0.09, 0.09, 0.05, 12, SLOT.RIM, 0, 0, Math.PI / 2);
+    gb.cyl(ox - 0.002, 0, 0, 0.055, 0.055, 0.03, 6, SLOT.DARK, 0, 0, Math.PI / 2);   // hex centre-lock nut
+    gb.cyl(ox + 0.012, 0, 0, 0.02, 0.02, 0.012, 8, SLOT.CALIPER, 0, 0, Math.PI / 2);  // coloured lock pin
+  } else if (style === 'mesh') {
+    // cross-spoke "mesh" (BBS style): 10 pairs of thin spokes crossing, polished lip
+    gb.geom(new THREE.CylinderGeometry(rr, rr, 0.05, 20, 1, true), gb.xf(ox - 0.03, 0, 0, 0, 0, Math.PI / 2), SLOT.RIM);
+    gb.cyl(ox - 0.11, 0, 0, rr * 0.98, rr * 0.98, 0.01, 20, SLOT.DARK, 0, 0, Math.PI / 2);
+    gb.geom(new THREE.TorusGeometry(rr * 0.99, 0.014, 4, 24), gb.xf(ox - 0.01, 0, 0, 0, Math.PI / 2, 0), SLOT.CHROME);
+    for (let i = 0; i < 10; i++) for (const s of [-1, 1]) {
+      const a = i / 10 * Math.PI * 2 + s * 0.16, len = rr * 0.86;
+      gb.box(ox - 0.032 - (s > 0 ? 0.006 : 0), Math.cos(a) * len / 2, Math.sin(a) * len / 2, 0.022, len, 0.018, SLOT.RIM, a - s * 0.32, 0, 0);
+    }
+    gb.cyl(ox - 0.03, 0, 0, rr * 0.28, rr * 0.28, 0.05, 10, SLOT.RIM, 0, 0, Math.PI / 2);
+    gb.cyl(ox - 0.002, 0, 0, rr * 0.13, rr * 0.13, 0.012, 10, SLOT.DARK, 0, 0, Math.PI / 2);
+  } else if (style === 'five') {
+    // classic five-spoke: wide flat spokes, lug nuts
+    gb.geom(new THREE.CylinderGeometry(rr, rr, 0.05, 20, 1, true), gb.xf(ox - 0.03, 0, 0, 0, 0, Math.PI / 2), SLOT.RIM);
+    gb.cyl(ox - 0.11, 0, 0, rr * 0.98, rr * 0.98, 0.01, 20, SLOT.DARK, 0, 0, Math.PI / 2);
+    for (let i = 0; i < 5; i++) { const a = i / 5 * Math.PI * 2, len = rr * 0.88; gb.box(ox - 0.03, Math.cos(a) * len / 2, Math.sin(a) * len / 2, 0.04, len, 0.085, SLOT.RIM, a, 0, 0); }
+    gb.cyl(ox - 0.03, 0, 0, rr * 0.32, rr * 0.32, 0.05, 10, SLOT.RIM, 0, 0, Math.PI / 2);
+    gb.cyl(ox - 0.002, 0, 0, rr * 0.13, rr * 0.13, 0.012, 10, SLOT.DARK, 0, 0, Math.PI / 2);
+    for (let i = 0; i < 5; i++) { const a = (i + 0.5) / 5 * Math.PI * 2; gb.cyl(ox - 0.001, Math.cos(a) * rr * 0.22, Math.sin(a) * rr * 0.22, 0.012, 0.012, 0.014, 6, SLOT.CHROME, 0, 0, Math.PI / 2); }
   } else if (style === 'truck') {
     gb.cyl(ox - 0.04, 0, 0, rr, rr * 0.9, 0.06, 14, SLOT.METAL, 0, 0, Math.PI / 2);
     gb.cyl(ox - 0.01, 0, 0, rr * 0.38, rr * 0.38, 0.04, 10, SLOT.CHROME, 0, 0, Math.PI / 2);
@@ -581,7 +608,7 @@ CATALOG.m4 = () => {
 
   return {
     key: 'm4', body: gb.build(), interior: ib.build(), wheelSW: sw.build(),
-    wheel: wheelGeometry(r, 0.275, 'm4'),
+    wheel: wheelGeometry(r, 0.275, 'm4'), tw: 0.275,
     wheels: [{ x: tx, f: aF, side: 1, front: true }, { x: -tx, f: aF, side: -1, front: true }, { x: tx, f: aR, side: 1 }, { x: -tx, f: aR, side: -1 }],
     r, L, W, front: h, rear: -h,
     indL: overlayGeom(ov.ind, -1), indR: overlayGeom(ov.ind, 1), brake: overlayGeom([...ov.brake, ov.third], 0),

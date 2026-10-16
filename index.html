@@ -65,13 +65,13 @@
     <p class="tagline">Weave through traffic. Chain near misses. Don't crash.</p>
     <div class="acct" data-acct></div>
     <div class="cards">
-      <button class="card" data-go="scrSP">
-        <svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><circle class="fg" cx="32" cy="25" r="11"/><path class="fg" d="M13 53C15 43 23 39 32 39S49 43 51 53C46 59 39 63 32 63S18 59 13 53Z"/></svg>
-        <b>SINGLEPLAYER</b>
+      <button class="card" data-go="scrPlay">
+        <svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><path class="fg" d="M25 18.5c0-2 2.2-3.2 3.9-2.1l19.2 12.4c1.6 1 1.6 3.4 0 4.4L28.9 45.6c-1.7 1.1-3.9-.1-3.9-2.1z"/></svg>
+        <b>PLAY</b>
       </button>
-      <button class="card" data-go="scrMP">
-        <svg viewBox="0 0 96 64"><g transform="translate(30 0)"><circle class="bg" cx="32" cy="32" r="31"/><circle class="fg" cx="32" cy="25" r="11"/><path class="fg" d="M13 53C15 43 23 39 32 39S49 43 51 53C46 59 39 63 32 63S18 59 13 53Z"/></g><g><circle class="bg2" cx="32" cy="32" r="31"/><circle class="fg" cx="32" cy="25" r="11"/><path class="fg" d="M13 53C15 43 23 39 32 39S49 43 51 53C46 59 39 63 32 63S18 59 13 53Z"/></g></svg>
-        <b>MULTIPLAYER</b>
+      <button class="card" data-go="scrGarage">
+        <svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><path class="fg" d="M12 38c0-3 1.6-4.6 4.4-5.2l6-1.4 5.6-5.3c1.4-1.3 3.2-2.1 5.1-2.1h6.4c2 0 3.8.8 5.1 2.3l3.6 4.4 3.3.7c2.6.6 4.5 2.8 4.5 5.5V41c0 1.1-.9 2-2 2H14c-1.1 0-2-.9-2-2z"/><circle class="bg" cx="21.5" cy="42.5" r="5.5"/><circle class="fg" cx="21.5" cy="42.5" r="3"/><circle class="bg" cx="43.5" cy="42.5" r="5.5"/><circle class="fg" cx="43.5" cy="42.5" r="3"/></svg>
+        <b>GARAGE</b>
       </button>
       <button class="card" id="profileCard">
         <svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><rect class="fg" x="13" y="18" width="38" height="28" rx="4"/><circle class="bg" cx="24" cy="29" r="5"/><path class="bg" d="M16 41c1-4 4-6 8-6s7 2 8 6z"/><rect class="bg" x="35" y="26" width="12" height="3" rx="1.5"/><rect class="bg" x="35" y="32" width="9" height="3" rx="1.5"/></svg>
@@ -92,9 +92,55 @@
     </div>
   </div>
 
+  <!-- play: singleplayer / multiplayer (race mode hidden for now) -->
+  <div id="scrPlay" class="screen title hidden">
+    <button class="back playBack" data-go="scrTitle">← BACK</button>
+    <h1 class="logo small">PL<span>AY</span></h1>
+    <div class="cards">
+      <button class="card" data-go="scrSP">
+        <svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><circle class="fg" cx="32" cy="25" r="11"/><path class="fg" d="M13 53C15 43 23 39 32 39S49 43 51 53C46 59 39 63 32 63S18 59 13 53Z"/></svg>
+        <b>SINGLEPLAYER</b>
+      </button>
+      <button class="card" data-go="scrMP">
+        <svg viewBox="0 0 96 64"><g transform="translate(30 0)"><circle class="bg" cx="32" cy="32" r="31"/><circle class="fg" cx="32" cy="25" r="11"/><path class="fg" d="M13 53C15 43 23 39 32 39S49 43 51 53C46 59 39 63 32 63S18 59 13 53Z"/></g><g><circle class="bg2" cx="32" cy="32" r="31"/><circle class="fg" cx="32" cy="25" r="11"/><path class="fg" d="M13 53C15 43 23 39 32 39S49 43 51 53C46 59 39 63 32 63S18 59 13 53Z"/></g></svg>
+        <b>MULTIPLAYER</b>
+      </button>
+      <!-- race mode: hidden for now
+      <button class="card soon" disabled title="Race mode is coming soon">
+        <svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><path class="fg" d="M22 14h3v38h-3z"/><path class="fg" d="M25 15h20l-4 6.5 4 6.5H25z"/></svg>
+        <b>RACE</b><span class="soonTag">COMING SOON</span>
+      </button>
+      -->
+    </div>
+  </div>
+
+  <!-- garage: pick your car, paint it, wheels, calipers, tint (js/garage.js) -->
+  <div id="scrGarage" class="screen hidden">
+    <div class="garagePanel">
+      <div class="hdr"><button class="back" data-go="scrTitle">← BACK</button><h1>GARAGE</h1></div>
+      <div class="gCars" id="gCars"></div>
+      <div class="gTabs"><button class="sel" data-gt="paint">PAINT</button><button data-gt="wheels">WHEELS</button><button data-gt="extras">EXTRAS</button></div>
+      <div class="gPane" data-gp="paint">
+        <div class="gLabel">Colour</div><div class="gSwatches" id="gPaint"></div>
+        <label class="row gCustom">Custom colour <input type="color" id="gPaintPick"></label>
+        <div class="gLabel">Finish</div><div class="seg" id="gFinish"><button data-v="gloss">Gloss</button><button data-v="metallic">Metallic</button><button data-v="matte">Matte</button></div>
+      </div>
+      <div class="gPane hidden" data-gp="wheels">
+        <div class="gLabel">Style</div><div class="gRims" id="gRims"></div>
+        <div class="gLabel">Colour</div><div class="gSwatches" id="gRimCol"></div>
+      </div>
+      <div class="gPane hidden" data-gp="extras">
+        <div class="gLabel">Brake calipers</div><div class="gSwatches" id="gCaliper"></div>
+        <div class="gLabel">Window tint</div><div class="seg" id="gTint"><button data-v="light">Light</button><button data-v="medium">Medium</button><button data-v="dark">Dark</button><button data-v="limo">Limo</button></div>
+      </div>
+      <div class="gNote"></div>
+    </div>
+    <div class="gHint">Drag to turn the car</div>
+  </div>
+
   <!-- singleplayer -->
   <div id="scrSP" class="screen panel hidden">
-    <div class="hdr"><button class="back" data-go="scrTitle">← BACK</button><h1>SINGLEPLAYER</h1></div>
+    <div class="hdr"><button class="back" data-go="scrPlay">← BACK</button><h1>SINGLEPLAYER</h1></div>
     <label class="mpField"><span class="mpLabel">Driver Name</span><input type="text" class="nameIn" maxlength="16" placeholder="Driver" spellcheck="false" autocomplete="off"></label>
     <div class="acctNote"></div>
     <div class="picks">
@@ -118,7 +164,7 @@
 
   <!-- multiplayer -->
   <div id="scrMP" class="screen panel hidden">
-    <div class="hdr"><button class="back" data-go="scrTitle">← BACK</button><h1>MULTIPLAYER <span id="mpOnline"></span></h1></div>
+    <div class="hdr"><button class="back" data-go="scrPlay">← BACK</button><h1>MULTIPLAYER <span id="mpOnline"></span></h1></div>
     <label class="mpField"><span class="mpLabel">Driver Name</span><input type="text" class="nameIn" maxlength="16" placeholder="Driver" spellcheck="false" autocomplete="off"></label>
     <div class="acctNote"></div>
     <div class="grid mpGrid">
@@ -171,30 +217,36 @@
   <!-- settings -->
   <div id="scrSettings" class="screen panel hidden">
     <div class="hdr"><button class="back" id="setBack">← BACK</button><h1>SETTINGS</h1></div>
-    <div class="grid">
+    <div class="tabs setTabs"><button class="tab sel" data-st="gameplay">GAMEPLAY</button><button class="tab" data-st="controls">CONTROLS</button><button class="tab" data-st="graphics">GRAPHICS</button><button class="tab" data-st="audio">AUDIO</button></div>
+    <div class="setPane grid" data-sp="gameplay">
       <section>
         <h2>Driving</h2>
+        <label class="row">Speed units <select id="units"><option value="mph">MPH</option><option value="kmh">KM/H</option></select></label>
+        <label class="row">Driver side <select id="rhd"><option value="left">Left</option><option value="right">Right</option></select></label>
+        <label class="chk"><input type="checkbox" id="tc"> Traction control</label>
+        <label class="chk"><input type="checkbox" id="manual"> Manual gearbox</label>
+        <label class="row hidden" id="vehRow">Vehicle <select id="vehSel"><option value="car">Car</option><option value="bike">Motorcycle</option></select></label>
+      </section>
+      <section>
+        <h2>Multiplayer</h2>
+        <label class="chk"><input type="checkbox" id="minimapOn"> Minimap</label>
+        <label>Chat size <b id="chatSizeV"></b><input type="range" id="chatSize" min="70" max="200"></label>
+      </section>
+    </div>
+    <div class="setPane grid hidden" data-sp="controls">
+      <section>
+        <h2>Steering</h2>
         <label>Lane assist (keyboard / gamepad) <b id="laKbV"></b><input type="range" id="laKb" min="0" max="100"></label>
         <label>Lane assist (steering wheel) <b id="laV"></b><input type="range" id="la" min="0" max="100"></label>
         <label>Wheel sensitivity <b id="sensV"></b><input type="range" id="sens" min="30" max="200"></label>
-        <label>Keyboard sensitivity <b id="kbSensV"></b><input type="range" id="kbSens" min="30" max="200"></label>        <label>Motion blur <b id="blurV"></b><input type="range" id="blur" min="0" max="100"></label>
-        <label class="row">Mirror quality <select id="mirrorQ"><option value="off">Off</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
-        <label class="row">Speed units <select id="units"><option value="mph">MPH</option><option value="kmh">KM/H</option></select></label>
-        <label class="row">Driver side <select id="rhd"><option value="left">Left</option><option value="right">Right</option></select></label>
-        <label>Volume <b id="volV"></b><input type="range" id="vol" min="0" max="100"></label>
-        <label>Chat size (multiplayer) <b id="chatSizeV"></b><input type="range" id="chatSize" min="70" max="200"></label>
-        <label class="chk"><input type="checkbox" id="tc"> Traction control</label>
-        <label class="chk"><input type="checkbox" id="manual"> Manual gearbox</label>
-        <label class="chk"><input type="checkbox" id="minimapOn"> Minimap (multiplayer)</label>
-        <label class="row hidden" id="vehRow">Vehicle <select id="vehSel"><option value="car">Car</option><option value="bike">Motorcycle</option></select></label>
-        <h2>Paint</h2>
-        <div id="swatches"></div>
-        <label class="row">Custom colour <input type="color" id="paint"></label>
+        <label>Keyboard sensitivity <b id="kbSensV"></b><input type="range" id="kbSens" min="30" max="200"></label>
+        <div id="setKeyboard">
+          <h2>Keyboard <button id="keysReset" class="mini">RESET</button></h2>
+          <div id="keyBinds"></div>
+          <div id="keyMsg"></div>
+        </div>
       </section>
-      <section>
-        <h2>Keyboard controls <button id="keysReset" class="mini">RESET</button></h2>
-        <div id="keyBinds"></div>
-        <div id="keyMsg"></div>
+      <section id="setWheel">
         <h2>Steering wheel / controller</h2>
         <div id="padStatus">No wheel detected. Turn the wheel or press a pedal.</div>
         <div id="axes"></div>
@@ -202,9 +254,26 @@
           <button data-cal="steer">Calibrate steering</button>
           <button data-cal="throttle">Calibrate throttle</button>
           <button data-cal="brake">Calibrate brake</button>
-          <button data-cal="cam">Camera button</button>          <button id="calReset">G923 defaults</button>
         </div>
         <div id="calMsg"></div>
+        <h2>Wheel buttons <button id="padReset" class="mini">RESET</button></h2>
+        <div class="sub small">Click an action, then press the button (or D-pad direction) on your wheel. The menu button works like Esc, and the menu keys let you move around the menus with just the wheel.</div>
+        <div id="padBinds"></div>
+        <div id="padMsg"></div>
+      </section>
+    </div>
+    <div class="setPane grid hidden" data-sp="graphics">
+      <section>
+        <h2>Graphics</h2>
+        <label class="row">Visual style <select id="fxSel"><option value="0">Normal</option><option value="1">Toon</option><option value="2">Realistic</option></select></label>
+        <label class="row">Mirror quality <select id="mirrorQ"><option value="off">Off</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></label>
+        <label>Motion blur <b id="blurV"></b><input type="range" id="blur" min="0" max="100"></label>
+      </section>
+    </div>
+    <div class="setPane grid hidden" data-sp="audio">
+      <section>
+        <h2>Audio</h2>
+        <label>Volume <b id="volV"></b><input type="range" id="vol" min="0" max="100"></label>
       </section>
     </div>
   </div>
@@ -340,7 +409,7 @@
   // Remove names from this list to take a vehicle out of traffic; with none loaded the old traffic returns.
   const VEHICLES = ['camry', 'civic', 'model3', 'golf', 'mini', 'mustang', 'p911', 'prius', 'charger', 'gtr',
     'rav4', 'wrangler', 'tahoe', 'f150', 'transit', 'odyssey', 'vwbus', 'boxtruck', 'cascadia'];
-  const files = ['js/platform', 'js/core','js/zones', 'js/models', 'js/bike', 'js/lowpoly', 'js/toykit', ...VEHICLES.map(k => 'js/vehicles/' + k), 'js/world', 'js/physics', 'js/traffic', 'js/input', 'js/titles', 'js/hud', 'js/netcodec', 'js/net', 'js/account', 'js/main', 'js/social', 'js/dropdown', 'js/touch', 'js/crazygames'];
+  const files = ['js/platform', 'js/core','js/zones', 'js/models', 'js/playercars', 'js/bike', 'js/lowpoly', 'js/toykit', ...VEHICLES.map(k => 'js/vehicles/' + k), 'js/world', 'js/physics', 'js/traffic', 'js/input', 'js/titles', 'js/hud', 'js/netcodec', 'js/net', 'js/account', 'js/main', 'js/garage', 'js/social', 'js/dropdown', 'js/touch', 'js/crazygames'];
   for (const f of files) {
     const s = document.createElement('script');
     s.src = `${f}.js?v=${v}`; s.async = false;

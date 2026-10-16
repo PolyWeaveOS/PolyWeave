@@ -183,7 +183,10 @@ function cleanState(st) {
 }
 
 // acct: signed in (their name is their account's, so it can open their profile; a guest's name could be anyone's)
-function roster(room) { return [...room.players.values()].map(p => ({ id: p.id, name: p.name, color: p.color, title: p.title || null, acct: !!(p.account && p.account.name), veh: p.veh === 'bike' ? 'bike' : undefined })); }
+function roster(room) { return [...room.players.values()].map(p => ({ id: p.id, name: p.name, color: p.color, title: p.title || null, acct: !!(p.account && p.account.name), veh: p.veh === 'bike' ? 'bike' : undefined, model: p.model && p.model !== 'm4' ? p.model : undefined })); }
+// which car a player drives (Garage): looks only, every car has the same hitbox
+const CAR_MODELS = ['m4'];
+const cleanModel = m => (CAR_MODELS.includes(m) ? m : 'm4');
 // the motorcycle: only for the accounts in DB.BIKE_NAMES (anyone else asking for it stays a car)
 const mayBike = p => !!(p.account && p.account.name && DB.BIKE_NAMES.includes(p.account.name.toLowerCase()));
 function cleanExt(p, e) {
@@ -554,6 +557,7 @@ wss.on('connection', ws => {
     // switched between car and motorcycle while on a server: everyone's roster shows the new one
     if (m.t === 'veh') {
       p.veh = m.veh === 'bike' && mayBike(p) ? 'bike' : 'car';
+      if (m.model !== undefined) p.model = cleanModel(m.model);
       cleanExt(p, m.ext);
       if (p.room) broadcast(p.room, { t: 'roster', list: roster(p.room) });
       return;
@@ -582,6 +586,7 @@ wss.on('connection', ws => {
     if (m.color !== undefined) p.color = cleanColor(m.color);
     if (m.bin !== undefined) p.bin = m.bin === 1;      // (this game reads the binary snapshots / positions)
     if (m.veh !== undefined) p.veh = m.veh === 'bike' && mayBike(p) ? 'bike' : 'car';
+    if (m.model !== undefined) p.model = cleanModel(m.model);
     cleanExt(p, m.ext);
     if (m.t === 'join') {
       const id = String(m.room || '');

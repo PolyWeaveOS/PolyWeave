@@ -86,15 +86,23 @@ const sound = new Sound();
 Input.init();
 
 const CG_F = 0.157; // centre of gravity sits 0.157 m ahead of the body centre
-const playerPaint = new THREE.MeshStandardMaterial({ color: Settings.color, roughness: 0.24, metalness: 0.55, envMapIntensity: 1.1 });
+const playerPaint = new THREE.MeshPhysicalMaterial({ color: Settings.color, roughness: 0.24, metalness: 0.55, envMapIntensity: 1.1, clearcoat: 1, clearcoatRoughness: 0.06 });   // (clear-coated car paint)
 const playerGlass = new THREE.MeshStandardMaterial({ color: 0x1a2530, roughness: 0.05, metalness: 0.6, transparent: true, opacity: 0.78, envMapIntensity: 1.5, side: THREE.DoubleSide });
-const playerRim = new THREE.MeshStandardMaterial({ color: 0x9c7a4c, roughness: 0.32, metalness: 0.85 }); // bronze forged wheels
-const playerVis = makeVehicle('m4', playerPaint, { [SLOT.GLASS]: playerGlass, [SLOT.RIM]: playerRim });
+const playerRim = new THREE.MeshStandardMaterial({ color: 0x9c7a4c, roughness: 0.32, metalness: 0.85 }); // wheels (Garage colour)
+const playerCaliper = new THREE.MeshStandardMaterial({ color: 0xc8161d, roughness: 0.4, metalness: 0.2 });   // brake calipers (Garage colour)
+const PLAYER_OVR = { [SLOT.GLASS]: playerGlass, [SLOT.RIM]: playerRim, [SLOT.CALIPER]: playerCaliper };
+const playerVis = makeVehicle('m4', playerPaint, PLAYER_OVR);
 // double-sided where needed: the cockpit view sees panels from inside, and the imported model's
-// surfaces aren't guaranteed to all face outward
+// surfaces aren't guaranteed to all face outward (one copy of each, shared by every car you can pick)
 const importedM4 = !!playerVis.M.wheelGeoms;
-playerVis.body.material = playerVis.body.material.map((m, i) => m && (importedM4 || i === SLOT.PAINT || i === SLOT.CARBON || i === SLOT.TRIM) ? Object.assign(m.clone(), { side: THREE.DoubleSide }) : m);
+const DS_MATS = {};
+const doubleSided = mats => mats.map((m, i) => m && (importedM4 || i === SLOT.PAINT || i === SLOT.CARBON || i === SLOT.TRIM) ? (DS_MATS[i] || (DS_MATS[i] = Object.assign(m.clone(), { side: THREE.DoubleSide }))) : m);
+playerVis.body.material = doubleSided(playerVis.body.material);
 const playerPaintDS = playerVis.body.material[SLOT.PAINT];
+// seen from inside (cockpit view) the painted roof and pillars are a dark headliner, not body colour lit by the grass
+playerPaintDS.onBeforeCompile = sh => {
+  sh.fragmentShader = sh.fragmentShader.replace('#include <dithering_fragment>', '#include <dithering_fragment>\n  if (!gl_FrontFacing) gl_FragColor.rgb = vec3(0.035, 0.037, 0.042);');
+};
 // the reduced real model has small surface ripples; a less mirror-like paint keeps them from showing as blotches
 if (importedM4) Object.assign(playerPaintDS, { roughness: 0.4, metalness: 0.3, envMapIntensity: 1.1 });
 const playerRoot = new THREE.Group();
@@ -200,12 +208,21 @@ const MIRRORS = (() => {
     add(box(0.05, 0.012, 0.04), gloss, 0, 1.322, -0.1, -0.5);                     // foot on the glass
   }
   // door mirrors: live glass laid over the whole face of the car's own mirror heads (same shape, see M4_MIRROR)
+  const heads = [];
   for (const sg of [-1, 1]) {
     const M = M4_MIRROR, head = new THREE.Group(); head.position.set(sg * M.x, M.y, M.z); head.rotation.y = sg * M.yaw; cockpit.add(head);
     const gl = new THREE.Group(); gl.position.set(0, 0, M.depth + 0.002); head.add(gl);
     mirror(sg < 0 ? 'left' : 'right', M.w * 0.94, M.h * 0.94, 0, gl, new THREE.Vector3(sg * (M.x + 0.02), M.y, M.z + M.depth + 0.01),
       new THREE.Vector3(sg * 0.16, -0.03, 1), 22, m4MirrorOutline(sg, 0.94));
+    heads.push({ sg, head, m: list[list.length - 1] });
   }
+  // the car you picked (Garage): its door mirrors sit somewhere else (the cockpit itself is shifted by `off`)
+  const setMount = (M, off) => {
+    for (const { sg, head, m } of heads) {
+      head.position.set(sg * M.x - off.x, M.y - off.y, M.z - off.z); head.rotation.y = sg * M.yaw;
+      m.camPos.set(sg * (M.x + 0.02), M.y, M.z + M4_MIRROR.depth + 0.01);
+    }
+  };
   // quality: picture size, smoothing and how often each mirror is redrawn (low suits slower computers)
   const Q = { low: { rear: [256, 74], side: [128, 62], samples: 0, every: [2, 4], far: 220 },
               medium: { rear: [384, 110], side: [192, 92], samples: 0, every: [1, 3], far: 320 },
@@ -247,7 +264,7 @@ const MIRRORS = (() => {
     g.textAlign = 'right'; g.font = '700 17px Segoe UI, Arial'; g.fillStyle = 'rgba(255,255,255,.55)'; g.fillText(car.manual ? 'MANUAL' : 'AUTO', 478, 84);
     gTex.needsUpdate = true;
   };
-  return { list, drawGauge, setQuality, setSide, frame: 0, every: () => q.every, off: () => off };
+  return { list, drawGauge, setQuality, setSide, setMount, frame: 0, every: () => q.every, off: () => off };
 })();
 // the mirrors' cameras follow the car (each redrawn every few frames, depending on quality)
 const _mp = new THREE.Vector3(), _md = new THREE.Vector3();
@@ -277,7 +294,7 @@ const M4_EXT = { front: playerVis.M.front - CG_F, rear: playerVis.M.rear - CG_F,
 
 // ---------- motorcycle (only for these accounts: same physics as the car, its own model and hitbox) ----------
 // (the server checks the same list before showing a bike to other players)
-const BIKE_NAMES = ['curryeater', 'polyweave', 'codester'];
+const BIKE_NAMES = ['curryeater', 'polyweave'];   // (owners only: not released yet)
 const playerBike = makeBike(playerPaint); playerBike.root.visible = false; playerRoot.add(playerBike.root);
 const VEH = {
   car: { hull: playerHull.map(p => p.slice()), ext: Object.assign({}, M4_EXT) },
@@ -303,7 +320,70 @@ function setVehicle(v) {
 }
 
 function setPaint(hex) { Settings.color = hex; playerPaint.color.set(hex); playerPaintDS.color.set(hex); saveSettings(); }
-setPaint(Settings.color);
+
+// ---------- the car you drive (Garage: M4 / 911 GT3 / R8, paint + finish, wheels, calipers, window tint) ----------
+// Each car is built the first time it's picked; switching moves its parts into the same player object, so
+// everything that animates the car (wheels, lights, body lean, cockpit, recorder) keeps working. All three
+// drive the same and keep the M4's hitbox (playerHull above): the car is looks only.
+const CAR_PARTS = { m4: { body: playerVis.body, wheels: playerVis.wheels, brake: playerVis.brake, indL: playerVis.indL, indR: playerVis.indR, M: playerVis.M } };
+let carKey = 'm4', glassOut = 0.78;
+const PAINT_FINISH = { gloss: [0.24, 0.55], metallic: [0.3, 0.88], matte: [0.74, 0.06] };   // roughness, metalness
+const WINDOW_TINT = { light: [0x2a3946, 0.55], medium: [0x1a2530, 0.78], dark: [0x10161c, 0.9], limo: [0x06080b, 0.97] };
+function carParts(key) {
+  if (CAR_PARTS[key]) return CAR_PARTS[key];
+  const v = makeVehicle(key, playerPaint, PLAYER_OVR);
+  v.body.material = doubleSided(v.body.material);
+  v.root.remove(v.body, v.brake, v.indL, v.indR, ...v.wheels.map(w => w.pivot));
+  return (CAR_PARTS[key] = { body: v.body, wheels: v.wheels, brake: v.brake, indL: v.indL, indR: v.indR, M: v.M });
+}
+// this car's Garage choices (Settings.cars[key]), filled in with what the car comes with
+function carCfg(key = carKey) {
+  const C = PLAYER_CARS[key] || PLAYER_CARS.m4, s = (Settings.cars && Settings.cars[key]) || {};
+  return { color: s.color || C.color, finish: PAINT_FINISH[s.finish] ? s.finish : 'gloss', rim: s.rim || C.rim, rimColor: s.rimColor || C.rimColor,
+    caliper: s.caliper || C.caliper, tint: WINDOW_TINT[s.tint] ? s.tint : 'medium' };
+}
+function setCarCfg(patch) {
+  Settings.cars = Settings.cars || {};
+  Settings.cars[carKey] = Object.assign({}, Settings.cars[carKey], patch);
+  applyCarCfg(); saveSettings();
+}
+const _rimGeo = {};
+function applyCarCfg() {
+  const c = carCfg(), [ro, me] = PAINT_FINISH[c.finish], [tc, to] = WINDOW_TINT[c.tint];
+  setPaint(c.color);
+  for (const m of [playerPaint, playerPaintDS]) { m.roughness = ro; m.metalness = me; m.clearcoat = c.finish === 'matte' ? 0 : 1; }
+  playerRim.color.set(c.rimColor); playerCaliper.color.set(c.caliper);
+  playerGlass.color.set(tc); glassOut = to;
+  const M = playerVis.M;
+  if (M.wheelGeoms && c.rim === 'stock') {          // (a car from a real model: its own wheels)
+    playerVis.wheels.forEach((w, i) => { w.mesh.geometry = M.wheelGeoms[i]; w.base = 0; w.spinSign = 1; w.pivot.rotation.y = 0; });
+  } else {
+    const style = c.rim === 'stock' ? (PLAYER_CARS[carKey].rim === 'stock' ? 'gt3' : PLAYER_CARS[carKey].rim) : c.rim, g = _rimGeo[carKey + ':' + style] || (_rimGeo[carKey + ':' + style] = wheelGeometry(M.r, M.tw || 0.275, style));
+    // (the game's wheels are built for the right side: turned round on the left)
+    for (const w of playerVis.wheels) { w.mesh.geometry = g; if (M.wheelGeoms) { w.base = w.side < 0 ? Math.PI : 0; w.spinSign = w.side; w.pivot.rotation.y = w.base; } }
+  }
+}
+function installCar(key) {
+  if (!PLAYER_CARS[key]) key = 'm4';
+  const old = CAR_PARTS[carKey], P = carParts(key), C = PLAYER_CARS[key];
+  if (old !== P) {
+    playerVis.root.remove(old.body, old.brake, old.indL, old.indR, ...old.wheels.map(w => w.pivot));
+    playerVis.root.add(P.body, P.brake, P.indL, P.indR, ...P.wheels.map(w => w.pivot));
+    Object.assign(playerVis, { body: P.body, wheels: P.wheels, brake: P.brake, indL: P.indL, indR: P.indR, M: P.M });
+  }
+  carKey = Settings.car = key;
+  // where the driver sits: cabin seen through the glass, steering column, first-person cockpit, door mirrors
+  interior.geometry = P.M.interior; swMesh.geometry = P.M.wheelSW;
+  if (!P.M.swCenter) { swTilt.position.y = C.sw.y; swTilt.position.z = -C.sw.f; swTilt.rotation.x = C.sw.rx; }
+  const off = { x: 0, y: C.cockpit.dy, z: -C.cockpit.df };
+  cockpit.position.set(off.x, off.y, off.z);
+  MIRRORS.setMount(C.mirror, off); MIRRORS.setSide(Settings.rhd);
+  applyCarCfg(); saveSettings();
+  if (typeof Net !== 'undefined' && Net.setModel) Net.setModel(key);
+}
+// (older saves: the paint picked in Settings becomes the M4's paint)
+if (!Settings.cars) Settings.cars = { m4: { color: Settings.color } };
+installCar(Settings.car || 'm4');
 
 // ---------- state ----------
 let camMode = 0, menuOpen = true, started = false, time = 0, lastCrash = -9, last = performance.now();
@@ -504,6 +584,7 @@ function crashEvent(strength) {
 // ---------- camera ----------
 function updateCamera(dt) {
   const spd = car.speed, sy = Math.sin(car.visYaw), cy = Math.cos(car.visYaw); // cockpit sits in the drawn body
+  if (menuOpen && screen === 'scrGarage' && typeof Garage !== 'undefined') { Garage.camera(dt); return; }   // (js/garage.js)
   if (menuOpen) { // slow orbit around the car in the menu
     camS.orbit += dt * 0.25;
     const a = car.yaw + camS.orbit + 2.4, r = 6.8;
@@ -549,8 +630,9 @@ function updateCamera(dt) {
     const bike = vehicle === 'bike', lean = bike ? (camS.body && camS.body.lean) || 0 : 0;
     // (motorcycle: the rider's helmet, tucked over the tank, tipping with the bike; car: the driver's seat)
     const lx = bike ? Math.sin(lean) * -1.25 : (Settings.rhd ? 0.37 : -0.37) - U.clamp(car.ay, -12, 12) * 0.004;
-    const lf = (bike ? 0.2 : -0.32 - CG_F) - U.clamp(car.ax, -15, 12) * 0.006; // head pitches forward under braking
-    const y = (bike ? 1.3 * Math.cos(lean) : 1.13) + Math.sin(time * 31) * Math.min(spd / 80, 1) * (bike ? 0.003 : 0.0015);
+    const seat = PLAYER_CARS[carKey];                  // (where the driver sits in the car you picked)
+    const lf = (bike ? 0.2 : seat.eyeF - CG_F) - U.clamp(car.ax, -15, 12) * 0.006; // head pitches forward under braking
+    const y = (bike ? 1.3 * Math.cos(lean) : seat.eyeY) + Math.sin(time * 31) * Math.min(spd / 80, 1) * (bike ? 0.003 : 0.0015);
     camera.position.set(car.x + lf * sy + lx * cy, y, car.z - lf * cy + lx * sy);
     camera.rotation.order = 'YXZ';
     camera.rotation.set(bike ? -0.09 : -0.045, -car.visYaw, lean * 0.7);   // car: level, no tilt from braking / cornering
@@ -582,15 +664,68 @@ function tailgateLift(cx, cz, cy) {
 const menu = document.getElementById('menu');
 const $id = id => document.getElementById(id);
 let screen = 'scrTitle', settingsFrom = 'scrTitle';
+// where Back / Esc goes from each screen (anything not listed: the main menu)
+const PARENT = { scrSP: 'scrPlay', scrMP: 'scrPlay', scrTitles: 'scrProfile' };
 function show(id) {
   if (id === 'scrSettings' && screen !== 'scrSettings') settingsFrom = screen;
   screen = id;
   for (const s of menu.querySelectorAll('.screen')) s.classList.toggle('hidden', s.id !== id);
   if (id === 'scrMP') Net.refreshList();
   if (id === 'scrLB') loadLeaderboard();
-  if (id === 'scrSettings') renderKeys();
+  if (id === 'scrSettings') { renderKeys(); renderPadBinds(); }
   if (id === 'scrPause') updatePause();
+  menu.classList.toggle('garageOpen', id === 'scrGarage');          // (the Garage shows the car itself: no blur)
+  if (typeof Garage !== 'undefined') Garage.shown(id === 'scrGarage');
+  PadNav.clear();
 }
+// ---------- moving around the menus with a wheel or controller (Settings > Controls > Wheel buttons) ----------
+// D-pad / menu keys move a yellow outline between the buttons on the screen (nearest one in that direction);
+// select presses it. On a slider or drop-down, left / right changes it.
+const PadNav = {
+  cur: null,
+  items() {
+    const fx = $id('claimFx'), root = fx && !fx.classList.contains('hidden') ? fx : menu.querySelector('.screen:not(.hidden)');
+    if (!root) return [];
+    return [...root.querySelectorAll('button, input, .sw, .gCar, .gRim')].filter(e => !e.disabled && e.offsetParent !== null && e.type !== 'color' && !e.classList.contains('ddNative'));
+  },
+  clear() { if (this.cur) this.cur.classList.remove('padFocus'); this.cur = null; },
+  focus(el) { this.clear(); this.cur = el; el.classList.add('padFocus'); el.scrollIntoView({ block: 'nearest', inline: 'nearest' }); },
+  step(c, dx) {                                            // slider / drop-down: change it instead of moving away
+    const sel = c.classList.contains('ddBtn') ? c.parentNode.querySelector('select') : null;
+    if (sel) { sel.selectedIndex = (sel.selectedIndex + dx + sel.options.length) % sel.options.length; sel.dispatchEvent(new Event('change', { bubbles: true })); return true; }
+    if (c.tagName === 'INPUT' && c.type === 'range') { const st = (+c.max - +c.min) / 20; c.value = U.clamp(+c.value + dx * st, +c.min, +c.max); c.dispatchEvent(new Event('input', { bubbles: true })); return true; }
+    return false;
+  },
+  move(dx, dy) {
+    const all = this.items(); if (!all.length) return;
+    const c = this.cur;
+    if (!c || !all.includes(c)) { this.focus(all.find(e => e.classList.contains('card')) || all.find(e => e.classList.contains('go')) || all[0]); return; }   // (start on the big buttons)
+    if (dx && this.step(c, dx)) return;
+    const r0 = c.getBoundingClientRect(), x0 = r0.left + r0.width / 2, y0 = r0.top + r0.height / 2;
+    let best = null, bs = Infinity;
+    for (const e of all) {
+      if (e === c) continue;
+      const r = e.getBoundingClientRect(), x = r.left + r.width / 2 - x0, y = r.top + r.height / 2 - y0, along = x * dx + y * dy;
+      if (along <= 4) continue;
+      const s = along + Math.abs(x * dy - y * dx) * 2.2;
+      if (s < bs) { bs = s; best = e; }
+    }
+    if (best) this.focus(best);
+  },
+  select() {
+    const c = this.cur;
+    if (!c || !this.items().includes(c)) { this.move(0, 1); return; }
+    if (c.classList.contains('ddBtn')) { this.step(c, 1); return; }   // (drop-down: next option)
+    if (c.tagName === 'INPUT' && c.type === 'text') { c.focus(); return; }
+    if (!(c.tagName === 'INPUT' && c.type === 'range')) c.click();
+  },
+  update(ctl) {
+    const n = ctl.nav; if (!n) return;
+    if (n.up) this.move(0, -1); if (n.down) this.move(0, 1); if (n.left) this.move(-1, 0); if (n.right) this.move(1, 0);
+    if (ctl.select) this.select();
+  },
+};
+addEventListener('pointermove', () => PadNav.clear());
 document.querySelectorAll('[data-go]').forEach(b => b.addEventListener('click', () => show(b.dataset.go)));
 $id('setBack').onclick = () => show(settingsFrom);
 
@@ -628,20 +763,36 @@ tcEl.checked = Settings.tc; manEl.checked = Settings.manual; mmEl.checked = Sett
 tcEl.addEventListener('change', () => { Settings.tc = car.tc = tcEl.checked; saveSettings(); });
 manEl.addEventListener('change', () => { Settings.manual = car.manual = manEl.checked; saveSettings(); });
 mmEl.addEventListener('change', () => { Settings.minimap = mmEl.checked; saveSettings(); });
-const PAINTS = [['Brooklyn Grey', '#a6b0b8'], ['Isle of Man Green', '#0e5a44'], ['São Paulo Yellow', '#f0c419'], ['Toronto Red', '#b1121c'],
-  ['Portimão Blue', '#1d5cc0'], ['Black Sapphire', '#14161a'], ['Alpine White', '#eef0ee'], ['Fire Orange', '#e0561c'], ['Dravit Grey', '#6b6e68'], ['Tanzanite Blue', '#1d2a4b']];
-const swBox = $id('swatches'), picker = $id('paint');
-const markSw = () => { for (const el of swBox.children) el.classList.toggle('sel', el.dataset.c === Settings.color); picker.value = Settings.color; };
-for (const [n, c] of PAINTS) {
-  const el = document.createElement('div'); el.className = 'sw'; el.title = n; el.dataset.c = c; el.style.background = c;
-  el.onclick = () => { setPaint(c); markSw(); };
-  swBox.appendChild(el);
+// (paint, wheels and the rest of the car's looks are in the Garage: js/garage.js)
+// Settings tabs: gameplay / controls / graphics / audio
+let setTab = 'gameplay';
+function showSetTab(t) {
+  setTab = t;
+  document.querySelectorAll('[data-st]').forEach(b => b.classList.toggle('sel', b.dataset.st === t));
+  document.querySelectorAll('[data-sp]').forEach(p => p.classList.toggle('hidden', p.dataset.sp !== t));
 }
-picker.addEventListener('input', () => { setPaint(picker.value); markSw(); });
-markSw();
+document.querySelectorAll('[data-st]').forEach(b => b.addEventListener('click', () => showSetTab(b.dataset.st)));
+{ const el = $id('fxSel'); el.value = String(Number.isInteger(Settings.fx) ? Settings.fx : (Settings.toon ? 1 : 0)); el.addEventListener('change', () => setFx(+el.value, true)); }
 const calMsg = $id('calMsg');
 document.querySelectorAll('[data-cal]').forEach(b => b.addEventListener('click', () => Input.startCal(b.dataset.cal, t => (calMsg.textContent = t))));
-$id('calReset').onclick = () => { Input.resetCal(); calMsg.textContent = 'Reset to Logitech G923 / G29 defaults.'; };
+// wheel / controller buttons: click an action, then press the button (or D-pad direction) for it
+function renderPadBinds() {
+  const box = $id('padBinds'); box.innerHTML = '';
+  for (const [a, name] of PAD_ACTIONS) {
+    const lab = document.createElement('span'); lab.textContent = name;
+    const b = document.createElement('button'); b.textContent = Input.padLabel(a);
+    b.onclick = () => {
+      b.classList.add('wait'); b.textContent = 'Press a button…';
+      $id('padMsg').textContent = `Press the wheel button for "${name.toLowerCase()}" (Esc cancels, 8 s).`;
+      Input.startPadBind(a, ok => { renderPadBinds(); $id('padMsg').textContent = ok === true ? 'Saved.' : ok || 'Cancelled.'; });
+    };
+    const clr = document.createElement('button'); clr.className = 'mini'; clr.textContent = '✕'; clr.title = 'Clear';
+    clr.onclick = () => { Input.setPadBind(a, null); renderPadBinds(); };
+    const cell = document.createElement('div'); cell.className = 'padCell'; cell.append(b, clr);
+    box.append(lab, cell);
+  }
+}
+$id('padReset').onclick = () => { Input.resetPadBinds(); renderPadBinds(); $id('padMsg').textContent = 'Back to the default buttons.'; };
 // keyboard controls: click an action, then press its new key
 function renderKeys() {
   const box = $id('keyBinds'); box.innerHTML = '';
@@ -1317,7 +1468,7 @@ function updatePlayerVisual(dt) {
   cockpitWheel.rotation.z = swMesh.rotation.z;
   if (inCockpit && !bike) MIRRORS.drawGauge(dt);
   playerVis.brake.visible = car.brakeOn && car.gear >= 0;
-  playerGlass.opacity = camMode === 1 && !menuOpen ? 0.14 : 0.78;
+  playerGlass.opacity = camMode === 1 && !menuOpen ? 0.14 : glassOut;   // (outside: the Garage window tint)
   if (bike) {
     // the motorcycle leans into turns (the angle real bikes need for that turn, softened), nose dips the same as the car
     const leanT = U.clamp(-Math.atan2(ayNow, 9.81) * 0.85, -0.72, 0.72);
@@ -1476,6 +1627,7 @@ const FX_NAMES = ['SHADERS OFF', 'TOON', 'REALISTIC'];
 function setFx(mode, silent) {
   FX.mode = mode; Settings.fx = mode; saveSettings();
   realisticScene(mode === 2);
+  const sel = document.getElementById('fxSel'); if (sel) sel.value = String(mode);   // (T key: the Settings drop-down follows)
   if (!silent) hud.message(FX_NAMES[mode]);
 }
 // Motion blur (Settings slider): the faster you go, the more the scenery streaks toward the middle of the
@@ -1628,11 +1780,16 @@ function frame(now) {
 
   if (menuOpen) {
     // Esc: pause -> back to driving; settings -> where you came from; other screens -> main menu
-    if (Input.hit('Escape')) {
-      if (screen === 'scrPause') closeMenu();
+    // (the wheel's menu / back buttons work like Esc, unless a button is being bound in Settings)
+    const back = Input.hit('Escape') || (!Input.padCap && (ctl.menu || ctl.back));
+    if (back) {
+      const fx = $id('claimFx');
+      if (fx && !fx.classList.contains('hidden')) $id('cfOk').click();
+      else if (screen === 'scrPause') closeMenu();
       else if (screen === 'scrSettings') show(settingsFrom);
-      else if (screen !== 'scrTitle') show(game.mode === 'menu' ? 'scrTitle' : 'scrPause');
+      else if (screen !== 'scrTitle') show(game.mode === 'menu' ? (PARENT[screen] || 'scrTitle') : 'scrPause');
     } else if (Input.hit('Enter') && screen === 'scrPause') closeMenu();
+    else if (!Input.padCap) PadNav.update(ctl);
     updatePadPanel();
     // on a server the game doesn't stop behind the menu: your car keeps rolling with the shared traffic
     const rolling = game.mode === 'mp';
@@ -1648,7 +1805,7 @@ function frame(now) {
     renderFrame();
     return;
   }
-  if (Input.hit('Escape') || Input.hit('KeyP')) { openMenu('scrPause'); Input.endFrame(); return; }
+  if (Input.hit('Escape') || Input.hit('KeyP') || ctl.menu) { openMenu('scrPause'); Input.endFrame(); return; }
   time += dt;
   if (Input.tap('camera') || ctl.camBtn) camMode ^= 1;   // chase <-> cockpit
   if (Input.tap('style')) setFx((FX.mode + 1) % 3);   // normal -> toon -> realistic -> normal
@@ -1658,7 +1815,7 @@ function frame(now) {
     const el = $id('fdDens'); el.value = Math.round(game.density * 100); el.dispatchEvent(new Event('input'));
     hud.message(`TRAFFIC ${Math.round(game.density * 100)}%`);   // (shown briefly when you change it)
   }
-  if (Input.tap('gearbox')) { car.manual = Settings.manual = !car.manual; manEl.checked = car.manual; saveSettings(); hud.message(car.manual ? 'MANUAL' : 'AUTO'); }
+  if (Input.tap('gearbox') || ctl.gearbox) { car.manual = Settings.manual = !car.manual; manEl.checked = car.manual; saveSettings(); hud.message(car.manual ? 'MANUAL' : 'AUTO'); }
   if (Input.tap('map') && game.mode === 'mp') bigMap = !bigMap;
   if (Input.tap('shiftUp') || ctl.up) { if (!car.manual) { car.manual = Settings.manual = true; manEl.checked = true; } car.shift(1); }
   if (Input.tap('shiftDown') || ctl.down) { if (!car.manual) { car.manual = Settings.manual = true; manEl.checked = true; } car.shift(-1); }

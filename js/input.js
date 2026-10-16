@@ -11,7 +11,20 @@ const PAD_DEFAULTS = {
   throttle: { axis: 1, rest: 1, full: -1 },
   brake: { axis: 5, rest: 1, full: -1 },
   cam: 3, up: 4, down: 5, reset: 2,
+  // wheel buttons (Settings > Controls > Wheel buttons): { b: button } or { a: axis, v: value } for a D-pad that's
+  // a "hat" axis (most wheels in Chrome: one axis, a different value per direction, ~1.29 at rest). Logitech
+  // G923 / G29 numbering: 0 cross, 1 square, 2 circle, 3 triangle, 4 / 5 right / left paddle, 9 the menu button.
+  btn: { menu: { b: 9 }, select: { b: 0 }, back: null, navUp: { a: 9, v: -1 }, navDown: { a: 9, v: 0.1429 }, navLeft: { a: 9, v: 0.7143 },
+    navRight: { a: 9, v: -0.4286 }, gearbox: null, up: { b: 4 }, down: { b: 5 }, cam: { b: 3 }, reset: { b: 2 } },
 };
+// what each wheel button can do (Settings list order)
+const PAD_ACTIONS = [['menu', 'Menu / pause (like Esc)'], ['select', 'Menu: select'], ['back', 'Menu: back'], ['navUp', 'Menu: up'], ['navDown', 'Menu: down'],
+  ['navLeft', 'Menu: left'], ['navRight', 'Menu: right'], ['gearbox', 'Auto / manual gearbox'], ['up', 'Shift up (paddle)'], ['down', 'Shift down (paddle)'],
+  ['cam', 'Camera'], ['reset', 'Reset car']];
+// standard controllers (Xbox / PlayStation pads): fixed buttons, D-pad for the menus
+const PAD_STD = { menu: { b: 9 }, select: { b: 0 }, back: { b: 1 }, navUp: { b: 12 }, navDown: { b: 13 }, navLeft: { b: 14 }, navRight: { b: 15 },
+  gearbox: { b: 2 }, up: { b: 5 }, down: { b: 4 }, cam: { b: 3 }, reset: { b: 8 } };
+const HAT_NAMES = [[-1, 'D-pad ↑'], [0.1429, 'D-pad ↓'], [0.7143, 'D-pad ←'], [-0.4286, 'D-pad →']];
 
 // keyboard actions -> keys (first key can be changed in Settings; arrows stay as a backup for driving)
 const KEY_DEFAULTS = {
@@ -44,6 +57,9 @@ const Input = {
 
   init() {
     try { const c = JSON.parse(localStorage.getItem('tw_pad') || 'null'); if (c) this.cfg = Object.assign(this.cfg, c); } catch (e) { /* ignore */ }
+    // (older saves: no button list yet - start from the defaults, keeping a camera button picked before)
+    if (!this.cfg.btn) { this.cfg.btn = JSON.parse(JSON.stringify(PAD_DEFAULTS.btn)); if (Number.isInteger(this.cfg.cam)) this.cfg.btn.cam = { b: this.cfg.cam }; }
+    for (const [a] of PAD_ACTIONS) if (!(a in this.cfg.btn)) this.cfg.btn[a] = PAD_DEFAULTS.btn[a];
     try { const b = JSON.parse(localStorage.getItem('tw_keys') || 'null'); if (b) for (const a in KEY_DEFAULTS) if (Array.isArray(b[a]) && b[a].length) this.binds[a] = b[a]; } catch (e) { /* ignore */ }
     addEventListener('keydown', e => {
       // waiting for a new key in Settings: that key becomes the action's main key (Esc cancels)
@@ -54,6 +70,8 @@ const Input = {
         if (done) done(e.code !== 'Escape');
         return;
       }
+      // binding a wheel button in Settings: Esc cancels it
+      if (this.padCap && e.code === 'Escape') { e.preventDefault(); const d = this.padCap.done; this.padCap = null; d(false); return; }
       // typing in a text box (multiplayer name / room code) never drives the car
       if (e.target && (e.target.tagName === 'INPUT' && e.target.type === 'text')) return;
       if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.code)) e.preventDefault();
@@ -105,17 +123,19 @@ const Input = {
     o.steer = ks; o.throttle = o.kt; o.brake = o.kb;
     o.source = 'keys';
     o.camBtn = false; o.up = false; o.down = false; o.reset = false;
+    o.menu = false; o.select = false; o.back = false; o.gearbox = false; o.nav = null;
 
     const p = this.findPad();
     if (p) {
       if (this.cal) this.calTick(p, now);
+      if (this.padCap) this.padBindTick(p, now);
       if (this.padKind === 'gamepad') {
         let sx = p.axes[0] || 0; sx = Math.abs(sx) < 0.1 ? 0 : Math.sign(sx) * Math.pow((Math.abs(sx) - 0.1) / 0.9, 1.6);
         const gt = p.buttons[7] ? p.buttons[7].value : 0, gb = p.buttons[6] ? p.buttons[6].value : 0;
         if (Math.abs(sx) > 0 && !ks) { o.steer = sx; }
         if (gt > 0.02) o.throttle = Math.max(o.throttle, gt);
         if (gb > 0.02) o.brake = Math.max(o.brake, gb);
-        o.camBtn = this.btnEdge(p, 3); o.up = this.btnEdge(p, 5); o.down = this.btnEdge(p, 4); o.reset = this.btnEdge(p, 8);
+        this.padButtons(p, PAD_STD, now, o);
       } else {
         const c = this.cfg;
         let st = p.axes[c.steer.axis] || 0; if (c.steer.inv) st = -st;
@@ -131,7 +151,7 @@ const Input = {
         if (this.wheelUsed && !ks && this.lastWheelMove > (this.lastKeySteer || -1e9)) { o.steer = st; o.source = 'wheel'; }
         o.throttle = Math.max(o.throttle, th);
         o.brake = Math.max(o.brake, br);
-        o.camBtn = this.btnEdge(p, c.cam); o.up = this.btnEdge(p, c.up); o.down = this.btnEdge(p, c.down); o.reset = this.btnEdge(p, c.reset);
+        if (!this.padCap) this.padButtons(p, c.btn, now, o);
       }
       // (wheel turned, pedal pressed, stick moved or a button held all count as activity)
       if (this.lastWheelMove === now || o.throttle > 0.05 || o.brake > 0.05 || (this.padKind === 'gamepad' && Math.abs(o.steer) > 0.05)
@@ -140,6 +160,57 @@ const Input = {
     }
     if (ks || kt || kb) this.lastActive = now;   // a driving key held down
     return o;
+  },
+
+  // ---- wheel / controller buttons ----
+  padDown(p, b) { return !!b && (b.b !== undefined ? !!(p.buttons[b.b] && p.buttons[b.b].pressed) : Math.abs((p.axes[b.a] ?? 99) - b.v) < 0.08); },
+  // a press of each bound button (menu arrows repeat while held: after 0.45 s, every 0.13 s)
+  padButtons(p, map, now, o) {
+    const prev = this.padPrev || (this.padPrev = {}), hold = this.padHold || (this.padHold = {}), E = {};
+    for (const [a] of PAD_ACTIONS) {
+      const down = this.padDown(p, map[a]);
+      E[a] = down && !prev[a];
+      if (down && a.startsWith('nav')) { if (E[a]) hold[a] = now + 450; else if (now >= hold[a]) { E[a] = true; hold[a] = now + 130; } }
+      prev[a] = down;
+    }
+    o.camBtn = E.cam; o.up = E.up; o.down = E.down; o.reset = E.reset;
+    o.menu = E.menu; o.select = E.select; o.back = E.back; o.gearbox = E.gearbox;
+    o.nav = { up: E.navUp, down: E.navDown, left: E.navLeft, right: E.navRight };
+  },
+  padLabel(a) {
+    const b = this.cfg.btn[a];
+    if (!b) return '—';
+    if (b.b !== undefined) return 'Button ' + b.b;
+    const h = HAT_NAMES.find(([v]) => Math.abs(v - b.v) < 0.05);
+    return h ? `${h[1]} (axis ${b.a})` : `Axis ${b.a} (${b.v.toFixed(2)})`;
+  },
+  setPadBind(a, v) { this.cfg.btn[a] = v; this.save(); },
+  resetPadBinds() { this.cfg.btn = JSON.parse(JSON.stringify(PAD_DEFAULTS.btn)); this.save(); },
+  // waiting for a button (or a D-pad direction) for action a; done(true) / done(false: cancelled) / done('message')
+  startPadBind(a, done) {
+    if (!this.findPad()) { done('No wheel or controller found. Press a pedal or a button first so the browser can see it.'); return; }
+    this.padCap = { a, done, t0: performance.now(), btn0: null, ax0: null };
+  },
+  padBindTick(p, now) {
+    const c = this.padCap, t = now - c.t0;
+    if (t > 8000) { this.padCap = null; c.done('Timed out: nothing was pressed.'); return; }
+    if (!c.btn0) { c.btn0 = p.buttons.map(b => b.pressed); c.ax0 = p.axes.slice(); return; }
+    if (t < 150) { c.btn0 = c.btn0.map((was, i) => was || p.buttons[i].pressed); return; }   // (the click that started it)
+    for (let i = 0; i < p.buttons.length; i++) if (p.buttons[i].pressed && !c.btn0[i]) { this.finishPadBind({ b: i }); return; }
+    // a D-pad that's an axis: never the steering / pedal axes
+    const used = [this.cfg.steer.axis, this.cfg.throttle.axis, this.cfg.brake.axis];
+    for (let i = 0; i < p.axes.length; i++) {
+      if (used.includes(i)) continue;
+      const v = p.axes[i], v0 = c.ax0[i];
+      if (Math.abs(v - v0) > 0.3 && Math.abs(v) <= 1.01) { this.finishPadBind({ a: i, v: +v.toFixed(4) }); return; }
+    }
+  },
+  finishPadBind(v) {
+    const c = this.padCap; this.padCap = null;
+    this.setPadBind(c.a, v);
+    // (pressing it right after doesn't also trigger it)
+    this.padPrev = this.padPrev || {}; this.padPrev[c.a] = true; if (c.a.startsWith('nav')) (this.padHold || (this.padHold = {}))[c.a] = performance.now() + 450;
+    c.done(true);
   },
 
   // ---- calibration ----

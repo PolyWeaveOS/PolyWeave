@@ -111,15 +111,15 @@ const Net = {
 
   // public server from the list / private server by code / new private server
   // (bin: this game reads the binary traffic snapshots and positions)
-  joinServer(id, name, color) { return this.request({ t: 'join', room: id, name, color, ext: this.ext, bin: 1, veh: this.veh }, 'Joining…'); },
+  joinServer(id, name, color) { return this.request({ t: 'join', room: id, name, color, ext: this.ext, bin: 1, veh: this.veh, model: this.model }, 'Joining…'); },
   joinCode(code, name, color) {
     const c = String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (c.length !== 6) { this.status('Enter the 6-character code, e.g. K7P-2QX', 'err'); return; }
-    return this.request({ t: 'join', code: c, name, color, ext: this.ext, bin: 1, veh: this.veh }, 'Joining ' + c.slice(0, 3) + '-' + c.slice(3) + '…');
+    return this.request({ t: 'join', code: c, name, color, ext: this.ext, bin: 1, veh: this.veh, model: this.model }, 'Joining ' + c.slice(0, 3) + '-' + c.slice(3) + '…');
   },
   // opts.scored: leaderboard server (60% traffic); otherwise free drive with opts.density traffic
   host(name, color, opts = {}) {
-    return this.request({ t: 'create', name, color, ext: this.ext, bin: 1, veh: this.veh, scored: !!opts.scored, density: opts.density,
+    return this.request({ t: 'create', name, color, ext: this.ext, bin: 1, veh: this.veh, model: this.model, scored: !!opts.scored, density: opts.density,
       listed: !!opts.listed, roomName: opts.roomName, theme: opts.theme, tod: opts.tod }, opts.listed ? 'Creating your public server…' : 'Creating your private server…');
   },
   leave() {
@@ -139,6 +139,9 @@ const Net = {
   // car or motorcycle (the server only lets the bike's accounts show a bike; everyone else stays a car)
   veh: 'car',
   setVehicle(v) { if (v === this.veh) return; this.veh = v; if (this.room) this.send({ t: 'veh', veh: v, ext: this.ext }); },
+  // which car (Garage: m4 / gt3 / r8): others see it (looks only: every car has the same hitbox)
+  model: 'm4',
+  setModel(m) { if (m === this.model) return; this.model = m; if (this.room) this.send({ t: 'veh', veh: this.veh, model: m, ext: this.ext }); },
   // (a traffic car I crash into goes to the server with my position: see traffic.localWrecks)
   // that car got going again (back in lane `lane` at speed v) / couldn't and disappeared
   reportRecover(c) { this.send({ t: 'recover', id: c.id, s: +c.s.toFixed(2), lane: c.lane, v: +c.v.toFixed(2) }); },
@@ -171,21 +174,22 @@ const Net = {
     else if (m.t === 'chat' || m.t === 'chatwait') { if (this.room && this.onChat) this.onChat(m); }   // (server chat: social.js)
     else if (m.t === 'roster') {
       const keep = new Set();
-      for (const r of m.list) { if (r.id === this.myId) continue; keep.add(r.id); this.player(r.id, r.name, r.color, r.title, r.veh).acct = !!r.acct; }
+      for (const r of m.list) { if (r.id === this.myId) continue; keep.add(r.id); this.player(r.id, r.name, r.color, r.title, r.veh, r.model).acct = !!r.acct; }
       for (const [id, p] of this.players) if (!keep.has(id)) { this.removeVis(p); this.players.delete(id); }
       this.changed();
     }
   },
 
   // ---------------------------------------------------------------- friends' cars
-  player(id, name, color, title, veh) {
+  player(id, name, color, title, veh, model) {
     name = String(name || 'Driver').slice(0, 16);
     if (!/^#[0-9a-f]{6}$/i.test(color)) color = '#a6b0b8';   // only plain colours from other players
     title = Titles.TITLE_BY_ID[title] ? title : null;
     veh = veh === 'bike' ? 'bike' : 'car';
+    model = PLAYER_CARS[model] ? model : 'm4';
     let p = this.players.get(id);
     if (!p) { p = { id, name, color, buf: [] }; this.players.set(id, p); }
-    if (p.name !== name || p.color !== color || p.title !== title || p.veh !== veh || !p.g) { p.name = name; p.color = color; p.title = title; p.veh = veh; this.removeVis(p); this.makeVis(p); }
+    if (p.name !== name || p.color !== color || p.title !== title || p.veh !== veh || p.model !== model || !p.g) { p.name = name; p.color = color; p.title = title; p.veh = veh; p.model = model; this.removeVis(p); this.makeVis(p); }
     // their hitbox (bumps) and size (traffic, proximity) follow what they drive
     p.hull = veh === 'bike' ? BIKE.hull : null;
     p.ext = veh === 'bike' ? { front: BIKE.front, rear: BIKE.rear, hw: BIKE.W } : null;
@@ -215,11 +219,11 @@ const Net = {
       p.vis = p.visFull = p.visLite = makeBike(paintMat(p.color || '#a6b0b8'));
       p.g.add(p.vis.root);
     } else {
-      p.vis = makeVehicle('m4', paintMat(p.color || '#a6b0b8'));
+      p.vis = makeVehicle(p.model || 'm4', paintMat(p.color || '#a6b0b8'));
       p.vis.root.position.z = CG_F;               // body sits behind the centre of gravity, like yours
       p.g.add(p.vis.root);
       // further away: the same car baked into 6 draw calls instead of ~30 (12 players add up)
-      p.visLite = makeVehicle('m4', paintMat(p.color || '#a6b0b8'), null, true);
+      p.visLite = makeVehicle(p.model || 'm4', paintMat(p.color || '#a6b0b8'), null, true);
       p.visLite.root.position.z = CG_F; p.visLite.root.visible = false;
       p.g.add(p.visLite.root);
       p.visFull = p.vis;

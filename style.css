@@ -647,7 +647,7 @@ button.big:hover { background: #ffe37a; }
 .touch #mpHud { top: calc(64px + env(safe-area-inset-top)); left: calc(10px + env(safe-area-inset-left)); transform: scale(.78); transform-origin: top left; }
 .touch #minimap { left: auto; bottom: auto; right: calc(10px + env(safe-area-inset-right)); top: calc(10px + env(safe-area-inset-top)); width: 120px !important; height: 120px !important; }   /* (main.js sizes it inline) */
 .touch #mpChat { bottom: calc(clamp(70px, 23vh, 118px) + 40px); }
-.touch #scrSettings .grid > section:nth-child(2) { display: none; }   /* (keyboard keys / wheel calibration) */
+.touch #setKeyboard, .touch #setWheel { display: none; }   /* (keyboard keys / wheel buttons and calibration) */
 @media (max-height: 520px) { .touch .screen.panel { zoom: .8; } }
 /* portrait phone: ask to turn it */
 @media (orientation: portrait) {
@@ -658,3 +658,45 @@ button.big:hover { background: #ffe37a; }
   .touch #rotateMsg span { opacity: .7; font-size: 14px; }
 }
 .touch #tags { display: none; }   /* (SCORED / FREE DRIVE label: would sit on the car) */
+
+/* ---------- PLAY screen (singleplayer / multiplayer / race soon) ---------- */
+.logo.small { font-size: clamp(40px, 7vw, 72px); margin-bottom: 26px; }
+.playBack { position: absolute; top: 0; left: 0; }
+.card.soon { opacity: .5; cursor: default; position: relative; }
+.card.soon:hover { transform: none; border-color: rgba(255,255,255,.12); background: rgba(22, 27, 36, .78); }
+.card.soon:hover svg .bg { fill: #6c7584; } .card.soon:hover svg .fg { fill: #fff; }
+.soonTag { position: absolute; top: 10px; right: 10px; font-size: 9px; font-weight: 800; letter-spacing: 1.2px; padding: 3px 6px; border-radius: 5px; background: var(--accent); color: #1a1f28; }
+
+/* ---------- Garage: options on the left, the car itself (unblurred) on the right ---------- */
+#menu.garageOpen { background: linear-gradient(90deg, rgba(10,18,30,.5), rgba(10,18,30,0) 46%); backdrop-filter: none; justify-content: flex-start; }
+#scrGarage { position: absolute; inset: 0; display: flex; align-items: stretch; padding: 16px; cursor: grab; }
+#scrGarage.hidden { display: none; }
+.garagePanel { width: min(380px, 46vw); max-height: 100%; overflow: auto; background: var(--panel); border-radius: 12px; padding: 22px 24px; box-shadow: 0 20px 60px rgba(0,0,0,.4); cursor: default; scrollbar-width: thin; }
+.gCars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+.gCar { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 10px 6px; }
+.gCar small { font-size: 10px; letter-spacing: 1.5px; opacity: .65; }
+.gCar b { font-size: 13px; letter-spacing: 1px; }
+.gCar.sel { background: var(--accent); color: #1a1f28; border-color: var(--accent); }
+.gCar.sel small { opacity: .8; }
+.gTabs { display: flex; gap: 6px; margin-bottom: 12px; }
+.gTabs button { flex: 1; letter-spacing: 1.5px; }
+.gTabs button.sel { background: rgba(255,255,255,.14); color: var(--accent); border-color: rgba(255,216,74,.5); }
+.gLabel { font-size: 11px; letter-spacing: 1.8px; text-transform: uppercase; color: var(--accent); margin: 12px 0 8px; }
+.gSwatches { display: grid; grid-template-columns: repeat(auto-fill, 34px); gap: 8px; }
+.gSwatches .sw { padding: 0; }
+.gCustom { margin-top: 10px; }
+.gRims { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+.gRim.sel { background: var(--accent); color: #1a1f28; border-color: var(--accent); }
+.gNote { margin-top: 16px; font-size: 12px; opacity: .6; }
+.gHint { position: absolute; right: 22px; bottom: 18px; font-size: 12px; letter-spacing: 1px; opacity: .7; text-shadow: 0 1px 3px rgba(0,0,0,.6); pointer-events: none; }
+
+/* ---------- Settings tabs and wheel buttons ---------- */
+.setTabs { flex-wrap: wrap; }
+#padBinds { display: grid; grid-template-columns: 1fr auto; gap: 6px 12px; align-items: center; font-size: 14px; margin: 8px 0 6px; }
+.padCell { display: flex; gap: 6px; }
+.padCell button:first-child { min-width: 150px; }
+.padCell button.wait { background: var(--accent); color: #1a1f28; }
+#padMsg { min-height: 20px; font-size: 13px; color: var(--accent); }
+.sub.small { font-size: 12px; margin: 0 0 6px; }
+/* the button picked with a wheel / controller D-pad */
+.padFocus { outline: 3px solid var(--accent) !important; outline-offset: 2px; }
