@@ -185,7 +185,7 @@ const Net = {
     name = String(name || 'Driver').slice(0, 16);
     if (!/^#[0-9a-f]{6}$/i.test(color)) color = '#a6b0b8';   // only plain colours from other players
     title = Titles.TITLE_BY_ID[title] ? title : null;
-    veh = veh === 'bike' ? 'bike' : 'car';
+    veh = veh === 'bike' || veh === 'van' ? veh : 'car';   // (the owners' van: the server only passes it on for them)
     model = PLAYER_CARS[model] ? model : 'm4';
     let p = this.players.get(id);
     if (!p) { p = { id, name, color, buf: [] }; this.players.set(id, p); }
@@ -227,6 +227,14 @@ const Net = {
       p.visLite.root.position.z = CG_F; p.visLite.root.visible = false;
       p.g.add(p.visLite.root);
       p.visFull = p.vis;
+      if (p.veh === 'van') {                      // the owners' van: the car until the van's file is in, then the van
+        p.visLite.root.visible = false; p.visLite = p.vis;
+        if (typeof getVanAsset === 'function') getVanAsset().then(a => {
+          if (p.veh !== 'van' || !p.vis || p.vanMesh) return;
+          p.vanMesh = new THREE.Mesh(a.g, a.mat); p.vanMesh.castShadow = true; p.vis.root.add(p.vanMesh);
+          p.vis.body.visible = false; for (const w of p.vis.wheels) w.pivot.visible = false;
+        }, () => {});
+      }
     }
     // floating name tag (with their title underneath, in its rarity colour; neon ones glow)
     const t = p.title && Titles.TITLE_BY_ID[p.title], rar = t && Titles.RARITIES[t.rarity];
@@ -266,6 +274,7 @@ const Net = {
   },
   removeVis(p) {
     if (!p.g) return;
+    p.vanMesh = null;
     this.scene.remove(p.g);
     p.g.traverse(o => { if (o.isSprite) { o.material.map.dispose(); o.material.dispose(); } });   // (the name tag; car meshes are shared)
     p.g = null; p.vis = p.visFull = p.visLite = null; p.sm = null;
@@ -387,7 +396,7 @@ const Net = {
       // detailed car up close, the baked one further away (switching with a little overlap so it doesn't flicker)
       const ad = Math.abs(s.s - myS), lite = p.vis === p.visLite ? ad > 40 : ad > 50;
       if (p.visLite !== p.visFull && lite !== (p.vis === p.visLite)) { p.vis.root.visible = false; p.vis = lite ? p.visLite : p.visFull; p.vis.root.visible = true; p.vis.spin = (lite ? p.visFull : p.visLite).spin; }
-      p.vis.brake.visible = !!s.brake;
+      p.vis.brake.visible = !!s.brake && !p.vanMesh;
       if (p.veh === 'bike') {
         // lean into the turn they're making: sideways acceleration from their speed and steering (2.8 m wheelbase physics)
         const v = s.v || 0, ay = v * v * Math.tan(U.clamp(s.steer || 0, -0.6, 0.6)) / 2.8;

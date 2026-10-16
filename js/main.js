@@ -312,7 +312,7 @@ function setVehicle(v) {
   Object.assign(M4_EXT, V.ext);
   Object.assign(proxy, V.ext);
   Net.ext = Object.assign({}, V.ext);
-  Net.setVehicle(vehicle);
+  Net.setVehicle(van && vehicle === 'car' ? 'van' : vehicle);   // (the van drives as a car; others see the van)
   // the motorcycle is just for fun: no personal bests, leaderboards, runs or stats (a streak with any of it on the
   // bike counts for nothing, even after switching back to the car)
   const was = score.funOnly; score.funOnly = bike;
@@ -326,9 +326,11 @@ function setVehicle(v) {
 // van is picked. While driving it, the chase camera sits higher and looks down more (see VAN_CAM), so you can see
 // over it ----------
 const VAN = { file: 'assets/owner_van.glb', length: 4.79, yaw: -Math.PI / 2 };  // (the model's length is along its x)
-let ownerVan = null, vanOn = false, vanLoading = false;
+let ownerVan = null, vanOn = false, vanLoading = false, vanAsset = null;
+// the van's geometry + material, loaded once and shared (your van and other players' vans in multiplayer)
+function getVanAsset() { return vanAsset || (vanAsset = readVanFile()); }
 // a minimal reader for this kind of file: one mesh (positions, normals, uv, indices), colour / metal-rough / normal maps
-async function loadVan() {
+async function readVanFile() {
   const buf = await (await fetch(VAN.file + '?v=' + Date.now())).arrayBuffer(), dv = new DataView(buf);
   const jl = dv.getUint32(12, true), J = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 20, jl))), bin = 20 + jl + 8;
   const bytes = i => { const bv = J.bufferViews[i]; return buf.slice(bin + (bv.byteOffset || 0), bin + (bv.byteOffset || 0) + bv.byteLength); };
@@ -354,13 +356,17 @@ async function loadVan() {
   const m = J.materials[pr.material] || {}, pb = m.pbrMetallicRoughness || {};
   const map = await tex(pb.baseColorTexture && pb.baseColorTexture.index, true), mr = await tex(pb.metallicRoughnessTexture && pb.metallicRoughnessTexture.index, false);
   const nm = await tex(m.normalTexture && m.normalTexture.index, false);
-  const mat = new THREE.MeshStandardMaterial({ map, metalnessMap: mr, roughnessMap: mr, normalMap: nm, metalness: pb.metallicFactor ?? 1, roughness: pb.roughnessFactor ?? 1, side: THREE.DoubleSide });  ownerVan = new THREE.Mesh(g, mat); ownerVan.castShadow = true; ownerVan.visible = false;
+  const mat = new THREE.MeshStandardMaterial({ map, metalnessMap: mr, roughnessMap: mr, normalMap: nm, metalness: pb.metallicFactor ?? 1, roughness: pb.roughnessFactor ?? 1, side: THREE.DoubleSide });  return { g, mat };
+}
+async function loadVan() {
+  const a = await getVanAsset();
+  ownerVan = new THREE.Mesh(a.g, a.mat); ownerVan.castShadow = true; ownerVan.visible = false;
   playerVis.root.add(ownerVan);
 }
 function showVan(on) {
   vanOn = on;
   if (on && !ownerVan) {          // (first time: load the model, then show it; the car stays until it's here)
-    if (!vanLoading) { vanLoading = true; loadVan().then(() => { vanLoading = false; showVan(vanOn); }, e => { vanLoading = false; console.warn('van model', e); }); }
+    if (!vanLoading) { vanLoading = true; loadVan().then(() => { vanLoading = false; showVan(vanOn); }, e => { vanLoading = false; vanAsset = null; console.warn('van model', e); }); }
     return;
   }
   if (ownerVan) ownerVan.visible = on;
