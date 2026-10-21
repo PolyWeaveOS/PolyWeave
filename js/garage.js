@@ -1,8 +1,8 @@
 'use strict';
 // =====================================================================
-//  Garage (main menu): pick your car (only the BMW M4 Competition for now), paint it (colour + gloss /
-//  metallic / matte), wheels (five styles, any colour), brake caliper colour and window tint. Each car keeps
-//  its own setup (Settings.cars, see carCfg / setCarCfg / installCar in main.js). Every car drives the same.
+//  Garage (main menu): pick your car (the BMW M4 Competition, plus the F1 car used only in Racing), paint it
+//  (colour + gloss / metallic / matte), wheels (five styles, any colour), brake caliper colour and window tint.
+//  The F1 car has its own setup (Settings.f1: body, finish, rims, accent, helmet - see f1Cfg / setF1Cfg in main.js).
 //  The car stands on the right, unblurred, slowly turning (drag to turn it yourself); the options are on the left.
 // =====================================================================
 const GARAGE_PAINTS = [['Brooklyn Grey', '#a6b0b8'], ['Alpine White', '#eef0ee'], ['Black Sapphire', '#14161a'], ['Dravit Grey', '#6b6e68'],
@@ -12,11 +12,16 @@ const GARAGE_PAINTS = [['Brooklyn Grey', '#a6b0b8'], ['Alpine White', '#eef0ee']
 const GARAGE_RIMS = [['stock', 'Stock'], ['m4', 'M Forged'], ['gt3', 'Centre-Lock'], ['alloy', 'Twin-Spoke'], ['mesh', 'Mesh'], ['five', 'Five-Spoke']];
 const GARAGE_RIM_COLORS = [['Silver', '#c4c9cf'], ['Gunmetal', '#4a4f56'], ['Anthracite', '#2b2d31'], ['Satin Black', '#1d1f22'], ['Bronze', '#9c7a4c'], ['Gold', '#b8924e'], ['White', '#e9ebec'], ['Red', '#b31b20']];
 const GARAGE_CALIPERS = [['Red', '#c8161d'], ['Yellow', '#f2c12e'], ['Blue', '#1f5fd1'], ['Black', '#1b1c1f'], ['Silver', '#a9aeb4'], ['Green', '#2e9b4d'], ['Orange', '#e8621c']];
+const GARAGE_ACCENTS = [['White', '#f4f2ee'], ['Black', '#16171a'], ['Yellow', '#ffd84a'], ['Red', '#d42a2a'], ['Blue', '#1f5fd1'], ['Teal', '#14b8a6'], ['Orange', '#ff7a1a'], ['Silver', '#b9bec5']];
+const GARAGE_HELMETS = [['Yellow', '#ffd84a'], ['White', '#f4f2ee'], ['Red', '#d42a2a'], ['Blue', '#1f5fd1'], ['Black', '#1d1f22'], ['Green', '#2e9b4d'], ['Orange', '#ff7a1a'], ['Pink', '#f28cb1']];
 
 const Garage = (() => {
   const $ = id => document.getElementById(id);
   const scr = $('scrGarage');
-  let yaw = 0.9, lastDrag = -1e9, dragging = null, open = false;
+  let yaw = 0.9, lastDrag = -1e9, dragging = null, open = false, f1 = false;   // f1: setting up the F1 car (racing only)
+  // the setup being edited and where changes go (the road car's or the F1's)
+  const cfg = () => (f1 ? f1Cfg() : carCfg());
+  const setCfg = patch => (f1 ? setF1Cfg(patch) : setCarCfg(patch));
 
   // swatch rows: click one to pick it (the custom colour picker sits under the paint)
   const swatches = (box, list, get, set) => {
@@ -34,14 +39,20 @@ const Garage = (() => {
     return () => bs.forEach(b => b.classList.toggle('sel', b.dataset.v === get()));
   };
 
-  // the cars (the picker is hidden while there's only one)
+  // the cars: the road car(s), then the F1 car (shown here, but only driven in Racing)
   const cars = $('gCars');
-  cars.classList.toggle('hidden', PLAYER_CAR_KEYS.length < 2);
+  const pickF1 = on => { f1 = on; if (!Race.active) showF1(on); };
   for (const k of PLAYER_CAR_KEYS) {
     const b = document.createElement('button'); b.className = 'gCar'; b.dataset.k = k;
     const [make, ...model] = PLAYER_CARS[k].name.split(' ');
     b.innerHTML = `<small>${make.toUpperCase()}</small><b>${model.join(' ').toUpperCase()}</b>`;
-    b.onclick = () => { installCar(k); refresh(); };
+    b.onclick = () => { pickF1(false); installCar(k); refresh(); };
+    cars.appendChild(b);
+  }
+  {
+    const b = document.createElement('button'); b.className = 'gCar f1'; b.dataset.k = 'f1';
+    b.innerHTML = '<b>F1 CAR</b>';
+    b.onclick = () => { pickF1(true); refresh(); };
     cars.appendChild(b);
   }
   // wheels
@@ -51,22 +62,53 @@ const Garage = (() => {
     b.onclick = () => { setCarCfg({ rim: k }); refresh(); };
     rims.appendChild(b);
   }
+  // the F1 car's paint pattern (js/f1.js F1_PATTERNS), painted in colour 2
+  const pats = $('gF1Pattern');
+  for (const [k, n] of F1_PATTERNS) {
+    const b = document.createElement('button'); b.className = 'gRim'; b.dataset.k = k; b.textContent = n;
+    b.onclick = () => { setF1Cfg({ pattern: k }); refresh(); };
+    pats.appendChild(b);
+  }
+  // the F1's rim styles (js/f1.js F1_RIM_STYLES); their colour is the Wheels colour row
+  const f1Rims = $('gF1Rims');
+  for (const [k, n] of F1_RIM_STYLES) {
+    const b = document.createElement('button'); b.className = 'gRim'; b.dataset.k = k; b.textContent = n;
+    b.onclick = () => { setF1Cfg({ rimStyle: k }); refresh(); };
+    f1Rims.appendChild(b);
+  }
+  const pick2 = $('gF1Col2Pick');
+  pick2.addEventListener('input', () => { setF1Cfg({ accent: pick2.value }); refresh(); });
   const marks = [
-    swatches($('gPaint'), GARAGE_PAINTS, () => carCfg().color, c => setCarCfg({ color: c })),
-    swatches($('gRimCol'), GARAGE_RIM_COLORS, () => carCfg().rimColor, c => setCarCfg({ rimColor: c })),
+    swatches($('gPaint'), GARAGE_PAINTS, () => cfg().color, c => setCfg({ color: c })),
+    swatches($('gF1Col2'), GARAGE_PAINTS, () => f1Cfg().accent, c => setF1Cfg({ accent: c })),
+    swatches($('gRimCol'), GARAGE_RIM_COLORS, () => (f1 ? cfg().rim : cfg().rimColor), c => setCfg(f1 ? { rim: c } : { rimColor: c })),
     swatches($('gCaliper'), GARAGE_CALIPERS, () => carCfg().caliper, c => setCarCfg({ caliper: c })),
-    seg($('gFinish'), () => carCfg().finish, v => setCarCfg({ finish: v })),
+    swatches($('gF1Accent'), GARAGE_ACCENTS, () => f1Cfg().accent, c => setF1Cfg({ accent: c })),
+    swatches($('gF1Helmet'), GARAGE_HELMETS, () => f1Cfg().helmet, c => setF1Cfg({ helmet: c })),
+    seg($('gFinish'), () => cfg().finish, v => setCfg({ finish: v })),
     seg($('gTint'), () => carCfg().tint, v => setCarCfg({ tint: v })),
   ];
   const pick = $('gPaintPick'), note = scr.querySelector('.gNote');
-  pick.addEventListener('input', () => { setCarCfg({ color: pick.value }); refresh(); });
+  pick.addEventListener('input', () => { setCfg({ color: pick.value }); refresh(); });
   function refresh() {
-    const c = carCfg();
-    for (const b of cars.children) b.classList.toggle('sel', b.dataset.k === carKey);
-    for (const b of rims.children) { b.classList.toggle('sel', b.dataset.k === c.rim); if (b.dataset.k === 'stock') b.classList.toggle('hidden', !playerVis.M.wheelGeoms); }
-    note.textContent = PLAYER_CAR_KEYS.length > 1 ? 'Every car drives the same: pick the one you like the look of.' : '';
+    const c = cfg();
+    for (const b of cars.children) b.classList.toggle('sel', f1 ? b.dataset.k === 'f1' : b.dataset.k === carKey);
+    rims.classList.toggle('hidden', f1);                 // (the F1 car has its own wheels: only their colour changes)
+    for (const b of rims.children) { b.classList.toggle('sel', b.dataset.k === carCfg().rim); if (b.dataset.k === 'stock') b.classList.toggle('hidden', !playerVis.M.wheelGeoms); }
+    scr.querySelector('.gCarOnly').classList.toggle('hidden', f1);
+    scr.querySelector('.gF1Only').classList.add('hidden');   // (old accent options: not used)
+    // the F1 car: colour 1 + finish, then a pattern in colour 2 (all on Paint); no wheel / extras options
+    scr.querySelector('[data-gt="extras"]').classList.toggle('hidden', f1);   // (the F1: Paint + Wheels - rim style and colour)
+    f1Rims.classList.toggle('hidden', !f1);
+    for (const b of f1Rims.children) b.classList.toggle('sel', b.dataset.k === f1Cfg().rimStyle);
+    if (f1 && !scr.querySelector('[data-gp="extras"]').classList.contains('hidden')) scr.querySelector('[data-gt="paint"]').click();   // (was on Extras)
+    $('gF1Tag').classList.toggle('hidden', !f1);
+    scr.querySelector('.gF1Pat').classList.toggle('hidden', !f1);
+    $('gColLabel').textContent = f1 ? 'Colour 1' : 'Colour';
+    for (const b of pats.children) b.classList.toggle('sel', b.dataset.k === f1Cfg().pattern);
+    note.textContent = f1 ? 'The F1 car is only for Racing mode: pick a pattern and colour 2 to paint it. Everywhere else you drive your road car.' : '';
     for (const m of marks) m();
-    pick.value = c.color;
+    pick.value = c.color; pick2.value = f1Cfg().accent;
   }
   // tabs: paint / wheels / extras
   scr.querySelectorAll('[data-gt]').forEach(b => b.addEventListener('click', () => {
@@ -84,7 +126,8 @@ const Garage = (() => {
   scr.addEventListener('pointerup', up); scr.addEventListener('pointercancel', up);
 
   return {
-    shown(on) { open = on; if (on) refresh(); },
+    // (leaving the Garage: the road car is back on show, unless you're racing)
+    shown(on) { open = on; if (on) { if (f1 && !Race.active) showF1(true); refresh(); } else if (f1 && !Race.active) showF1(false); },
     // the camera while the Garage is open: low 3/4 view, the car on the right of the screen (the panel is on the left)
     camera(dt) {
       if (performance.now() - lastDrag > 2500 && !dragging) yaw += dt * 0.18;
@@ -101,5 +144,6 @@ const Garage = (() => {
     },
     refresh,
     get open() { return open; },
+    get f1Preview() { return open && f1; },   // (the F1 car is on show in the Garage)
   };
 })();

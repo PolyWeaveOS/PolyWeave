@@ -4,7 +4,7 @@
 // =====================================================================
 
 // ---------- settings ----------
-const DEFAULTS = { density: 0.55, assist: 0, sens: 1.0, kbSens: 1.0, blur: 0, world: 'grass', tod: 'day', hostVis: 'public', hostWorld: 'grass', hostTod: 'day', hostName: '', mirrors: 'medium', units: 'mph', rhd: false, vol: 0.6, tc: true, manual: false, color: '#a6b0b8', mpDensity: 0.55, minimap: true, chatSize: 1.2, assistKb: 1 };   // (assist: steering wheel lane assist; assistKb: keyboard / gamepad, 100% = the tuned straighten-up help)
+const DEFAULTS = { density: 0.55, assist: 0, sens: 1.0, kbSens: 1.0, blur: 0, world: 'grass', tod: 'day', hostVis: 'public', hostWorld: 'grass', hostTod: 'day', hostName: '', mirrors: 'medium', units: 'mph', rhd: false, vol: 0.6, tc: true, manual: false, color: '#a6b0b8', mpDensity: 0.55, minimap: true, chatSize: 1.2, assistKb: 1, ghost: true };   // (assist: steering wheel lane assist; assistKb: keyboard / gamepad, 100% = the tuned straighten-up help)
 const SCORED_DENSITY = 0.6;               // scored (leaderboard) runs always use this much traffic
 const Settings = Object.assign({}, DEFAULTS);
 try { Object.assign(Settings, JSON.parse(localStorage.getItem('tw_settings2') || '{}')); } catch (e) { /* ignore */ }
@@ -319,6 +319,43 @@ function setVehicle(v) {
   if (bike) { if (score.score >= 1) score.fun = true; if (!was && game.mode !== 'menu') hud.message('MOTORCYCLE · JUST FOR FUN, NO STATS'); }
   const row = document.getElementById('vehRow'); if (row) row.classList.toggle('hidden', !canBike());
   showVan(van);
+  if ((typeof Race !== 'undefined' && Race.active) || (typeof Garage !== 'undefined' && Garage.f1Preview)) showF1(true);   // (racing / the Garage showing the F1: still the F1 car)
+}
+// ---------- racing: the F1 car (js/f1.js) in your Garage paint, shown instead of the car / bike / van ----------
+// Its own Garage setup (Settings.f1): colour 1 + finish, a paint pattern (js/f1.js F1_PATTERNS) in colour 2 (accent)
+const F1_DEFAULT = { color: '#f2f2ee', finish: 'gloss', accent: '#d42a2a', pattern: 'plain', helmet: '#ffd84a', rim: '#c4c9cf', rimStyle: 'five' };   // (white with red, like the owner's reference car)
+const f1Cfg = () => Object.assign({}, F1_DEFAULT, Settings.f1 || {});
+const f1Paint = new THREE.MeshPhysicalMaterial({ color: F1_DEFAULT.color, roughness: 0.24, metalness: 0.55, envMapIntensity: 1.1, clearcoat: 1, clearcoatRoughness: 0.06,
+  side: THREE.DoubleSide });   // (the model's faces are drawn from both sides)
+f1Pattern(f1Paint);                                     // (its pattern + colour 2: set from the Garage in applyF1Cfg)
+const f1Accent = new THREE.MeshStandardMaterial({ color: F1_DEFAULT.accent, roughness: 0.35, flatShading: true });
+const f1Helmet = new THREE.MeshStandardMaterial({ color: F1_DEFAULT.helmet, roughness: 0.3, metalness: 0.2, flatShading: true });
+const f1Rim = new THREE.MeshStandardMaterial({ color: F1_DEFAULT.rim, roughness: 0.3, metalness: 0.75, flatShading: true, side: THREE.DoubleSide });   // (the F1's rims: Garage colour)
+function applyF1Cfg() {
+  const c = f1Cfg(), [ro, me] = PAINT_FINISH[c.finish] || PAINT_FINISH.gloss;
+  // (a flatter, toy-like paint than the road car's: the colour reads as itself instead of washing out in the light)
+  f1Paint.color.set(c.color); f1Paint.roughness = Math.max(ro, 0.4); f1Paint.metalness = me * 0.35; f1Paint.clearcoat = c.finish === 'matte' ? 0 : 0.5;
+  f1Paint.envMapIntensity = 0.55;
+  f1Accent.color.set(c.accent); f1Helmet.color.set(c.helmet); f1Rim.color.set(c.rim);
+  f1SetPattern(f1Paint, c.pattern, c.accent);
+  try { f1SetRim(playerF1, c.rimStyle); } catch (e) { /* (first call: the car isn't built yet - it's built with the style) */ }
+}
+const f1Livery = () => { const c = f1Cfg(); return f1LiveryKey(c.pattern, c.accent, c.rimStyle, c.rim); };   // (racing: other drivers draw your pattern + rims from this)
+function setF1Cfg(patch) {
+  Settings.f1 = Object.assign({}, Settings.f1, patch); applyF1Cfg(); saveSettings();
+  if (typeof Race !== 'undefined' && Race.active) Net.setModel(f1Livery());   // (changed it in a race lobby: others see it)
+}
+const playerF1 = makeF1(f1Paint, { rimStyle: f1Cfg().rimStyle }, { rimMat: f1Rim }); playerF1.root.visible = false; playerRoot.add(playerF1.root);
+const f1Color = () => f1Cfg().color;                    // (racing: other drivers see your car in this colour)
+function showF1(on) {
+  playerF1.root.visible = on;
+  if (on) { playerVis.root.visible = false; playerBike.root.visible = false; }
+  else setVehicle(Settings.vehicle);                   // (back to whatever you drive normally)
+}
+// racing: lane assist is off and can't be turned on (Settings sliders locked while you race)
+function lockLaneAssist(on) {
+  for (const id of ['laKb', 'la', 'sens', 'kbSens']) { const e = document.getElementById(id); if (e) e.disabled = on; }
+  const n = document.getElementById('laNote'); if (n) n.classList.toggle('hidden', !on);
 }
 
 // ---------- the owners' van (same accounts as the motorcycle): a ready-made textured model (assets/owner_van.glb)
@@ -375,7 +412,9 @@ function showVan(on) {
   if (on) playerVis.indL.visible = playerVis.indR.visible = playerVis.brake.visible = false;
 }
 // the van's chase camera: higher and looking further down the road, so you can see over its roof
-const VAN_CAM = { dist: 6.0, hgt: 4.4, look: 8.0, lookY: 0.3 };
+const VAN_CAM = { dist: 6.2, hgt: 2.9, look: 5.0, lookY: 0.85 };
+// the F1 car's chase camera: lower and a little closer (it's a long, low car)
+const F1_CAM = { dist: 5.8, hgt: 1.8, look: 4.0, lookY: 0.8 };
 function setPaint(hex) { Settings.color = hex; playerPaint.color.set(hex); playerPaintDS.color.set(hex); saveSettings(); }
 
 // ---------- the car you drive (Garage: M4 / 911 GT3 / R8, paint + finish, wheels, calipers, window tint) ----------
@@ -441,6 +480,7 @@ function installCar(key) {
 // (older saves: the paint picked in Settings becomes the M4's paint)
 if (!Settings.cars) Settings.cars = { m4: { color: Settings.color } };
 installCar(Settings.car || 'm4');
+applyF1Cfg();                                           // (the F1 car's own Garage colours)
 
 // ---------- state ----------
 let camMode = 0, menuOpen = true, started = false, time = 0, lastCrash = -9, last = performance.now();
@@ -488,6 +528,8 @@ let zoneHit = false, railHit = false, lastGoodS = 40;
 // rail opens where the on-ramp joins, and the lot / ramp has its own fence (the rail beside the lot
 // is solid from both sides).
 function wallsAt(s, carD) {
+  // race tracks: the walls sit behind the run-off / gravel, at their own distance all round the lap
+  if (ROAD.loop && ROAD.loop.race) return [{ sg: -1, d: -Tracks.wallAt(ROAD.loop, s, -1) }, { sg: 1, d: Tracks.wallAt(ROAD.loop, s, 1) }];
   const w = [{ sg: -1, d: ROAD.edgeL - 0.35 }];
   // lotSide: the car is in the parking lot / ramp area (incl. just behind the lot's far fence, where the
   // end fence holds it) - the rail beside the lot then pushes it back INTO the lot, never onto the road
@@ -506,7 +548,9 @@ function wallsAt(s, carD) {
 function railCollide(h) {
   const pre = ROAD.project(car.x, car.z);
   const zonesHere = ZONES.near(pre.s - 8, pre.s + 8).some(z => ZONES.frac(z, pre.s - 8) > 0 || ZONES.frac(z, pre.s + 8) > 0);
-  if (!zonesHere && pre.d > ROAD.edgeL + 3 && pre.d < ROAD.edgeR - 3) return 0;
+  const race = ROAD.loop && ROAD.loop.race;
+  const wL = race ? -Tracks.wallAt(ROAD.loop, pre.s, -1) : ROAD.edgeL - 0.35, wR = race ? Tracks.wallAt(ROAD.loop, pre.s, 1) : ROAD.edgeR + 0.35;
+  if (!zonesHere && pre.d > wL + 3.35 && pre.d < wR - 3.35) return 0;
   // Anti-stuck: when the car is close to a wall and pointing INTO it, swing it back parallel
   // to the road (works even when stopped, where steering can't turn the car). It never
   // acts when you're pointing away from the wall, so it doesn't fight you driving off.
@@ -525,8 +569,8 @@ function railCollide(h) {
   }
   // hard safety net: the car's centre can never get past the rail line (except into the start area)
   const lim = 0.75;
-  if ((pre.d > ROAD.edgeR + 0.35 - lim && !lotArea) || pre.d < ROAD.edgeL - 0.35 + lim) {
-    const dd = U.clamp(pre.d, ROAD.edgeL - 0.35 + lim, ROAD.edgeR + 0.35 - lim);
+  if ((pre.d > wR - lim && !lotArea) || pre.d < wL + lim) {
+    const dd = U.clamp(pre.d, wL + lim, wR - lim);
     const p = ROAD.pos(pre.s, dd); car.x = p.x; car.z = p.z;
   }
   const pts = SAT.toWorld(playerHull, car.x, car.z, car.visYaw, _hp);
@@ -634,6 +678,7 @@ function backOnRoad() {
 
 function crashEvent(strength) {
   sound.thump(0.3 + strength / 12);
+  if (Race.active) return;                             // (racing: a knock costs time, nothing else)
   if (time - lastCrash > 1.2) score.crash();
   lastCrash = time;
 }
@@ -642,6 +687,7 @@ function crashEvent(strength) {
 function updateCamera(dt) {
   const spd = car.speed, sy = Math.sin(car.visYaw), cy = Math.cos(car.visYaw); // cockpit sits in the drawn body
   if (menuOpen && screen === 'scrGarage' && typeof Garage !== 'undefined') { Garage.camera(dt); return; }   // (js/garage.js)
+  if (!menuOpen && Race.finCam(camera)) return;       // (racing finish: the slow-motion fly-by shots)
   if (menuOpen) { // slow orbit around the car in the menu
     camS.orbit += dt * 0.25;
     const a = car.yaw + camS.orbit + 2.4, r = 6.8;
@@ -661,7 +707,7 @@ function updateCamera(dt) {
     const sp = U.clamp(spd / 80, 0, 1);
     // camera has inertia: it lags back when accelerating and surges toward the car under braking
     const brk = U.clamp(-car.ax / 13, 0, 1);
-    const vc = vanOn ? VAN_CAM : null;
+    const vc = playerF1.root.visible ? F1_CAM : vanOn ? VAN_CAM : null;
     const dist = (vc ? vc.dist : 5.7) + sp * 0.9 + U.clamp(car.ax, -15, 9) * 0.05;
     const hgt = (vc ? vc.hgt : 1.72) + sp * 0.12;
     const cyw = Math.cos(camS.yaw), syw = Math.sin(camS.yaw);
@@ -687,10 +733,11 @@ function updateCamera(dt) {
     // cockpit: driver's eye, with subtle head motion from g-forces
     const bike = vehicle === 'bike', lean = bike ? (camS.body && camS.body.lean) || 0 : 0;
     // (motorcycle: the rider's helmet, tucked over the tank, tipping with the bike; car: the driver's seat)
-    const lx = bike ? Math.sin(lean) * -1.25 : (Settings.rhd ? 0.37 : -0.37) - U.clamp(car.ay, -12, 12) * 0.004;
+    const f1 = playerF1.root.visible;                  // (racing: sat low in the middle of the F1 car)
+    const lx = bike ? Math.sin(lean) * -1.25 : f1 ? -U.clamp(car.ay, -30, 30) * 0.002 : (Settings.rhd ? 0.37 : -0.37) - U.clamp(car.ay, -12, 12) * 0.004;
     const seat = PLAYER_CARS[carKey];                  // (where the driver sits in the car you picked)
-    const lf = (bike ? 0.2 : seat.eyeF - CG_F) - U.clamp(car.ax, -15, 12) * 0.006; // head pitches forward under braking
-    const y = (bike ? 1.3 * Math.cos(lean) : seat.eyeY) + Math.sin(time * 31) * Math.min(spd / 80, 1) * (bike ? 0.003 : 0.0015);
+    const lf = (bike ? 0.2 : f1 ? playerF1.eye.f : seat.eyeF - CG_F) - U.clamp(car.ax, -15, 12) * 0.006; // head pitches forward under braking
+    const y = (bike ? 1.3 * Math.cos(lean) : f1 ? playerF1.eye.y : seat.eyeY) + Math.sin(time * 31) * Math.min(spd / 80, 1) * (bike ? 0.003 : 0.0015);
     camera.position.set(car.x + lf * sy + lx * cy, y, car.z - lf * cy + lx * sy);
     camera.rotation.order = 'YXZ';
     camera.rotation.set(bike ? -0.09 : -0.045, -car.visYaw, lean * 0.7);   // car: level, no tilt from braking / cornering
@@ -723,13 +770,15 @@ const menu = document.getElementById('menu');
 const $id = id => document.getElementById(id);
 let screen = 'scrTitle', settingsFrom = 'scrTitle';
 // where Back / Esc goes from each screen (anything not listed: the main menu)
-const PARENT = { scrSP: 'scrPlay', scrMP: 'scrPlay', scrTitles: 'scrProfile' };
+const PARENT = { scrSP: 'scrPlay', scrMP: 'scrPlay', scrTitles: 'scrProfile', scrRaceLB: 'scrRace' };
 function show(id) {
   if (id === 'scrSettings' && screen !== 'scrSettings') settingsFrom = screen;
   screen = id;
   for (const s of menu.querySelectorAll('.screen')) s.classList.toggle('hidden', s.id !== id);
   if (id === 'scrMP') Net.refreshList();
+  if (id === 'scrRace' && typeof refreshRace === 'function') refreshRace();
   if (id === 'scrLB') loadLeaderboard();
+  if (id === 'scrRaceLB') loadRaceBoard();
   if (id === 'scrSettings') { renderKeys(); renderPadBinds(); }
   if (id === 'scrPause') updatePause();
   menu.classList.toggle('garageOpen', id === 'scrGarage');          // (the Garage shows the car itself: no blur)
@@ -821,6 +870,9 @@ tcEl.checked = Settings.tc; manEl.checked = Settings.manual; mmEl.checked = Sett
 tcEl.addEventListener('change', () => { Settings.tc = car.tc = tcEl.checked; saveSettings(); });
 manEl.addEventListener('change', () => { Settings.manual = car.manual = manEl.checked; saveSettings(); });
 mmEl.addEventListener('change', () => { Settings.minimap = mmEl.checked; saveSettings(); });
+const ghEl = $id('ghostOn');                            // (racing: a see-through car on your best lap in time trials - race.js ghostShow)
+ghEl.checked = Settings.ghost !== false;               // (on by default)
+ghEl.addEventListener('change', () => { Settings.ghost = ghEl.checked; saveSettings(); });
 // (paint, wheels and the rest of the car's looks are in the Garage: js/garage.js)
 // Settings tabs: gameplay / controls / graphics / audio
 let setTab = 'gameplay';
@@ -990,8 +1042,9 @@ addEventListener('pageshow', e => {
   if (game.mode === 'mp') { if (!Net.runToken) Net.send({ t: 'runtoken' }); } else if (!spToken) fetchSpToken();
 });
 function quitToTitle() {
-  if (game.mode === 'mp') { quitting = true; Net.leave(); quitting = false; }   // (onLeft puts the endless road back)
+  if (game.mode === 'mp' || (game.mode === 'race' && Net.active())) { quitting = true; Net.leave(); quitting = false; }   // (onLeft puts the endless road back)
   else score.reset();
+  Race.exit();
   game.mode = 'menu'; game.scored = false; game.density = SCORED_DENSITY;
   setWorld(Settings.world, Settings.tod);              // (the title screen shows your chosen world again)
   startPosition(); score.reset();
@@ -1014,6 +1067,17 @@ document.querySelectorAll('[data-lbview]').forEach(b => b.addEventListener('clic
   document.querySelectorAll('[data-lbview]').forEach(o => o.classList.toggle('sel', o === b));
   loadLeaderboard();
 }));
+// the racing leaderboard (its own screen, from the Racing page): time trials (best lap) or races (best 3-lap
+// race time), each per track. Racing is Season 1 only, so no season picker.
+let rlbKind = 'tt', rlbTrack = Tracks.TRACKS[0].id, rlbView = 'top', rlbReq = 0;
+const pickSeg = (attr, set) => document.querySelectorAll(`[${attr}]`).forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll(`[${attr}]`).forEach(o => o.classList.toggle('sel', o === b));
+  set(b.getAttribute(attr)); loadRaceBoard();
+}));
+pickSeg('data-rlbkind', v => (rlbKind = v));
+pickSeg('data-rlbview', v => (rlbView = v));
+$id('rlbTracks').innerHTML = Tracks.TRACKS.map(t => `<button data-rlbtrack="${t.id}"${t.id === rlbTrack ? ' class="sel"' : ''}>${t.short}</button>`).join('');
+pickSeg('data-rlbtrack', v => (rlbTrack = v));
 const el = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt !== undefined) e.textContent = txt; return e; };
 // simple white line icons (they take the text colour, so they grey out with whatever they're in)
 const ICONS = {
@@ -1036,26 +1100,75 @@ function nameCell(cls, e) {
   n.append(who); return n;
 }
 let lbReq = 0;   // only the newest load draws (two quick loads would otherwise both add their rows)
+// season: Current Season (S1) by default; the beta's boards are kept as their own section
+const LB_CURRENT = 1;
+let lbSeason = LB_CURRENT;
+$id('lbSeason').addEventListener('change', e => { lbSeason = +e.target.value; loadLeaderboard(); });
+// the season's rewards (top 5 of the singleplayer / multiplayer boards), shown above the current season's board
+// (board: the racing leaderboard's 'tt' / 'races' rewards instead)
+function lbRewards(show, board) {
+  const box = $id(board ? 'rlbRewards' : 'lbRewards');
+  box.classList.toggle('hidden', !show); if (!show) return;
+  box.innerHTML = '';
+  box.append(el('span', 'rwHead', 'SEASON 1 REWARDS'));
+  for (const [a, b, id] of board ? Titles.RACE_REWARDS[LB_CURRENT][board] : Titles.SEASON_REWARDS[LB_CURRENT]) {
+    const it = el('span', 'rwItem');
+    it.append(el('span', 'rwPlace', a === b ? `#${a}` : `#${a}–${b}`), titleEl(id));
+    box.append(it);
+  }
+  box.append(el('span', 'rwNote', 'Sent to your inbox when the season ends.'));
+}
 async function loadLeaderboard() {
-  const mode = lbTab, view = lbView, list = $id('lbList'), note = $id('lbNote'), my = ++lbReq;
+  const mode = lbTab, view = lbView, season = lbSeason, list = $id('lbList'), note = $id('lbNote'), my = ++lbReq;
+  lbRewards(season === LB_CURRENT);
   note.textContent = 'Loading…'; list.innerHTML = '';
   const base = await Net.findBase();
   if (!base) { note.textContent = 'Leaderboards live on the online server: open the game from its website link.'; return; }
   if (view === 'me' && !Account.signedIn) { note.textContent = 'Sign in with Google to see where you rank.'; return; }
   let j;
   try {
-    const r = await fetch(base + (view === 'me' ? '/api/leaderboard/me?mode=' : '/api/leaderboard?mode=') + mode,
-      { cache: 'no-store', headers: view === 'me' ? { Authorization: 'Bearer ' + Account.session } : {} });
+    const url = (view === 'me' ? '/api/leaderboard/me?mode=' : '/api/leaderboard?mode=') + mode + '&season=' + season;
+    const r = await fetch(base + url, { cache: 'no-store', headers: view === 'me' ? { Authorization: 'Bearer ' + Account.session } : {} });
     j = await r.json();
   } catch (e) { note.textContent = 'Could not load the leaderboard. Check your internet connection.'; return; }
-  if (mode !== lbTab || view !== lbView || my !== lbReq) return;
+  if (mode !== lbTab || view !== lbView || season !== lbSeason || my !== lbReq) return;
   if (j.error) { note.textContent = j.error; return; }
   const rows = j.list || [];
-  const what = mode === 'sp' ? 'Best scored singleplayer drive of each driver (60% traffic).' : 'Best drive of each driver on public and scored servers.';
+  const sName = season === LB_CURRENT ? 'Season 1' : 'Beta';
+  const what = (mode === 'sp' ? 'Best scored singleplayer drive of each driver (60% traffic).' : 'Best drive of each driver on public and scored servers.') + ` ${sName}${season === LB_CURRENT ? '' : ' (final standings)'}.`;
   if (view === 'me') note.textContent = j.rank ? `You're #${j.rank} of ${j.total} drivers. ${what}` : `You're not on this leaderboard yet: finish a scored run of at least 100 points. ${what}`;
-  else note.textContent = what + (j.accounts ? (Account.signedIn ? '' : ' Sign in with Google to get on it.') : ' (Sign-in isn\'t set up on this server yet, so no drives can be saved.)');
+  else note.textContent = what + (season !== LB_CURRENT ? '' : j.accounts ? (Account.signedIn ? '' : ' Sign in with Google to get on it.') : ' (Sign-in isn\'t set up on this server yet, so no drives can be saved.)');
+  drawBoard(list, rows, view, { fmt: v => U.fmt(v), head: 'SCORE', reward: season === LB_CURRENT, empty: 'No drives yet. Be the first on the podium!' });
+}
+// the racing leaderboard: fastest time-trial lap / fastest 3-lap race of each driver on a track (Season 1)
+async function loadRaceBoard() {
+  const kind = rlbKind, track = rlbTrack, view = rlbView, list = $id('rlbList'), note = $id('rlbNote'), my = ++rlbReq, races = kind === 'races';
+  lbRewards(true, kind);
+  note.textContent = 'Loading…'; list.innerHTML = '';
+  const base = await Net.findBase();
+  if (!base) { note.textContent = 'Leaderboards live on the online server: open the game from its website link.'; return; }
+  if (view === 'me' && !Account.signedIn) { note.textContent = 'Sign in with Google to see where you rank.'; return; }
+  let j;
+  try {
+    const r = await fetch(base + `/api/${races ? 'races' : 'laps'}?track=${track}${view === 'me' ? '&me=1' : ''}`, { cache: 'no-store', headers: view === 'me' ? { Authorization: 'Bearer ' + Account.session } : {} });
+    j = await r.json();
+  } catch (e) { note.textContent = 'Could not load the leaderboard. Check your internet connection.'; return; }
+  if (kind !== rlbKind || track !== rlbTrack || view !== rlbView || my !== rlbReq) return;
+  if (j.error) { note.textContent = j.error; return; }
+  const rows = j.list || [];
+  for (const e of rows) e.score = e.ms;
+  const name = Tracks.TRACK_BY_ID[track].name;
+  const what = races ? `Fastest finish of each driver in a ${Tracks.RACE_LAPS}-lap race on ${name} (penalties included).` : `Fastest time-trial lap of each driver on ${name}.`;
+  if (view === 'me') note.textContent = j.rank ? `You're #${j.rank} of ${j.total} drivers. ${what}` : `You're not on this leaderboard yet: ${races ? 'finish a race' : 'set a time-trial lap'} while signed in. ${what}`;
+  else note.textContent = what + (j.accounts ? (Account.signedIn ? '' : ' Sign in with Google to get on it.') : ' (Sign-in isn\'t set up on this server yet, so no times can be saved.)');
+  drawBoard(list, rows, view, { fmt: fmtLap, head: races ? 'RACE TIME' : 'LAP', reward: kind, empty: races ? 'No race times yet. Finish a race to set the first one!' : 'No lap times yet. Set the first one in a time trial!' });
+}
+// podium + table for a leaderboard. o: { fmt (score text), head (score column), reward (season titles), empty }
+function drawBoard(list, rows, view, o) {
   // when the drive was set, e.g. "Oct 7" (with the year if it's from an earlier year)
   const time = t => { if (!t) return '—'; const d = new Date(t); return d.toLocaleDateString(undefined, d.getFullYear() === new Date().getFullYear() ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' }); };
+  const fmtScore = o.fmt;
+  const rwFor = rank => (o.reward ? titleEl(Titles.seasonReward(LB_CURRENT, rank, typeof o.reward === 'string' ? o.reward : undefined), 'ttl small') : null);   // (what this spot wins)
   const me = Account.signedIn ? Account.user.name : null;
   // podium: 2nd | 1st | 3rd (Top 100 only)
   const podium = view === 'top' ? rows.slice(0, 3) : [];
@@ -1063,7 +1176,11 @@ async function loadLeaderboard() {
     const pod = el('div', 'podium');
     for (const i of [1, 0, 2]) {
       const e = rows[i], p = el('div', 'pod p' + (i + 1) + (e ? '' : ' empty') + (e && e.name === me ? ' me' : ''));
-      if (e) p.append(nameCell('pname', e), el('div', 'pscore', U.fmt(e.score)), el('div', 'ptime', time(e.t)));
+      if (e) {
+        p.append(nameCell('pname', e), el('div', 'pscore', fmtScore(e.score)), el('div', 'ptime', time(e.t)));
+        const rw = rwFor(e.rank);
+        if (rw) p.insertBefore(rw, p.querySelector('.pscore'));
+      }
       else p.append(el('div', 'pname', '—'));
       const block = el('div', 'block'); block.append(el('span', '', String(i + 1))); p.appendChild(block);
       pod.appendChild(p);
@@ -1074,17 +1191,19 @@ async function loadLeaderboard() {
   const rest = rows.slice(podium.length);
   if (rest.length) {
     const tbl = el('div', 'lbTable'), head = el('div', 'lbRow head');
-    head.append(el('span', 'rk', '#'), el('span', 'nm', 'DRIVER'), el('span', 'sc', 'SCORE'), el('span', 'tm', 'TIME'));
+    head.append(el('span', 'rk', '#'), el('span', 'nm', 'DRIVER'), el('span', 'sc', o.head), el('span', 'tm', 'TIME'));
     tbl.appendChild(head);
     for (const e of rest) {
       const row = el('div', 'lbRow' + (e.name === me ? ' me' : ''));
-      row.append(el('span', 'rk', String(e.rank)), nameCell('nm', e), el('span', 'sc', U.fmt(e.score)), el('span', 'tm', time(e.t)));
+      const nm = nameCell('nm', e), rw = rwFor(e.rank);
+      if (rw) nm.append(rw);                           // (4th / 5th: the Contender title)
+      row.append(el('span', 'rk', String(e.rank)), nm, el('span', 'sc', fmtScore(e.score)), el('span', 'tm', time(e.t)));
       tbl.appendChild(row);
     }
     list.appendChild(tbl);
     if (view === 'me') { const mine = tbl.querySelector('.me'); if (mine) requestAnimationFrame(() => mine.scrollIntoView({ block: 'center' })); }
   }
-  if (!rows.length && view === 'top') list.appendChild(el('div', 'lbEmpty', 'No drives yet. Be the first on the podium!'));
+  if (!rows.length && view === 'top') list.appendChild(el('div', 'lbEmpty', o.empty));
 }
 
 // ---------- profile ----------
@@ -1249,6 +1368,86 @@ Net.onList = j => {
   if (!list.length) box.innerHTML = mpTab === 'public' ? '<div class="mpEmpty">No public servers right now. Host one and pick Public!</div>' : '<div class="mpEmpty">No official servers.</div>';
 };
 setInterval(() => { if (menuOpen && screen === 'scrMP' && !document.hidden) Net.refreshList(); }, 6000);
+
+// ---------- racing (Season 1 limited-time mode): js/race.js + js/tracks.js ----------
+// Each track: QUEUE (a public race: practise in the lobby until 2+ are in, 60 s countdown, 3 laps) or TIME TRIAL
+// (alone, best laps on the leaderboard). Players can also host a public / private race on any track.
+segPicker('rcWorld', 'raceWorld'); segPicker('rcTod', 'raceTod');
+const titleCase = s => s.split(' ').map(w => w.charAt(0) + w.slice(1).toLowerCase()).join(' ');   // ('SAO PAULO' -> 'Sao Paulo')
+$id('rhTrack').innerHTML = Tracks.TRACKS.map(t => `<button data-v="${t.id}">${titleCase(t.short)}</button>`).join('');
+segPicker('rhVis', 'raceHostVis'); segPicker('rhTrack', 'raceHostTrack'); segPicker('rhWorld', 'raceHostWorld'); segPicker('rhTod', 'raceHostTod');
+$id('rhName').value = Settings.raceHostName || '';
+$id('rhName').addEventListener('input', e => { Settings.raceHostName = e.target.value; saveSettings(); });
+// a small outline of a track (canvas), the start marked like the multiplayer spawn (a circle with an S)
+function trackThumb(cv, id) {
+  const tr = ROAD._tracks && ROAD._tracks[id] || (ROAD._tracks = ROAD._tracks || {}, ROAD._tracks[id] = Tracks.buildTrack(Tracks.TRACK_BY_ID[id]));
+  const g = cv.getContext('2d'), W = cv.width, H = cv.height;
+  let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+  for (let i = 0; i < tr.N; i += 4) { x0 = Math.min(x0, tr.X[i]); x1 = Math.max(x1, tr.X[i]); z0 = Math.min(z0, tr.Z[i]); z1 = Math.max(z1, tr.Z[i]); }
+  const k = Math.min((W - 16) / (x1 - x0), (H - 16) / (z1 - z0)), ox = (W - (x1 - x0) * k) / 2, oz = (H - (z1 - z0) * k) / 2;
+  g.clearRect(0, 0, W, H); g.lineJoin = 'round'; g.beginPath();
+  for (let i = 0; i <= tr.N; i += 4) { const j = i % tr.N, x = ox + (tr.X[j] - x0) * k, y = oz + (tr.Z[j] - z0) * k; i ? g.lineTo(x, y) : g.moveTo(x, y); }
+  g.closePath(); g.lineWidth = 6; g.strokeStyle = 'rgba(255,255,255,0.12)'; g.stroke(); g.lineWidth = 3; g.strokeStyle = '#e8ecf2'; g.stroke();
+  // the start: a circle with an S, like the spawn marker on the multiplayer map
+  const sx = ox + (tr.X[0] - x0) * k, sy = oz + (tr.Z[0] - z0) * k;
+  g.beginPath(); g.arc(sx, sy, 4.6, 0, Math.PI * 2); g.fillStyle = '#2f3440'; g.fill(); g.lineWidth = 1.1; g.strokeStyle = '#d6dbe3'; g.stroke();
+  g.font = '900 6px Segoe UI, Arial'; g.textAlign = 'center'; g.fillStyle = '#ffd84a'; g.fillText('S', sx, sy + 2.2);
+}
+const rcBox = $id('raceTracks');
+for (const t of Tracks.TRACKS) {
+  const L = Tracks.trackLength(t.id), row = el('div', 'rcTrack');
+  row.dataset.t = t.id;
+  row.innerHTML = `<canvas width="132" height="96"></canvas><div class="rcInfo"><b></b><span class="len"></span><p></p><span class="rcCount"></span><span class="rcBest"></span></div>
+    <div class="rcBtns"><button class="go rcQ">QUEUE</button><button class="rcTT">TIME TRIAL</button></div>`;
+  row.querySelector('b').textContent = t.name.toUpperCase();
+  row.querySelector('.len').textContent = `${(L / 1000).toFixed(2)} km · ${Tracks.RACE_LAPS} laps`;
+  row.querySelector('p').textContent = t.desc;
+  row.querySelector('.rcQ').onclick = () => Net.raceQueue(t.id, myName(), f1Color());
+  row.querySelector('.rcTT').onclick = () => startTimeTrial(t.id);
+  rcBox.appendChild(row);
+  trackThumb(row.querySelector('canvas'), t.id);
+}
+function startTimeTrial(track) {
+  if (Net.active()) { quitting = true; Net.leave(); quitting = false; }
+  score.reset();
+  game.mode = 'race'; game.scored = false; game.density = 0;
+  Race.startTT(track, Settings.raceWorld, Settings.raceTod);
+  closeMenu();
+}
+async function refreshRace() {
+  for (const row of rcBox.children) {                  // your best lap on each track (this device)
+    let b = null; try { b = +localStorage.getItem('pw_lap_' + row.dataset.t) || null; } catch (e) { /* */ }
+    row.querySelector('.rcBest').textContent = b ? 'YOUR BEST LAP ' + fmtLap(b) : 'NO LAP TIME YET';
+  }
+  const j = await Net.raceList();
+  if (screen !== 'scrRace') return;
+  if (!j) { $id('raceRooms').innerHTML = '<div class="mpEmpty">Racing needs the online server: open the game from its website link.</div>'; for (const row of rcBox.children) row.querySelector('.rcCount').textContent = ''; return; }
+  $id('raceOnline').textContent = j.online ? `· ${j.online} online` : '';
+  for (const t of j.tracks || []) {
+    const row = rcBox.querySelector(`[data-t="${t.id}"]`); if (!row) continue;
+    row.querySelector('.rcCount').innerHTML = `<i class="q"></i>${t.queue} IN QUEUE <i class="r"></i>${t.racing} RACING`;
+  }
+  const box = $id('raceRooms'); box.innerHTML = '';
+  for (const s of j.rooms || []) {
+    const t = Tracks.TRACK_BY_ID[s.race && s.race.track], row = el('div', 'mpSrv');
+    row.innerHTML = '<span class="nmBox"><span class="nm"></span><span class="sub"></span></span><span class="ct"></span>';
+    row.querySelector('.nm').textContent = s.name;
+    const stName = { lobby: 'Waiting for players', countdown: 'Starting soon', grid: 'Starting', racing: 'Racing', results: 'Results' }[s.race && s.race.st] || '';
+    row.querySelector('.sub').textContent = [t ? t.name : '', (WORLD_NAMES[s.theme] || 'Grassy') + ' world', TOD_NAMES[s.tod] || 'Day', stName].join(' · ');
+    row.querySelector('.ct').textContent = `${s.players}/${s.max}`;
+    const b = el('button', '', s.players >= s.max ? 'FULL' : 'JOIN'); b.disabled = s.players >= s.max;
+    b.onclick = () => Net.joinServer(s.id, myName(), Settings.color);
+    row.appendChild(b); box.appendChild(row);
+  }
+  if (!box.children.length) box.innerHTML = '<div class="mpEmpty">No public races right now. Host one!</div>';
+}
+setInterval(() => { if (menuOpen && screen === 'scrRace' && !document.hidden) refreshRace(); }, 4000);
+$id('rhHost').onclick = () => Net.raceHost(myName(), f1Color(), { track: Settings.raceHostTrack, listed: Settings.raceHostVis !== 'private',
+  roomName: ($id('rhName').value || '').trim() || `${myName()}'s race`, theme: Settings.raceHostWorld, tod: Settings.raceHostTod });
+const rcCode = $id('rcCode');
+$id('rcJoin').onclick = () => Net.joinCode(rcCode.value, myName(), Settings.color);
+rcCode.addEventListener('keydown', e => { if (e.key === 'Enter') Net.joinCode(rcCode.value, myName(), Settings.color); });
+rcCode.addEventListener('input', () => { const s = rcCode.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6); rcCode.value = s.length > 3 ? s.slice(0, 3) + '-' + s.slice(3) : s; });
 // "Install app" button (Chrome / Edge offer it when the game is opened from its website)
 let installEvt = null;
 addEventListener('beforeinstallprompt', e => { e.preventDefault(); installEvt = e; mpEl('installBtn').classList.remove('hidden'); });
@@ -1262,11 +1461,11 @@ mpEl('mpCopy').onclick = () => {
   const done = () => Net.status('Code copied. Paste it to your friends.', 'ok');
   if (navigator.clipboard) navigator.clipboard.writeText(Net.code).then(done, () => {}); else done();
 };
-Net.onStatus = (msg, kind) => { for (const id of ['mpStatus', 'mpStatus2']) { const el = mpEl(id); el.textContent = msg; el.className = kind; } };
+Net.onStatus = (msg, kind) => { for (const id of ['mpStatus', 'mpStatus2', 'rcStatus']) { const el = mpEl(id); el.textContent = msg; el.className = kind; } };
 Net.onRoster = () => {
   const on = Net.active(), r = Net.room;
   mpEl('mpLive').classList.toggle('hidden', !on);
-  mpEl('mpLot').classList.toggle('hidden', !on);
+  mpEl('mpLot').classList.toggle('hidden', !on || !!(r && r.race));
   mpEl('mpHud').classList.toggle('hidden', !on);
   mpEl('mpWhere').textContent = r ? (r.official ? r.name : r.name + (r.listed ? ' (public)' : ' (private)')) : '';
   mpEl('mpCodeWrap').classList.toggle('hidden', !(r && r.code));
@@ -1294,6 +1493,16 @@ Net.onJoined = (room, slot) => {
   Net.slot = slot; bigMap = false;
   Input.lastActive = performance.now();   // (the AFK clock starts fresh)
   score.reset();
+  if (room.race) {                                     // racing: the track, practising in the lobby until the race
+    game.mode = 'race'; game.scored = false; game.density = 0;
+    score.useBest('sp');
+    Race.enterMp(room, slot);
+    closeMenu();
+    const t = Tracks.TRACK_BY_ID[room.race.track];
+    hud.message(room.race.queue ? 'QUEUE · ' + t.name.toUpperCase() : room.name.toUpperCase() + ' · ' + room.code);
+    return;
+  }
+  if (Race.active) Race.exit();
   game.mode = 'mp'; game.scored = !!room.scored; game.density = room.density;
   enterServer(slot, room);
   closeMenu();
@@ -1324,9 +1533,21 @@ function afkCheck(now) {
 // a friend hit me hard (they noticed it on their side): my streak ends as well
 Net.onBumped = v => { if (game.mode === 'mp') crashEvent(Math.max(3, v)); };
 Net.onLeft = () => {
+  const racing = Race.active;
+  Race.exit();
   exitServer();
   game.mode = 'menu'; game.scored = false; game.density = SCORED_DENSITY;
-  if (!quitting) openMenu('scrMP');
+  if (!quitting) openMenu(racing ? 'scrRace' : 'scrMP');
+};
+Net.onRace = m => Race.onState(m);
+Net.onRaceFinish = m => { if (m.id !== Net.myId) hud.message(`${m.name.toUpperCase()} FINISHED P${m.pos}`); else Race.finUpdate({ pos: m.pos }); };
+// the finish card's LOBBY (time trial) / LEAVE RACE button: back to the Racing menu
+Race.toLobby = () => {
+  if (Net.active()) { Net.leave(); return; }           // (onLeft opens the Racing menu)
+  Race.exit();
+  game.mode = 'menu'; game.scored = false; game.density = SCORED_DENSITY;
+  setWorld(Settings.world, Settings.tod); startPosition(); score.reset();
+  openMenu('scrRace');
 };
 mpEl('mpLot').onclick = () => { if (Net.active()) { spawnInLot(Net.slot || 0); closeMenu(); hud.message('PARKING LOT'); } };
 let mpHudT = 0;
@@ -1342,7 +1563,7 @@ function updateMpHud(dt) {
 // my state as friends receive it (road coordinates + my clock, for smooth interpolation on their side)
 function netState() {
   return { t: +(performance.now() / 1000).toFixed(3), s: +car.s.toFixed(2), d: +car.d.toFixed(3), ry: +(proxy.ry || 0).toFixed(4), v: +proxy.v.toFixed(2),
-    steer: +car.steer.toFixed(3), brake: !!(car.brakeOn && car.gear >= 0), kmh: Math.round(Math.abs(car.u) * 3.6), score: Math.round(score.score),
+    steer: +car.steer.toFixed(3), brake: !!(car.brakeOn && car.gear >= 0), kmh: Math.round(Math.abs(car.u) * 3.6), score: Race.active ? Race.progress() : Math.round(score.score),   // (racing: how far round the race)
     rt: Math.round(score.runTime || 0), rtt: Math.round(Net.rtt || 0), w: traffic.remote ? traffic.localWrecks() : undefined };
 }
 
@@ -1389,7 +1610,7 @@ function mmStartShapes(lap) {
   return { pad, off, on };
 }
 function drawMinimap(dt) {
-  const on = game.mode === 'mp' && !menuOpen && (Settings.minimap || bigMap);
+  const on = (game.mode === 'mp' || game.mode === 'race') && !menuOpen && (Settings.minimap || bigMap);
   if (mm.classList.contains('hidden') === on) mm.classList.toggle('hidden', !on);
   if (!on || (mmT -= dt) > 0) return;
   mmT = bigMap ? 0.12 : 0.08;
@@ -1398,6 +1619,7 @@ function drawMinimap(dt) {
   const g = mmc, W = size;
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, W, W);
+  if (Race.active) { Race.drawMap(g, W); return; }     // (racing: the whole track, everyone on it)
   g.lineJoin = g.lineCap = 'round';
   const line = (pts, map, w, col) => { g.beginPath(); pts.forEach((p, i) => { const q = map(p.x ?? p[0], p.z ?? p[1]); i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]); }); g.lineWidth = w; g.strokeStyle = col; g.stroke(); };
   const lap = ROAD.near(0, car.s), start = mmStartShapes(lap);
@@ -1465,6 +1687,11 @@ function drawMinimap(dt) {
 // what's on the pause screen
 function updatePause() {
   const r = Net.room;
+  if (game.mode === 'race') {
+    const t = Tracks.TRACK_BY_ID[Race.track];
+    $id('pauseMode').textContent = `Racing · ${t ? t.name : ''} · ` + (Race.kind === 'tt' ? 'Time trial' : r && r.race && r.race.queue ? 'Queue' : (r ? r.name : 'Race'));
+    return;
+  }
   $id('pauseMode').textContent = game.mode === 'mp'
     ? `${r ? r.name : 'Server'} · ${game.scored ? 'Scored' : 'Free drive'} · ${Math.round(game.density * 100)}% traffic`
     : game.scored ? 'Singleplayer · Scored · 60% traffic' : `Singleplayer · Free drive · ${Math.round(game.density * 100)}% traffic`;
@@ -1481,7 +1708,7 @@ function openMenu(id = 'scrPause') {
 function closeMenu() {
   menuOpen = false; menu.classList.add('hidden'); document.getElementById('hud').classList.remove('hidden');
   $id('hint').textContent = hintText();
-  hud.trafficLabel = game.scored ? 'SCORED' : 'FREE DRIVE';   // (just which kind of run, above the speedo)
+  hud.trafficLabel = game.mode === 'race' ? (Race.kind === 'tt' ? 'TIME TRIAL' : 'RACE') : game.scored ? 'SCORED' : 'FREE DRIVE';   // (just which kind of run, above the speedo)
   sound.init(); sound.suspend(false);
   started = true; last = performance.now();
 }
@@ -1498,6 +1725,7 @@ function updatePadPanel() {
   });
 }
 
+let f1ScreenT = 0;
 function updatePlayerVisual(dt) {
   playerRoot.position.set(car.x, 0, car.z);
   car.visK = 0; // body points exactly where the car is going (no lead = no "drift" look)
@@ -1527,6 +1755,21 @@ function updatePlayerVisual(dt) {
   if (inCockpit && !bike) MIRRORS.drawGauge(dt);
   playerVis.brake.visible = !vanOn && car.brakeOn && car.gear >= 0;
   playerGlass.opacity = camMode === 1 && !menuOpen ? 0.14 : glassOut;   // (outside: the Garage window tint)
+  if (playerF1.root.visible) {                         // racing: the F1 car
+    playerF1.root.rotation.x = level ? 0 : bm.pitch * 0.5; playerF1.root.rotation.z = level ? 0 : bm.roll * 0.4;
+    animateWheels(playerF1, car.u * dt, car.steer);
+    playerF1.brake.visible = car.brakeOn && car.gear >= 0;
+    playerF1.helmet.visible = !inCockpit;               // (the cockpit view is from inside the helmet)
+    playerF1.cockpit.visible = inCockpit;
+    if (playerF1.lid) playerF1.lid.visible = !inCockpit;
+    if (playerF1.shield) playerF1.shield.visible = !inCockpit; // (the dark cover over the cockpit opening: only seen from outside)
+    if (playerF1.steer) playerF1.steer.rotation.z = -car.steer * M4.ratio * 0.55;   // (an F1 wheel turns less than a road car's)
+    if (inCockpit && (f1ScreenT -= dt) <= 0) {
+      f1ScreenT = 0.08;
+      const mph = Settings.units !== 'kmh';
+      drawF1Screen(playerF1, car.gear < 0 ? 'R' : car.gear === 0 ? 'N' : String(car.gear), Math.round(Math.abs(car.u) * (mph ? 2.23694 : 3.6)), U.clamp((car.rpm - 3000) / (M4.redline - 3000), 0, 1), mph ? 'MPH' : 'KM/H');
+    }
+  }
   if (bike) {
     // the motorcycle leans into turns (the angle real bikes need for that turn, softened), nose dips the same as the car
     const leanT = U.clamp(-Math.atan2(ayNow, 9.81) * 0.85, -0.72, 0.72);
@@ -1744,17 +1987,31 @@ function renderFrame() {
 // paused = the menu is open on a server: the car keeps rolling (no throttle or brake, lane keeping
 // steers it down its lane) so it never just stops in the middle of shared traffic. No points meanwhile.
 const COAST = { steer: 0, throttle: 0, brake: 0, source: 'keys' };
+const OFF_SLOW = 1.1;                                  // (racing: grass slows you 1.1x more than it first did: lower cap, stronger drag)
+const OFF_CAP = 150 / 3.6 / OFF_SLOW;                  // (racing: top speed on the grass / run-off, ~136 km/h)
+const _raceSteer = {};
+// racing: no lane assist, and steering sensitivity fixed at 1x (keyboard and wheel) so everyone's car turns the same
+const RACE_STEER = () => Object.assign(_raceSteer, Settings, { assist: 0, assistKb: 0, laneCentre: false, sens: 1, kbSens: 1 });
+// racing finish fly-by (race.js): the car glides on by itself; the other racers still see it
+function finStep(dt) {
+  Race.finStep(dt);
+  Object.assign(proxy, { s: car.s, d: car.d, v: 0, ry: 0 });
+  if (Net.active()) Net.tick(dt, netState());
+}
 function driveStep(dt, ctl, paused) {
   // ---- physics (fixed-size substeps that exactly cover the frame) ----
   const n = Math.max(1, Math.ceil(dt / SUB)), h = dt / n;
-  const steerSet = paused ? Object.assign({}, Settings, { assist: 1, laneCentre: true }) : Settings;
+  // (racing: no lane assist of any kind; menu open on a server: the coasting car keeps its lane)
+  const steerSet = Race.active ? RACE_STEER() : paused ? Object.assign({}, Settings, { assist: 1, laneCentre: true }) : Settings;
   let wallHit = 0;
   ROAD.hintS = car.s;      // (loop circuit: road lookups pick the lap you're on)
-  for (let i = 0; i < n; i++) {
+  const held = Race.active && Race.frozen;               // (racing: on the grid until the lights go out)
+  for (let i = 0; i < n && !held; i++) {
     steerCtl.update(h, car, ctl, steerSet);
     car.step(h, ctl);
     wallHit = Math.max(wallHit, railCollide(h));
   }
+  if (held) { car.u = car.v = car.r = 0; car.brakeOn = true; }
   // safety net: if the car state ever becomes invalid (NaN), put it back on the road
   if (![car.x, car.z, car.u, car.v, car.r, car.yaw, car.steer].every(Number.isFinite)) {
     car.place(Number.isFinite(lastGoodS) ? lastGoodS : 40, ROAD.lane(2), 100 / 3.6);
@@ -1765,6 +2022,27 @@ function driveStep(dt, ctl, paused) {
   const ry = ROAD.yaw(car.s);
   const vx = car.u * Math.sin(car.yaw) + car.v * Math.cos(car.yaw), vz = -car.u * Math.cos(car.yaw) + car.v * Math.sin(car.yaw);
   Object.assign(proxy, { s: car.s, d: car.d, v: vx * Math.sin(ry) - vz * Math.cos(ry), ry: U.wrap(car.visYaw - ry) });
+
+  // ---- racing: no traffic and no points, just the other drivers (bumps) and the walls ----
+  if (Race.active) {
+    Net.tick(dt, netState());
+    const bump = Net.silent ? 0 : Net.collide(car, trafficHull);   // (practising unseen during a race: no bumping the racers)
+    if (bump > 0.45) sound.thump(0.2 + bump / 12);
+    if (bump > 4) Race.onBump(bump, Net.lastBumpId);     // (a hard hit on the car in front: causing a collision)
+    if (wallHit > 2) sound.thump(0.2 + wallHit / 14);
+    zoneHit = false; railHit = false;
+    // off the track: a gravel trap bogs the car down hard; grass / painted run-off holds you to about
+    // 150 km/h (pulled down smoothly), so cutting a corner or running wide costs time
+    const off = Math.abs(car.d) - (2 * ROAD.LW + Tracks.RUNOFF.kerb + 0.6);
+    if (off > 0 && Math.abs(car.u) > 1) {
+      const grav = Tracks.gravelAt(ROAD.loop, car.s, car.d < 0 ? -1 : 1) && off > 2;
+      car.u *= Math.exp(-(grav ? 1.15 : 0.25 * OFF_SLOW) * dt);
+      if (grav) car.v *= Math.exp(-2 * dt);
+      else if (car.u > OFF_CAP) car.u -= (car.u - OFF_CAP) * (1 - Math.exp(-1.6 * OFF_SLOW * dt));
+    }
+    if (!paused) playBeat(dt);
+    return;
+  }
 
   // ---- traffic, collisions, scoring ----
   Net.tick(dt, netState());
@@ -1850,9 +2128,9 @@ function frame(now) {
     else if (!Input.padCap) PadNav.update(ctl);
     updatePadPanel();
     // on a server the game doesn't stop behind the menu: your car keeps rolling with the shared traffic
-    const rolling = game.mode === 'mp';
-    if (rolling) { time += dt; driveStep(dt, COAST, true); }
-    updatePlayerVisual(rolling ? dt : 0);
+    const rolling = game.mode === 'mp' || (game.mode === 'race' && Net.active());   // (a multiplayer race doesn't wait for you either)
+    if (rolling) { time += dt; if (Race.fin) finStep(dt); else driveStep(dt, COAST, true); Race.update(dt); }
+    updatePlayerVisual(rolling ? (Race.fin ? Race.finDt : dt) : 0);
     updateCamera(dt);
     sunLight.position.set(car.x + SUN_OFF.x, SUN_OFF.y, car.z + SUN_OFF.z);
     sunLight.target.position.set(car.x, 0, car.z);
@@ -1867,21 +2145,26 @@ function frame(now) {
   time += dt;
   if (Input.tap('camera') || ctl.camBtn) camMode ^= 1;   // chase <-> cockpit
   if (Input.tap('style')) setFx((FX.mode + 1) % 3);   // normal -> toon -> realistic -> normal
-  if (Input.tap('reset') || ctl.reset) resetCar();
+  if (Input.tap('reset') || ctl.reset) { if (Race.active) Race.reset(); else resetCar(); }
   if (game.mode === 'sp' && !game.scored && (Input.hit('BracketLeft') || Input.hit('BracketRight'))) { // [ ] traffic (free drive only)
     game.density = U.clamp(Math.round(game.density * 10 + (Input.hit('BracketRight') ? 1 : -1)) / 10, 0, 1);
     const el = $id('fdDens'); el.value = Math.round(game.density * 100); el.dispatchEvent(new Event('input'));
     hud.message(`TRAFFIC ${Math.round(game.density * 100)}%`);   // (shown briefly when you change it)
   }
   if (Input.tap('gearbox') || ctl.gearbox) { car.manual = Settings.manual = !car.manual; manEl.checked = car.manual; saveSettings(); hud.message(car.manual ? 'MANUAL' : 'AUTO'); }
-  if (Input.tap('map') && game.mode === 'mp') bigMap = !bigMap;
+  if (Input.tap('map') && (game.mode === 'mp' || game.mode === 'race')) bigMap = !bigMap;
   if (Input.tap('shiftUp') || ctl.up) { if (!car.manual) { car.manual = Settings.manual = true; manEl.checked = true; } car.shift(1); }
   if (Input.tap('shiftDown') || ctl.down) { if (!car.manual) { car.manual = Settings.manual = true; manEl.checked = true; } car.shift(-1); }
 
-  driveStep(dt, ctl, false);
+  if (Race.fin) { finStep(dt); if (Input.hit('Enter') && Race.kind === 'tt') Race.reset(); }   // (finish fly-by: the car drives itself)
+  else {
+    Race.gate(ctl);                                    // (racing start: no throttle before the green light - see race.js)
+    driveStep(dt, ctl, false);
+  }
+  Race.update(dt);                                     // (racing: lap timing, lights, race HUD)
   world.update(car.s, camera);
 
-  updatePlayerVisual(dt);
+  updatePlayerVisual(Race.fin ? Race.finDt : dt);
   updateCamera(dt);
   sunLight.position.set(car.x + SUN_OFF.x, SUN_OFF.y, car.z + SUN_OFF.z);
   sunLight.target.position.set(car.x, 0, car.z);

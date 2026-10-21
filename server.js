@@ -17,6 +17,7 @@ const NetCodec = require('./js/netcodec');   // (binary versions of the frequent
 const DB = require('./db');
 const RunCheck = require('./runcheck');
 const Accounts = require('./accounts');
+const Tracks = require('./js/tracks');      // (Season 1 racing: the race tracks' names / lengths)
 const Tokens = RunCheck.makeTokens(DB.SECRET);
 
 const PORT = +process.env.PORT || 8790;
@@ -62,9 +63,110 @@ const rooms = new Map();   // id -> room
 // its code); a private one is joinable by code only. theme: world type, tod: time of day.
 const makeRoom = (id, name, official, code, scored = true, density = SCORED_DENSITY, o = {}) =>
   ({ id, name, official, listed: !!o.listed, code, scored, density: scored ? SCORED_DENSITY : density, theme: o.theme || 'grass', tod: o.tod || 'day',
-    players: new Map(), emptySince: Date.now(), bests: new Map(), traffic: null });
+    players: new Map(), emptySince: Date.now(), bests: new Map(), traffic: null,
+    race: o.race ? { track: o.race.track, laps: Tracks.RACE_LAPS, queue: !!o.race.queue, st: 'lobby', endsAt: 0, goAt: 0, grid: [], finish: new Map(), lap: new Map(), firstAt: 0, results: [] } : null });
 for (const [id, name, theme] of OFFICIAL_ROOMS) rooms.set(id, makeRoom(id, name, true, '', true, SCORED_DENSITY, { theme }));
-const roomInfo = r => ({ id: r.id, name: r.name, players: r.players.size, max: MAX_PLAYERS, scored: r.scored, theme: r.theme, tod: r.tod });
+const roomInfo = r => ({ id: r.id, name: r.name, players: r.players.size, max: r.race ? Tracks.RACE_MAX : MAX_PLAYERS, scored: r.scored, theme: r.theme, tod: r.tod,
+  race: r.race ? { track: r.race.track, st: r.race.st } : undefined });
+const maxOf = room => (room.race ? Tracks.RACE_MAX : MAX_PLAYERS);
+
+// ---------------------------------------------------------------- racing (Season 1 limited-time mode)
+// A race room is a lobby on one of the tracks: everyone practises freely until 2+ players are in, then a
+// 60 s countdown starts (back to waiting if it drops to 1). Then everyone (up to 10) is put on the grid, the
+// lights go out, 3 laps, results for 15 s, and back to the lobby. The queue for each track is its public
+// lobby rooms (a new one opens while the last is racing); players can also host public / private races.
+// Each game times itself and reports laps; finishing times are measured here, from the start.
+const RACE_RESULTS_MS = 15000, RACE_AFTER_WINNER_MS = 60000, RACE_LIMIT_MS = 15 * 60e3;
+const RACE_TEST = process.env.PW_RACE_TEST === '1';   // (local testing only: 5 s countdown, no minimum race time)
+// (each track's own world + time of day for its queue: js/tracks.js look)
+const raceMsg = room => {
+  const R = room.race, now = Date.now();
+  return { t: 'race', st: R.st, track: R.track, laps: R.laps, n: room.players.size, need: Tracks.RACE_MIN, grid: R.grid,
+    ms: Math.max(0, (R.st === 'grid' ? R.goAt : R.endsAt) - now), hold: R.hold, el: R.st === 'racing' ? now - R.goAt : 0, results: R.st === 'results' ? R.results : undefined };
+};
+// Time checks (anti-cheat): the server keeps its own record of each racer, so a hacked game can't fake a race.
+//  - laps must come in order, each at least a flat-out lap (Tracks.minLapMs) after the one before
+//  - the car's reported position must cover the whole race distance, and never faster than an F1 car can
+//    go (top speed + 25%, measured over a second or more, 3 strikes)
+// A driver who fails isn't classified (DNF) and it's logged. (PW_RACE_TEST skips these for bots.)
+const RACE_VMAX = 345 / 3.6 * 1.25;
+function raceTrace(R, p, st) {
+  if (R.st !== 'racing' || !R.grid.includes(p.id) || R.finish.has(p.id)) return;
+  const now = Date.now(); let T = R.tr.get(p.id);
+  if (!T) R.tr.set(p.id, T = { pts: [], maxS: -1e9, strikes: 0, bad: null });
+  T.maxS = Math.max(T.maxS, st.s);
+  T.pts.push([now, st.s]);
+  while (T.pts.length > 2 && now - T.pts[1][0] >= 1000) T.pts.shift();   // (the oldest kept sample: just over 1 s ago)
+  const [t0, s0] = T.pts[0], dt = (now - t0) / 1000;
+  if (dt >= 1 && (st.s - s0) / dt > RACE_VMAX && ++T.strikes >= 3 && !T.bad) {
+    T.bad = `moved ${Math.round((st.s - s0) / dt * 3.6)} km/h`;
+    console.log(`race check: ${p.name} (${p.account ? p.account.id : 'guest'}) ${R.track}: ${T.bad}`);
+  }
+}
+const raceSet = (room, st, endsAt = 0) => { room.race.st = st; room.race.endsAt = endsAt; broadcast(room, raceMsg(room)); };
+function raceTick() {
+  const now = Date.now();
+  for (const room of rooms.values()) {
+    const R = room.race; if (!R) continue;
+    const n = room.players.size;
+    if (R.st === 'lobby') { if (n >= Tracks.RACE_MIN) raceSet(room, 'countdown', now + (RACE_TEST ? 5 : Tracks.RACE_COUNTDOWN) * 1000); }
+    else if (R.st === 'countdown') {
+      if (n < Tracks.RACE_MIN) raceSet(room, 'lobby');
+      else if (now >= R.endsAt) {
+        // on the grid: 2 s to settle, the five lights one per second, then a random pause before they go out
+        R.hold = Math.round(300 + Math.random() * 2200);
+        R.grid = [...room.players.keys()].slice(0, Tracks.RACE_MAX); R.goAt = now + 2000 + 5000 + R.hold;
+        R.who = {}; for (const id of R.grid) { const p = room.players.get(id); R.who[id] = { name: p.name, color: p.color, uid: p.account && p.account.name ? p.account.id : null }; }   // (for the results, even if they leave; uid: signed in, for Race Points)
+        R.finish = new Map(); R.lap = new Map(); R.lapAt = new Map(); R.tr = new Map(); R.firstAt = 0; R.results = [];
+        raceSet(room, 'grid', R.goAt);
+      }
+    } else if (R.st === 'grid') { if (now >= R.goAt) raceSet(room, 'racing', R.goAt + RACE_LIMIT_MS); }
+    else if (R.st === 'racing') {
+      const still = R.grid.filter(id => room.players.has(id));
+      const allDone = still.every(id => R.finish.has(id));
+      if (!still.length || allDone || (R.firstAt && now > R.firstAt + RACE_AFTER_WINNER_MS) || now > R.endsAt) {
+        const fin = [...R.finish.entries()].sort((a, b) => a[1].ms - b[1].ms).map(([id, f]) => ({ id, name: f.name, color: f.color, ms: f.ms, pen: f.pen || 0 }));
+        const dnf = R.grid.filter(id => !R.finish.has(id)).map(id => { const w = R.who[id] || { name: 'Driver', color: '#888' }; return { id, name: w.name, color: w.color, dnf: true, laps: R.lap.get(id) || 0 }; })
+          .sort((a, b) => b.laps - a.laps);
+        R.results = fin.concat(dnf);
+        // saved for signed-in drivers (the races leaderboard: fastest finish on each track)
+        try {
+          const n = R.grid.length, rows = [];
+          R.results.forEach((e, i) => { const w = R.who[e.id]; if (w && w.uid && !DB.isBanned(w.uid)) rows.push({ uid: w.uid, pos: e.dnf ? null : i + 1, ms: e.ms }); });          if (n >= Tracks.RACE_MIN && rows.length) DB.addRace(R.track, n, rows);
+        } catch (e) { console.log('race results error:', e.message); }
+        raceSet(room, 'results', now + RACE_RESULTS_MS);
+      }
+    } else if (R.st === 'results') { if (now >= R.endsAt) { R.grid = []; raceSet(room, 'lobby'); } }
+  }
+}
+setInterval(raceTick, 250);
+// the queue for a track: a public lobby that hasn't started yet (the fullest one), or a new one
+function queueRoom(track) {
+  let best = null;
+  for (const r of rooms.values()) {
+    if (!r.race || !r.race.queue || r.race.track !== track || r.players.size >= Tracks.RACE_MAX) continue;
+    if (r.race.st !== 'lobby' && r.race.st !== 'countdown') continue;
+    if (!best || r.players.size > best.players.size) best = r;
+  }
+  if (best) return best;
+  const id = 'rq-' + track + '-' + (nextRace++).toString(36), [theme, tod] = Tracks.TRACK_BY_ID[track].look || ['grass', 'day'];
+  const room = makeRoom(id, Tracks.TRACK_BY_ID[track].name, false, '', false, 0, { theme, tod, race: { track, queue: true } });
+  rooms.set(id, room);
+  return room;
+}
+let nextRace = 1;
+// how many are queueing / racing on each track (the queue's rooms), and the public races players are hosting
+function raceList() {
+  const tracks = Tracks.TRACKS.map(t => ({ id: t.id, queue: 0, racing: 0 }));
+  const byId = Object.fromEntries(tracks.map(t => [t.id, t])), list = [];
+  for (const r of rooms.values()) {
+    if (!r.race || !r.players.size) continue;
+    const t = byId[r.race.track];
+    if (r.race.queue && t) { if (r.race.st === 'lobby' || r.race.st === 'countdown') t.queue += r.players.size; else t.racing += r.players.size; }
+    else if (r.listed) list.push(Object.assign(roomInfo(r), { code: r.code }));
+  }
+  return { tracks, rooms: list.sort((a, b) => b.players - a.players).slice(0, 30) };
+}
 
 // ---------------------------------------------------------------- multiplayer run checks
 // Each signed-in player on a scored server holds a run token. While it's held, the server keeps its own
@@ -186,7 +288,7 @@ function cleanState(st) {
 function roster(room) { return [...room.players.values()].map(p => ({ id: p.id, name: p.name, color: p.color, title: p.title || null, acct: !!(p.account && p.account.name), veh: p.veh === 'bike' || p.veh === 'van' ? p.veh : undefined, model: p.model && p.model !== 'm4' ? p.model : undefined })); }
 // which car a player drives (Garage): looks only, every car has the same hitbox
 const CAR_MODELS = ['m4'];
-const cleanModel = m => (CAR_MODELS.includes(m) ? m : 'm4');
+const cleanModel = m => (CAR_MODELS.includes(m) || /^f1:[a-z]{2,10}:#[0-9a-f]{6}(:[a-z]{2,8}:#[0-9a-f]{6})?$/.test(m) ? m : 'm4');   // (racing: 'f1:<pattern>:<colour 2>[:<rim style>:<rim colour>]', the F1 paint pattern + rims)
 // the motorcycle and the van: only for the accounts in DB.BIKE_NAMES (anyone else asking for them stays a car;
 // the van drives and scores as a car, other players just see the van)
 const mayBike = p => !!(p.account && p.account.name && DB.BIKE_NAMES.includes(p.account.name.toLowerCase()));
@@ -222,16 +324,18 @@ function claimWrecks(p, list) {
 
 function joinRoom(p, room) {
   leaveRoom(p);
-  if (room.players.size >= MAX_PLAYERS) { send(p.ws, { t: 'error', msg: `${room.name} is full (${MAX_PLAYERS} players).` }); return; }
+  if (room.players.size >= maxOf(room)) { send(p.ws, { t: 'error', msg: `${room.name} is full (${maxOf(room)} players).` }); return; }
   // parking space: the lowest one nobody in the room is using
   const used = new Set([...room.players.values()].map(o => o.slot));
   let slot = 0; while (used.has(slot)) slot++;
   room.players.set(p.id, p); p.room = room; p.st = null; p.agent = null; p.slot = slot;
   p.best = room.bests.get(p.name) || 0;                 // best score on this server comes back if you rejoin
-  if (!room.traffic) room.traffic = new RingTraffic();
+  if (!room.traffic && !room.race) room.traffic = new RingTraffic();   // (race tracks have no traffic)
   p.title = titleOf(p);
   send(p.ws, { t: 'joined', id: p.id, room: room.id, name: room.name, official: room.official, listed: room.listed, code: room.code, slot, best: p.best,
-    scored: room.scored, density: room.density, theme: room.theme, tod: room.tod, bin: !!p.bin });   // (bin: binary positions understood)
+    scored: room.scored, density: room.density, theme: room.theme, tod: room.tod, bin: !!p.bin,   // (bin: binary positions understood)
+    race: room.race ? { track: room.race.track, laps: room.race.laps, queue: room.race.queue } : undefined });
+  if (room.race) send(p.ws, raceMsg(room));            // (where the race is at: lobby / countdown / racing...)
   issueMpToken(p);                                     // (scored server + signed in: runs can go on the leaderboard)
   broadcast(room, { t: 'roster', list: roster(room) });
   broadcast(room, { t: 'chat', sys: 'join', name: p.name, title: p.title || null });   // "Name (Title) joined the server"
@@ -245,7 +349,11 @@ function leaveRoom(p) {
     broadcast(room, { t: 'roster', list: roster(room) });
     broadcast(room, { t: 'chat', sys: 'leave', name: p.name, title: p.title || null });
   }
-  else { room.emptySince = Date.now(); room.traffic = null; }   // nobody left: drop the traffic
+  else {
+    room.emptySince = Date.now(); room.traffic = null;  // nobody left: drop the traffic
+    if (room.race && room.race.queue) rooms.delete(room.id);   // (an empty queue lobby just closes)
+    else if (room.race) { room.race.st = 'lobby'; room.race.grid = []; }
+  }
   if (p.account) presenceChanged(p.account.id);
 }
 
@@ -255,7 +363,7 @@ const server = http.createServer((req, res) => {
   if (req.url.startsWith('/api/servers')) {
     const all = [...rooms.values()];
     const official = all.filter(r => r.official).map(roomInfo);
-    const pub = all.filter(r => !r.official && r.listed && r.players.size).map(roomInfo)   // (players' public servers while someone's on them)
+    const pub = all.filter(r => !r.official && !r.race && r.listed && r.players.size).map(roomInfo)   // (players' public servers while someone's on them)
       .sort((a, b) => b.players - a.players).slice(0, 50);
     let online = 0; for (const r of rooms.values()) online += r.players.size;
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' });
@@ -264,6 +372,13 @@ const server = http.createServer((req, res) => {
   }
   const json = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); };
   const url = new URL(req.url, 'http://x'), route = url.pathname;
+  // racing: who's queueing / racing on each track + public hosted races
+  if (route === '/api/race') {
+    let online = 0; for (const r of rooms.values()) online += r.players.size;
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify(Object.assign(raceList(), { online })));
+    return;
+  }
   const ip = req.headers['x-forwarded-for'] ? String(req.headers['x-forwarded-for']).split(',')[0].trim() : req.socket.remoteAddress;
   const body = (fn, max = 8192) => {                    // JSON POST bodies (small, except run logs)
     let b = '';
@@ -447,15 +562,97 @@ const server = http.createServer((req, res) => {
 
   // leaderboard: GET /api/leaderboard?mode=sp|mp -> top 100 (signed-in drivers only, under their current name)
   //              GET /api/leaderboard/me?mode=sp|mp (Bearer) -> your rank + the 10 drivers ahead of you and 10 behind
+  //              ?season=0 (the beta) / 1 (Season 1, the current one: the default)
+  //              GET /api/laps?track=<id>[&me=1] -> racing: best time-trial laps on a track (this season)
+  //              GET /api/races?track=<id>[&me=1] -> racing: fastest 3-lap race finish on a track
   const lbRow = e => ({ rank: e.rank, name: Accounts.nameOf(e.uid) || 'Driver', title: e.title || null, score: e.score, t: e.t, dur: e.dur || 0, server: e.server });
   if (route === '/api/leaderboard' || route === '/api/leaderboard/me') {
-    const mode = url.searchParams.get('mode') === 'mp' ? 'mp' : 'sp';
+    const mode = url.searchParams.get('mode') === 'mp' ? 'mp' : 'sp', sq = url.searchParams.get('season');
+    const season = sq !== null && DB.SEASONS.includes(+sq) ? +sq : DB.SEASON;
     try {
-      if (route === '/api/leaderboard') { json(200, { mode, persistent: true, accounts: Accounts.enabled(), list: DB.top(mode).map(lbRow) }); return; }
+      if (route === '/api/leaderboard') { json(200, { mode, season, current: DB.SEASON, persistent: true, accounts: Accounts.enabled(), list: DB.top(mode, 100, season).map(lbRow) }); return; }
       const u = bearer(); if (!u) { json(401, { error: 'Sign in to see your position.' }); return; }
-      const a = DB.around(mode, u.id, 10);
-      json(200, { mode, rank: a.rank, total: a.total, list: a.list.map(lbRow) });
+      const a = DB.around(mode, u.id, 10, season);
+      json(200, { mode, season, current: DB.SEASON, rank: a.rank, total: a.total, list: a.list.map(lbRow) });
     } catch (e) { console.log('leaderboard error:', e.message); json(500, { error: 'leaderboard unavailable' }); }
+    return;
+  }
+  if (route === '/api/laps') {
+    const track = Tracks.TRACK_BY_ID[url.searchParams.get('track')] ? url.searchParams.get('track') : Tracks.TRACKS[0].id, sq = url.searchParams.get('season');
+    const season = sq !== null && DB.SEASONS.includes(+sq) ? +sq : DB.SEASON;
+    const row = e => ({ rank: e.rank, name: Accounts.nameOf(e.uid) || 'Driver', title: e.title || null, ms: e.ms, t: e.t });
+    try {
+      if (!url.searchParams.get('me')) { json(200, { track, season, accounts: Accounts.enabled(), list: DB.lapTop(track, 100, season).map(row) }); return; }
+      const u = bearer(); if (!u) { json(401, { error: 'Sign in to see your position.' }); return; }
+      const a = DB.lapAround(track, u.id, 10, season);
+      json(200, { track, season, rank: a.rank, total: a.total, list: a.list.map(row) });
+    } catch (e) { console.log('laps error:', e.message); json(500, { error: 'leaderboard unavailable' }); }
+    return;
+  }
+  // GET /api/races?track=<id>[&me=1] -> racing: fastest finish of each driver in a race on a track (this season)
+  if (route === '/api/races') {
+    const track = Tracks.TRACK_BY_ID[url.searchParams.get('track')] ? url.searchParams.get('track') : Tracks.TRACKS[0].id;
+    const row = e => ({ rank: e.rank, name: Accounts.nameOf(e.uid) || 'Driver', title: e.title || null, ms: e.ms, t: e.t });
+    try {
+      if (!url.searchParams.get('me')) { json(200, { track, accounts: Accounts.enabled(), list: DB.raceTop(track, 100).map(row) }); return; }
+      const u = bearer(); if (!u) { json(401, { error: 'Sign in to see your position.' }); return; }
+      const a = DB.raceAround(track, u.id, 10);
+      json(200, { track, rank: a.rank, total: a.total, list: a.list.map(row) });
+    } catch (e) { console.log('races error:', e.message); json(500, { error: 'leaderboard unavailable' }); }
+    return;
+  }
+  // racing time trial: POST /api/lap/start {session, track} -> {token} when a lap starts; POST /api/lap {session, token, track, ms}
+  // A lap counts if its token was issued at least as long ago as the lap took (with a little slack for the trip
+  // here) and it's not quicker than the whole lap at top speed (Tracks.minLapMs).
+  if (route === '/api/lap/start' && req.method === 'POST') {
+    body(m => {
+      const u = Accounts.bySession(m.session);
+      if (!u || !u.name) { json(401, { error: 'Sign in to get on the leaderboard.' }); return; }
+      if (DB.isBanned(u.id) || !Tracks.TRACK_BY_ID[m.track]) { json(403, { error: 'no' }); return; }
+      if (tooFast('lapstart:' + u.id, 400)) { json(429, { error: 'too fast' }); return; }
+      json(200, { token: Tokens.issue({ u: u.id, m: 'lap', k: m.track }) });
+    });
+    return;
+  }
+  // time trial marks: POST /api/lap/sector {session, token, track, k} when the lights go out (k 0), at a third
+  // (k 1) and two thirds (k 2) of the lap -> a new token carrying the server's own time of each mark, which is
+  // checked against the lap's splits when it's submitted.
+  if (route === '/api/lap/sector' && req.method === 'POST') {
+    body(m => {
+      const u = Accounts.bySession(m.session), tok = Tokens.read(m.token), k = Math.floor(Number(m.k));
+      if (!u || !tok || tok.u !== u.id || tok.m !== 'lap' || tok.k !== m.track || !(k >= 0 && k <= 2) || (tok.s || []).length !== k) { json(400, { error: 'Bad lap token.' }); return; }
+      if (tooFast('lapsec:' + u.id, 300)) { json(429, { error: 'too fast' }); return; }
+      json(200, { token: Tokens.issue({ u: u.id, m: 'lap', k: m.track, t0: tok.t0 || tok.t, s: (tok.s || []).concat(Date.now()) }) });
+    });
+    return;
+  }
+  // A lap counts only if (time checks, anti-cheat):
+  //  - it isn't quicker than the whole lap at top speed (Tracks.minLapMs), nor any third of it
+  //  - the server's own clock at lights out, the two sector marks and the finish agrees with the lap's splits,
+  //    each third and the whole lap (within 2 s: a game running in slow motion or a made-up time won't match)
+  if (route === '/api/lap' && req.method === 'POST') {
+    body(m => {
+      const u = Accounts.bySession(m.session);
+      if (!u || !u.name) { json(401, { error: 'Sign in to get on the leaderboard.' }); return; }
+      if (DB.isBanned(u.id)) { json(403, { error: 'This account is banned from the leaderboards.' }); return; }
+      const tok = Tokens.read(m.token), ms = Math.round(Number(m.ms)), now = Date.now();
+      if (!tok || tok.u !== u.id || tok.m !== 'lap' || tok.k !== m.track || !Tracks.TRACK_BY_ID[m.track]) { json(400, { error: 'Bad lap token.' }); return; }
+      const t0 = tok.t0 || tok.t;
+      if (now - t0 > 3 * 3600e3) { json(400, { error: 'Lap token expired.' }); return; }
+      const min = Tracks.minLapMs(Tracks.trackLength(m.track)), pen = Number(m.pen) === 5 ? 5000 : 0, raw = ms - pen;   // (raw: driven, without the jump-start +5 s)
+      const sp = Array.isArray(m.splits) ? m.splits.map(Number) : [], S = tok.s || [], SLACK = 2000;
+      const off = (game, server) => Math.abs(game - server) > SLACK;
+      const why = !(ms >= min && ms < 30 * 60e3) ? 'too fast'
+        : S.length !== 3 || sp.length !== 2 || !sp.every(Number.isFinite) ? 'no sector times'
+        : !(sp[0] >= min / 3 && sp[1] - sp[0] >= min / 3 && raw - sp[1] >= min / 3) ? 'a sector too fast'
+        : off(sp[0], S[1] - S[0]) ? `sector 1 ${sp[0]} ms, server saw ${S[1] - S[0]} ms`
+        : off(sp[1] - sp[0], S[2] - S[1]) ? `sector 2 ${sp[1] - sp[0]} ms, server saw ${S[2] - S[1]} ms`
+        : off(raw - sp[1], now - S[2]) ? `sector 3 ${raw - sp[1]} ms, server saw ${now - S[2]} ms`
+        : off(raw, now - S[0]) ? `lap ${raw} ms, server saw ${now - S[0]} ms` : null;
+      if (why) { console.log(`lap rejected: ${u.name} ${m.track} ${ms} ms: ${why}`); json(200, { rank: null, rejected: why }); return; }
+      if (!DB.spendToken(tok.n)) { json(409, { error: 'That lap was already submitted.' }); return; }
+      json(200, DB.addLap(u.id, m.track, ms));
+    });
     return;
   }
   // scored runs. Singleplayer: POST /api/run/start {session} -> {token} before a run can count.
@@ -535,7 +732,8 @@ wss.on('connection', ws => {
       const room = p.room; if (!room) return;
       const st = cleanState(m.st); if (!st) return;
       p.st = st;
-      if (st.score > p.best && p.veh !== 'bike') { p.best = st.score; room.bests.set(p.name, p.best); }   // (not on the motorcycle)
+      if (room.race && room.race.tr) raceTrace(room.race, p, st);   // (racing: the server's own record, for the time checks)
+      if (!room.race && st.score > p.best && p.veh !== 'bike') { p.best = st.score; room.bests.set(p.name, p.best); }   // (not on the motorcycle; racing: "score" is race progress)
       trackRun(p, st);                                   // (the server's own record of the run, for checking it)
       claimWrecks(p, st.w);                              // (cars they hit: the shared traffic follows their crash)
       st.best = p.best;
@@ -563,6 +761,32 @@ wss.on('connection', ws => {
       if (p.room) broadcast(p.room, { t: 'roster', list: roster(p.room) });
       return;
     }   // a streak ended: a fresh token for the next run
+    // racing: a lap done / the finish (finishing times are measured here, from the start)
+    if (m.t === 'rlap' || m.t === 'rfin') {
+      const room = p.room, R = room && room.race;
+      if (!R || R.st !== 'racing' || !R.grid.includes(p.id)) return;
+      const now = Date.now(), L = Tracks.trackLength(R.track), minLap = RACE_TEST ? 0 : Tracks.minLapMs(L);
+      const lastAt = R.lapAt.get(p.id) || R.goAt, done = R.lap.get(p.id) || 0;
+      if (m.t === 'rlap') {                              // (in order, and not quicker than a flat-out lap)
+        const n = Math.floor(num(m.lap, 0, 99));
+        if (n === done + 1 && now - lastAt >= minLap) { R.lap.set(p.id, n); R.lapAt.set(p.id, now); }
+        else if (n > done) console.log(`race check: ${p.name} ${R.track}: lap ${n} refused (had ${done}, ${now - lastAt} ms, min ${minLap})`);
+        return;
+      }
+      if (R.finish.has(p.id)) return;
+      const ms = now - R.goAt, T = R.tr.get(p.id);
+      if (done < R.laps - 1 || now - lastAt < minLap || ms < minLap * R.laps) return;   // (skipped laps / too quick to be real)
+      if (!RACE_TEST && (!T || T.bad || T.maxS < R.laps * L - 300)) {                 // (didn't really drive the distance)
+        console.log(`race check: ${p.name} ${R.track}: finish refused (${T ? T.bad || 'covered ' + Math.round(T.maxS) + ' of ' + Math.round(R.laps * L) + ' m' : 'no position reports'})`);
+        return;
+      }
+      const pen = Math.round(num(m.pen, 0, 300));          // (penalty seconds the game handed out: jump start, track limits, collisions)
+      R.finish.set(p.id, { ms: ms + pen * 1000, pen, name: p.name, color: p.color });
+      R.lap.set(p.id, R.laps);
+      if (!R.firstAt) R.firstAt = Date.now();
+      broadcast(room, { t: 'rfinish', id: p.id, name: p.name, pos: R.finish.size, ms });
+      return;
+    }
     // server chat: "Name (Title): message" to everyone on the server, at most one message per 3 s per player
     if (m.t === 'chat') {
       const room = p.room; if (!room) return;
@@ -595,6 +819,17 @@ wss.on('connection', ws => {
       const room = code ? rooms.get('p-' + code.slice(0, 3) + '-' + code.slice(3)) : rooms.get(id);
       if (!room) send(ws, { t: 'error', msg: code ? `No server with code ${code.slice(0, 3)}-${code.slice(3)}. Check the code.` : 'That server no longer exists.' });
       else joinRoom(p, room);
+    } else if (m.t === 'raceq') {                       // racing: queue for a track (its public lobby)
+      if (!Tracks.TRACK_BY_ID[m.track]) return;
+      joinRoom(p, queueRoom(m.track));
+    } else if (m.t === 'racehost') {                    // racing: host a public / private race on a track
+      if (!Tracks.TRACK_BY_ID[m.track]) return;
+      const code = newCode();
+      const roomName = String(m.roomName || '').replace(/[^\p{L}\p{N} _.'!\-]/gu, '').trim().slice(0, 24) || `${p.name}'s race`;
+      const room = makeRoom('p-' + code, roomName, false, code, false, 0,
+        { listed: !!m.listed, theme: THEMES.includes(m.theme) ? m.theme : 'grass', tod: TODS.includes(m.tod) ? m.tod : 'day', race: { track: m.track } });
+      rooms.set(room.id, room);
+      joinRoom(p, room);
     } else if (m.t === 'create') {
       const code = newCode(), scored = !!m.scored;
       const roomName = String(m.roomName || '').replace(/[^\p{L}\p{N} _.'!\-]/gu, '').trim().slice(0, 24) || `${p.name}'s server`;

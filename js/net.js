@@ -122,6 +122,16 @@ const Net = {
     return this.request({ t: 'create', name, color, ext: this.ext, bin: 1, veh: this.veh, model: this.model, scored: !!opts.scored, density: opts.density,
       listed: !!opts.listed, roomName: opts.roomName, theme: opts.theme, tod: opts.tod }, opts.listed ? 'Creating your public server…' : 'Creating your private server…');
   },
+  // racing: queue for a track (its public lobby) / host a race (opts: track, listed, roomName, theme, tod)
+  raceQueue(track, name, color) { return this.request({ t: 'raceq', track, name, color, ext: this.ext, bin: 1, veh: this.veh, model: this.model }, 'Joining the queue…'); },
+  raceHost(name, color, opts) {
+    return this.request({ t: 'racehost', name, color, ext: this.ext, bin: 1, veh: this.veh, model: this.model, track: opts.track, listed: !!opts.listed,
+      roomName: opts.roomName, theme: opts.theme, tod: opts.tod }, opts.listed ? 'Creating your public race…' : 'Creating your private race…');
+  },
+  async raceList() {
+    const base = await this.findBase(); if (!base) return null;
+    try { return await (await fetch(base + '/api/race', { cache: 'no-store' })).json(); } catch (e) { return null; }
+  },
   leave() {
     if (!this.room) return;
     this.send({ t: 'leave' });
@@ -163,12 +173,15 @@ const Net = {
       // official: one of the game's own servers; listed: a player's public server (also joinable by code)
       this.room = { id: m.room, name: m.name, pub: !!(m.official ?? m.pub), official: !!(m.official ?? m.pub), listed: !!m.listed, code: m.code || '',
         scored: !!m.scored, density: Number.isFinite(m.density) ? m.density : 0.6, theme: m.theme || 'grass', tod: m.tod || 'day',
-        bin: !!m.bin };                                // (this server reads binary positions; one from before the update doesn't)
+        bin: !!m.bin,                                  // (this server reads binary positions; one from before the update doesn't)
+        race: m.race && typeof Tracks !== 'undefined' && Tracks.TRACK_BY_ID[m.race.track] ? m.race : null };   // (a race room: track, laps)
       this.myBest = m.best || 0;
       this.status(this.room.official ? `Connected to ${m.name}` : `Connected to ${m.name} · code ${m.code}`, 'ok');
       this.changed();
       if (this.onJoined) this.onJoined(this.room, m.slot || 0);
-    } else if (m.t === 'error') this.status(m.msg, 'err');
+    } else if (m.t === 'race') { if (this.room && this.room.race && this.onRace) this.onRace(m); }   // (racing: lobby / countdown / grid / racing / results)
+    else if (m.t === 'rfinish') { if (this.room && this.room.race && this.onRaceFinish) this.onRaceFinish(m); }
+    else if (m.t === 'error') this.status(m.msg, 'err');
     else if (m.t === 'runtoken') this.runToken = typeof m.token === 'string' ? m.token : null;   // (lets my next scored run count)
     else if (m.t === 'presence' || m.t === 'msg' || m.t === 'social' || m.t === 'inbox') { if (this.onSocial) this.onSocial(m); }   // (friends: social.js)
     else if (m.t === 'chat' || m.t === 'chatwait') { if (this.room && this.onChat) this.onChat(m); }   // (server chat: social.js)
@@ -186,13 +199,14 @@ const Net = {
     if (!/^#[0-9a-f]{6}$/i.test(color)) color = '#a6b0b8';   // only plain colours from other players
     title = Titles.TITLE_BY_ID[title] ? title : null;
     veh = veh === 'bike' || veh === 'van' ? veh : 'car';   // (the owners' van: the server only passes it on for them)
-    model = PLAYER_CARS[model] ? model : 'm4';
+    model = PLAYER_CARS[model] || /^f1:[a-z]+:#[0-9a-f]{6}(:[a-z]+:#[0-9a-f]{6})?$/.test(model) ? model : 'm4';   // (racing: 'f1:<pattern>:<colour 2>')
     let p = this.players.get(id);
     if (!p) { p = { id, name, color, buf: [] }; this.players.set(id, p); }
     if (p.name !== name || p.color !== color || p.title !== title || p.veh !== veh || p.model !== model || !p.g) { p.name = name; p.color = color; p.title = title; p.veh = veh; p.model = model; this.removeVis(p); this.makeVis(p); }
     // their hitbox (bumps) and size (traffic, proximity) follow what they drive
-    p.hull = veh === 'bike' ? BIKE.hull : null;
-    p.ext = veh === 'bike' ? { front: BIKE.front, rear: BIKE.rear, hw: BIKE.W } : null;
+    const bike = veh === 'bike' && !(this.room && this.room.race);   // (racing: F1 cars all round, the car's hitbox)
+    p.hull = bike ? BIKE.hull : null;
+    p.ext = bike ? { front: BIKE.front, rear: BIKE.rear, hw: BIKE.W } : null;
     return p;
   },
   // Each update carries the sender's clock (t). The gap between their clock and ours is the network
@@ -215,7 +229,10 @@ const Net = {
   makeVis(p) {
     if (!this.scene) return;
     p.g = new THREE.Group();
-    if (p.veh === 'bike') {                       // motorcycle (light already: no separate far model)
+    if (this.room && this.room.race && typeof makeF1 === 'function') {   // racing: everyone's in an F1 car (in their paint)
+      p.vis = p.visFull = p.visLite = makeF1(paintMat(p.color || '#a6b0b8'), f1ParseLivery(p.model));
+      p.g.add(p.vis.root);
+    } else if (p.veh === 'bike') {                       // motorcycle (light already: no separate far model)
       p.vis = p.visFull = p.visLite = makeBike(paintMat(p.color || '#a6b0b8'));
       p.g.add(p.vis.root);
     } else {
@@ -376,6 +393,7 @@ const Net = {
   tick(dt, st) {
     if (!this.room) return;
     this.sendT -= dt;
+    if (this.sendT <= 0 && this.silent) this.sendT = NET_RATE;   // (racing: practising while a race you're not in runs - nobody sees you)
     if (this.sendT <= 0) {
       this.sendT += NET_RATE; if (this.sendT < 0) this.sendT = NET_RATE;
       if (this.room.bin) { if (this.ws && this.ws.readyState === 1) this.ws.send(NetCodec.encodeState(st)); }   // (~42 bytes instead of ~190)
@@ -397,7 +415,7 @@ const Net = {
       const ad = Math.abs(s.s - myS), lite = p.vis === p.visLite ? ad > 40 : ad > 50;
       if (p.visLite !== p.visFull && lite !== (p.vis === p.visLite)) { p.vis.root.visible = false; p.vis = lite ? p.visLite : p.visFull; p.vis.root.visible = true; p.vis.spin = (lite ? p.visFull : p.visLite).spin; }
       p.vis.brake.visible = !!s.brake && !p.vanMesh;
-      if (p.veh === 'bike') {
+      if (p.veh === 'bike' && p.vis.lean) {
         // lean into the turn they're making: sideways acceleration from their speed and steering (2.8 m wheelbase physics)
         const v = s.v || 0, ay = v * v * Math.tan(U.clamp(s.steer || 0, -0.6, 0.6)) / 2.8;
         p.lean = U.damp(p.lean || 0, U.clamp(-Math.atan2(ay, 9.81) * 0.85, -0.72, 0.72), 6, dt);

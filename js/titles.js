@@ -36,6 +36,17 @@ const TITLES = [
   { id: 'alpha',       name: 'Alpha Tester',           rarity: 'exotic',    how: 'grant', desc: 'Played PolyWeave during the alpha' },
   { id: 'beta',        name: 'Beta Tester',            rarity: 'epic',      how: 'grant', desc: 'Played PolyWeave during the beta' },
   { id: 'verified',    name: 'Verified',               rarity: 'common',    how: 'grant', desc: 'Signed in with Google' },
+  // Season 1 rewards: sent at the end of the season to the top 5 of the singleplayer and multiplayer leaderboards
+  { id: 's1champ',     name: 'S1 Champion',            rarity: 'divine',    how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 1st place on a leaderboard' },
+  { id: 's1podium',    name: 'S1 Podium',              rarity: 'legendary', how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 2nd or 3rd place on a leaderboard' },
+  { id: 's1contender', name: 'S1 Contender',           rarity: 'mythic',    how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 4th or 5th place on a leaderboard' },
+  // ...and the racing leaderboards (1st / 2nd / 3rd on every track's board): time trials (Track) and races (Race)
+  { id: 's1trackchamp',  name: 'S1 Track Champion',    rarity: 'divine',    how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 1st place on a time-trial leaderboard' },
+  { id: 's1trackfinal',  name: 'S1 Track Finalist',    rarity: 'legendary', how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 2nd place on a time-trial leaderboard' },
+  { id: 's1trackpodium', name: 'S1 Track Podium',      rarity: 'mythic',    how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 3rd place on a time-trial leaderboard' },
+  { id: 's1racechamp',   name: 'S1 Race Champion',     rarity: 'divine',    how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 1st place on a races leaderboard' },
+  { id: 's1racefinal',   name: 'S1 Race Finalist',     rarity: 'legendary', how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 2nd place on a races leaderboard' },
+  { id: 's1racepodium',  name: 'S1 Race Podium',       rarity: 'mythic',    how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 3rd place on a races leaderboard' },
   // best single run (either mode)
   { id: 'sixfig',      name: 'Six Figures',            rarity: 'rare',      how: 'run',  score: 1e5, stat: 'score', value: 1e5, desc: '100,000 points in one run' },
   { id: 'millionaire', name: 'Millionaire',            rarity: 'epic',      how: 'run',  score: 1e6, stat: 'score', value: 1e6, desc: '1,000,000 points in one run' },
@@ -88,5 +99,16 @@ const desc = (t, units) => {
 // a tier goal in the player's units, for the Achievements screen (distance: the round number shown)
 const goalText = (t, units) => (t.km ? (units === 'kmh' ? t.km : t.mi).toLocaleString('en-US') : t.value.toLocaleString('en-US'));
 
-const Titles = { RARITIES, RARITY_ORDER, TITLES, TITLE_BY_ID, ACHIEVEMENTS, MILE, titlesForRun, titlesForTeam, titlesForStats, desc, goalText };
+// season rewards by final leaderboard place (1-based): the title id, or null
+const SEASON_REWARDS = { 1: [[1, 1, 's1champ'], [2, 3, 's1podium'], [4, 5, 's1contender']] };
+// racing leaderboards (each track's time-trial and races boards): board 'tt' | 'races'
+const RACE_REWARDS = {
+  1: { tt: [[1, 1, 's1trackchamp'], [2, 2, 's1trackfinal'], [3, 3, 's1trackpodium']], races: [[1, 1, 's1racechamp'], [2, 2, 's1racefinal'], [3, 3, 's1racepodium']] },
+};
+const seasonReward = (season, rank, board) => {
+  const list = board ? (RACE_REWARDS[season] || {})[board] : SEASON_REWARDS[season];
+  const r = (list || []).find(([a, b]) => rank >= a && rank <= b); return r ? r[2] : null;
+};
+
+const Titles = { RARITIES, RARITY_ORDER, TITLES, TITLE_BY_ID, ACHIEVEMENTS, MILE, SEASON_REWARDS, RACE_REWARDS, titlesForRun, titlesForTeam, titlesForStats, seasonReward, desc, goalText };
 if (typeof module !== 'undefined' && module.exports) module.exports = Titles;

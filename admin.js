@@ -14,6 +14,8 @@
 //    sudo -u polyweave node admin.js alpha off            stop giving Alpha Tester to new accounts (alpha on / alpha)
 //    sudo -u polyweave node admin.js beta off             stop giving Beta Tester to new accounts (beta on / beta)
 //    sudo -u polyweave node admin.js retitle              wipe every title and send them all back to inboxes
+//    sudo -u polyweave node admin.js season-rewards 1     end of Season 1: top 5 of each leaderboard get S1 titles
+//    sudo -u polyweave node admin.js laps <track>         a race track's lap leaderboard (ardennes / airfield / saopaulo)
 // =====================================================================
 const DB = require('./db');
 const Accounts = require('./accounts');
@@ -92,6 +94,18 @@ switch (cmd) {
     if (a === 'on' || a === 'off') DB.setBetaOpen(a === 'on');
     console.log(`New accounts ${DB.betaOpen() ? 'GET' : 'do NOT get'} Beta Tester.` + (a ? '' : ' (change it: beta on / beta off)'));
     break;
+  case 'season-rewards': {   // end of a season: top 5 of each leaderboard get the season's titles in their inbox
+    const season = Number(a);
+    if (!Titles.SEASON_REWARDS[season]) { console.log('Usage: node admin.js season-rewards <season number>, e.g. season-rewards 1'); process.exit(1); }
+    const sent = DB.seasonRewards(season);
+    for (const s of sent) console.log(`${(Accounts.nameOf(s.uid) || '?').padEnd(16)} ${s.mode} #${s.rank}  ${Titles.TITLE_BY_ID[s.title].name}`);
+    console.log(`${sent.length} season titles sent.`);
+    break;
+  }
+  case 'laps': {   // a track's lap leaderboard
+    for (const e of DB.lapTop(a || 'ardennes', 100)) console.log(`${String(e.rank).padStart(3)}. ${(Accounts.nameOf(e.uid) || '?').padEnd(16)} ${(e.ms / 1000).toFixed(3).padStart(9)} s  ${day(e.t)}`);
+    break;
+  }
   case 'titles':
     for (const t of Titles.TITLES) console.log(`${t.id.padEnd(12)} ${t.name.padEnd(20)} ${Titles.RARITIES[t.rarity].name.padEnd(12)} ${Titles.desc(t, 'kmh')}`);
     break;

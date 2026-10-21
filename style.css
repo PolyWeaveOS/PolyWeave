@@ -231,8 +231,8 @@ button:disabled { opacity: .45; cursor: default; }
 .tabs { display: flex; gap: 8px; margin-bottom: 12px; }
 .tab { padding: 9px 16px; font-size: 13px; letter-spacing: 2px; }
 .tab.sel { background: var(--accent); color: #1a1f28; border-color: var(--accent); }
-#lbNote { font-size: 13px; opacity: .75; margin-bottom: 8px; min-height: 16px; }
-#lbList { display: flex; flex-direction: column; gap: 18px; }
+#lbNote, #rlbNote { font-size: 13px; opacity: .75; margin-bottom: 8px; min-height: 16px; }
+#lbList, #rlbList { display: flex; flex-direction: column; gap: 18px; }
 /* podium: 2nd | 1st | 3rd */
 .podium { display: grid; grid-template-columns: 1fr 1.15fr 1fr; gap: 10px; align-items: end; max-width: 620px; width: 100%; margin: 6px auto 0; }
 .pod { display: flex; flex-direction: column; align-items: center; text-align: center; min-width: 0; }
@@ -687,8 +687,7 @@ button.big:hover { background: #ffe37a; }
 .gCustom { margin-top: 10px; }
 .gRims { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
 .gRim.sel { background: var(--accent); color: #1a1f28; border-color: var(--accent); }
-.gNote { margin-top: 16px; font-size: 12px; opacity: .6; }
-.gHint { position: absolute; right: 22px; bottom: 18px; font-size: 12px; letter-spacing: 1px; opacity: .7; text-shadow: 0 1px 3px rgba(0,0,0,.6); pointer-events: none; }
+.gNote { margin-top: 16px; font-size: 12px; opacity: .6; }.gHint { position: absolute; right: 22px; bottom: 18px; font-size: 12px; letter-spacing: 1px; opacity: .7; text-shadow: 0 1px 3px rgba(0,0,0,.6); pointer-events: none; }
 
 /* ---------- Settings tabs and wheel buttons ---------- */
 .setTabs { flex-wrap: wrap; }
@@ -700,3 +699,138 @@ button.big:hover { background: #ffe37a; }
 .sub.small { font-size: 12px; margin: 0 0 6px; }
 /* the button picked with a wheel / controller D-pad */
 .padFocus { outline: 3px solid var(--accent) !important; outline-offset: 2px; }
+
+/* ---------- Season 1: racing (limited-time mode) ---------- */
+/* main menu: the big RACING button under the others */
+.ltmCard { margin-top: clamp(14px, 1.8vw, 22px); width: min(100%, calc(6 * clamp(118px, 13vw, 184px) + 5 * clamp(10px, 1.4vw, 18px)));
+  display: flex; align-items: center; gap: clamp(14px, 2vw, 24px); padding: clamp(12px, 1.5vw, 18px) clamp(18px, 2.2vw, 28px); text-align: left;
+  background: var(--panel); border: 2px solid rgba(255,255,255,.08); border-radius: 18px; color: #fff; box-shadow: 0 14px 40px rgba(0,0,0,.3);
+  transition: transform .15s ease, border-color .15s ease; }   /* (styled like the menu buttons above it) */
+.ltmCard:hover { transform: translateY(-4px); border-color: var(--accent); }
+.ltmFlag svg { width: clamp(56px, 6.4vw, 84px); height: auto; display: block; overflow: visible; }
+.ltmCard:hover .ltmFlag .bg { fill: var(--accent); } .ltmCard:hover .ltmFlag .fg { fill: #1a1f28; }
+.ltmText { flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.ltmTag { font-size: clamp(10px, .9vw, 12px); font-weight: 800; letter-spacing: 2px; color: var(--accent); }
+.ltmText b { font-size: clamp(22px, 2.6vw, 34px); font-weight: 900; letter-spacing: clamp(2px, .4vw, 5px); line-height: 1.05; }
+.ltmSub { font-size: clamp(11px, 1vw, 14px); opacity: .7; letter-spacing: .5px; }
+.ltmGo { font-size: clamp(13px, 1.2vw, 17px); font-weight: 900; letter-spacing: 2px; padding: 10px 18px; border-radius: 10px; background: var(--accent); color: #1a1f28; z-index: 1; }
+.ltmPill { font-size: 11px; letter-spacing: 2px; padding: 4px 9px; border-radius: 6px; background: rgba(255,216,74,.1); border: 1px solid rgba(255,216,74,.35); color: var(--yellow); vertical-align: middle; margin-left: 8px; }
+/* racing screen */
+.raceGrid { display: grid; grid-template-columns: 1.25fr 1fr; gap: 26px; }
+@media (max-width: 820px) { .raceGrid { grid-template-columns: 1fr; } }
+.raceOnline { opacity: .7; font-weight: 600; }
+.rcTrack { display: flex; gap: 12px; align-items: center; padding: 10px 12px; border-radius: 12px; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.07); margin-bottom: 10px; }
+.rcTrack canvas { width: 132px; height: 96px; flex: none; border-radius: 8px; background: rgba(0,0,0,.25); }
+.rcInfo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.rcInfo b { font-size: 15px; letter-spacing: 1.5px; }
+.rcInfo .len { font-size: 12px; color: var(--accent); font-weight: 700; letter-spacing: .5px; }
+.rcInfo p { margin: 2px 0; font-size: 12px; line-height: 1.35; opacity: .8; }
+.rcCount { font-size: 11px; font-weight: 800; letter-spacing: 1px; display: flex; align-items: center; gap: 5px; }
+.rcCount i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-left: 6px; } .rcCount i:first-child { margin-left: 0; }
+.rcCount i.q { background: #5bd47a; } .rcCount i.r { background: #ff5b5b; }
+.rcBest { font-size: 11px; opacity: .7; letter-spacing: .5px; font-variant-numeric: tabular-nums; }
+.rcBtns { display: flex; flex-direction: column; gap: 6px; flex: none; }
+.rcBtns button, .rcBtns button.go { min-width: 116px; height: 38px; padding: 0 12px; font-size: 13px; letter-spacing: 1.5px; }   /* (queue + time trial: the same size) */
+.raceWorld { margin-top: 2px; }
+#rcStatus { margin-top: 10px; min-height: 18px; font-size: 13px; }
+#rcStatus.err { color: var(--red); } #rcStatus.ok { color: #5bd47a; }
+/* while racing: the race HUD replaces the score */
+body.raceMode #scoreBox, body.raceMode #prox, body.raceMode #mpHud { display: none !important; }
+#raceHud { display: none; position: fixed; top: calc(18px * var(--hud, 1)); left: 50%; transform: translateX(-50%) scale(var(--hud, 1)); transform-origin: top center;
+  text-align: center; pointer-events: none; text-shadow: 0 2px 6px rgba(0,0,0,.45); }
+body.raceMode #raceHud { display: block; }
+#raceHud .rhPos { font-size: 46px; font-weight: 900; line-height: 1; color: var(--yellow); }
+#raceHud .rhPos small { font-size: 22px; opacity: .8; color: #fff; }
+#raceHud .rhLap { font-size: 15px; font-weight: 800; letter-spacing: 3px; margin-top: 4px; }
+#raceHud .rhTime { font-size: 40px; font-weight: 900; font-variant-numeric: tabular-nums; letter-spacing: 1px; line-height: 1.1; }
+#raceHud .rhBest { font-size: 13px; font-weight: 600; letter-spacing: 1.5px; opacity: .85; font-variant-numeric: tabular-nums; white-space: pre; }
+#raceBanner { position: fixed; top: calc(190px * var(--hud, 1)); left: 50%; transform: translateX(-50%); padding: 9px 20px; border-radius: 10px;
+  background: rgba(16,20,28,.62); font-size: calc(16px * var(--hud, 1) + 4px); font-weight: 800; letter-spacing: 2px; pointer-events: none; white-space: nowrap; text-shadow: 0 1px 3px rgba(0,0,0,.5); }
+/* start lights: an F1-style gantry - five dark pods of two lamps each; red one by one, then all green = go */
+#raceLights { position: fixed; top: 30%; left: 50%; transform: translate(-50%, -50%) scale(var(--hud, 1)); display: flex; gap: 9px; padding: 12px 14px 11px; border-radius: 14px;
+  background: #14171d; border-top: 3px solid var(--yellow); pointer-events: none; }
+#raceLights i { width: 40px; height: 84px; border-radius: 9px; background: #0a0b0e; display: flex; flex-direction: column; align-items: center; justify-content: space-evenly; }
+/* (flat colours, no shading: off = dark red, on = red, go = green) */
+#raceLights i::before, #raceLights i::after { content: ''; width: 27px; height: 27px; border-radius: 50%; background: #3a1214; transition: background .06s; }
+#raceLights i.on::before, #raceLights i.on::after { background: #ff2a2a; }
+#raceLights.go i::before, #raceLights.go i::after { background: #22dd66; }
+#raceStand { position: fixed; top: 18px; left: 18px; min-width: 190px; padding: 8px 10px; border-radius: 8px; background: rgba(16,20,28,.5); pointer-events: none;
+  transform: scale(var(--hud, 1)); transform-origin: top left; text-shadow: 0 1px 3px rgba(0,0,0,.5); }
+#raceStand .hd { font-size: 10px; letter-spacing: 1.5px; opacity: .7; margin-bottom: 3px; }
+#raceStand .r { display: flex; gap: 8px; font-size: 14px; font-weight: 700; line-height: 1.65; border-left: 4px solid var(--c, #fff); padding-left: 7px; }
+#raceStand .r .p { min-width: 16px; color: var(--yellow); font-variant-numeric: tabular-nums; }
+#raceStand .r .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
+#raceStand .r.you .n { color: #cfe8ff; }
+/* the timing tower (racing): F1-style, PolyWeave colours. Rows slide to their new place on an overtake. */
+#raceStand.tower { padding: 0; min-width: 0; width: 248px; background: rgba(14,17,24,.86); border-radius: 10px; overflow: hidden; box-shadow: 0 8px 24px rgba(0,0,0,.35); text-shadow: none; }
+#raceStand .twHd { display: flex; align-items: center; justify-content: space-between; padding: 7px 10px 6px; background: #0b0d12; border-bottom: 3px solid var(--yellow); }
+#raceStand .twLogo { font-size: 13px; font-weight: 900; letter-spacing: 1px; color: #fff; }
+#raceStand .twLogo b { color: var(--yellow); }
+#raceStand .twLap { font-size: 12px; font-weight: 800; letter-spacing: 1.5px; color: #e8ecf2; font-variant-numeric: tabular-nums; }
+#raceStand .twList { position: relative; transition: height .3s; }
+#raceStand .twRow { position: absolute; left: 0; right: 0; top: 0; height: 27px; display: flex; align-items: center; gap: 7px; padding: 0 9px 0 0;
+  font-size: 13px; font-weight: 800; color: #f2f4f7; transition: transform .55s cubic-bezier(.3,.9,.3,1), background .3s; border-bottom: 1px solid rgba(255,255,255,.05); }
+#raceStand .twP { width: 26px; height: 100%; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,.06); font-variant-numeric: tabular-nums; font-weight: 900; }
+#raceStand .twRow.p1 .twP { background: var(--yellow); color: #14161b; }
+#raceStand .twC { width: 4px; height: 17px; border-radius: 2px; flex: none; }
+#raceStand .twN { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; letter-spacing: .5px; }
+#raceStand .twG { min-width: 62px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; font-size: 12px; color: #c9d1dc; }
+#raceStand .twRow.p1 .twG { color: var(--yellow); font-weight: 900; letter-spacing: 1px; font-size: 11px; }
+#raceStand .twMv { font-size: 10px; font-weight: 900; width: 0; overflow: hidden; opacity: 0; transition: opacity .2s; }
+#raceStand .twMv.up, #raceStand .twMv.down { width: auto; opacity: 1; }
+#raceStand .twMv.up { color: #3ddc84; } #raceStand .twMv.down { color: #ff5a5a; }
+#raceStand .twRow.gain { background: rgba(61,220,132,.16); } #raceStand .twRow.lose { background: rgba(255,90,90,.13); }
+#raceStand .twRow.you { background: rgba(255,216,74,.14); }
+#raceStand .twRow.you .twN { color: var(--yellow); }
+#raceStand .twRow.dnf { opacity: .5; } #raceStand .twRow.dnf .twG { color: #ff5a5a; font-weight: 900; }
+#raceBanner.warn { background: rgba(200,20,28,.88); color: #fff; animation: warnPulse .6s ease-in-out infinite alternate; }
+@keyframes warnPulse { from { box-shadow: 0 0 0 rgba(255,40,40,0); } to { box-shadow: 0 0 24px rgba(255,40,40,.7); } }
+#raceResults { position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%); width: min(420px, 92vw); padding: 18px 20px; border-radius: 14px;
+  background: rgba(16,20,28,.9); box-shadow: 0 20px 60px rgba(0,0,0,.45); pointer-events: none; }
+.rrHead { font-size: 20px; font-weight: 900; letter-spacing: 4px; text-align: center; margin-bottom: 10px; color: var(--accent); }
+.rrRow { display: flex; gap: 10px; align-items: center; padding: 6px 8px; border-radius: 8px; font-weight: 700; }
+.rrRow:nth-child(2) { background: rgba(255,216,74,.14); }
+.rrRow.me { outline: 2px solid var(--accent); }
+.rrRow .p { min-width: 38px; color: var(--yellow); font-weight: 900; }
+.rrRow .n { flex: 1; border-left: 4px solid var(--c, #fff); padding-left: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rrRow .t { font-variant-numeric: tabular-nums; opacity: .9; }
+.rrRow .pen { font-size: 11px; font-weight: 800; color: #ff6b6b; }
+.rrFoot { text-align: center; font-size: 12px; opacity: .6; margin-top: 10px; }
+/* racing finish (race.js startFin): slow-motion fly-by - the driving HUD goes, a stats card on the right */
+body.finCam #raceHud, body.finCam #speedo, body.finCam #raceStand, body.finCam #raceBanner, body.finCam #minimap, body.finCam #tags, body.finCam #hint, body.finCam #msgs { display: none !important; }
+#finCard { position: fixed; right: 4vw; top: 50%; transform: translateY(-50%); width: min(340px, 88vw); padding: 20px 22px 16px; border-radius: 14px;
+  background: rgba(16,20,28,.88); border-left: 4px solid var(--yellow); box-shadow: 0 20px 60px rgba(0,0,0,.45); pointer-events: auto; animation: fcIn .45s cubic-bezier(.2,.9,.3,1); }
+@keyframes fcIn { from { opacity: 0; transform: translate(40px, -50%); } to { opacity: 1; transform: translateY(-50%); } }
+#finCard .fcTag { font-size: 11px; font-weight: 800; letter-spacing: 2px; opacity: .65; }
+#finCard .fcTitle { font-size: 18px; font-weight: 900; letter-spacing: 3px; margin-top: 4px; }
+#finCard .fcTitle.pb { color: var(--yellow); }
+#finCard .fcBig { font-size: 44px; font-weight: 900; line-height: 1.1; font-variant-numeric: tabular-nums; color: var(--yellow); margin: 2px 0 10px; }
+#finCard .fcBig small { font-size: 22px; color: #fff; opacity: .8; }
+#finCard .fcRow { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-top: 1px solid rgba(255,255,255,.08); font-size: 13px; }
+#finCard .fcRow span { opacity: .7; } #finCard .fcRow b { font-variant-numeric: tabular-nums; text-align: right; }
+#finCard .fcHead { font-size: 11px; font-weight: 800; letter-spacing: 2px; opacity: .65; margin: 12px 0 2px; }
+#finCard .fcRes .fcRow { padding: 5px 6px; border-radius: 6px; }
+#finCard .fcRes .fcRow span { opacity: 1; display: flex; gap: 8px; min-width: 0; }
+#finCard .fcRes i { font-style: normal; color: var(--yellow); font-weight: 900; min-width: 30px; }
+#finCard .fcRes em { font-style: normal; font-weight: 700; border-left: 4px solid var(--c, #fff); padding-left: 7px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px; }
+#finCard .fcRes .fcRow.me { background: rgba(255,216,74,.14); }
+#finCard .fcRes small { color: #ff6b6b; font-size: 11px; }
+#finCard .fcBtns { display: flex; gap: 8px; margin-top: 14px; }
+#finCard .fcBtns button { flex: 1; padding: 10px 0; font-size: 13px; letter-spacing: 2px; }
+#finCard .fcHint { font-size: 11px; opacity: .5; text-align: center; margin-top: 8px; }
+/* leaderboard: season picker, racing track picker, season rewards */
+.lbSeasonRow { display: flex; justify-content: flex-end; margin: -6px 0 8px; }
+.lbSeasonRow .row { gap: 10px; margin: 0; }
+.rlbRow { display: flex; align-items: center; flex-wrap: wrap; gap: 0 10px; }
+.rcLB { margin-left: auto; padding: 8px 16px; font-size: 12px; letter-spacing: 2px; border-radius: 8px; background: var(--yellow); color: #1a1f28; border: none; }
+.rcLB:hover { filter: brightness(1.08); }
+#lbRewards, #rlbRewards { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 9px 12px; border-radius: 10px; margin-bottom: 10px;
+  background: linear-gradient(90deg, rgba(255,216,74,.12), rgba(255,255,255,.04)); border: 1px solid rgba(255,216,74,.25); font-size: 13px; }
+#lbRewards .rwHead, #rlbRewards .rwHead { font-weight: 900; letter-spacing: 2px; color: var(--accent); font-size: 12px; }
+#lbRewards .rwItem, #rlbRewards .rwItem { display: inline-flex; gap: 6px; align-items: center; }
+#lbRewards .rwPlace, #rlbRewards .rwPlace { font-weight: 800; opacity: .85; }
+#lbRewards .rwNote, #rlbRewards .rwNote { font-size: 11px; opacity: .6; margin-left: auto; }
+.ttl.small { font-size: 10px; letter-spacing: .8px; display: block; margin: 1px 0 2px; }
+.lbRow .nm .ttl.small { display: inline-block; margin-left: 8px; }
+/* Garage: the F1 car (racing only) */
+.gF1Tag { margin: -4px 0 10px; padding: 6px 10px; border-radius: 8px; background: var(--yellow); color: #1a1f28; font-size: 11px; font-weight: 800; letter-spacing: 1.5px; }

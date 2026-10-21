@@ -109,12 +109,23 @@ Object.assign(ROAD, {
   },
   loopYaw(s) {
     const lp = this.loop, f = this.wrapS(s) / lp.STEP, i = Math.floor(f) % lp.N, t = f - Math.floor(f), j = (i + 1) % lp.N;
-    const b = lp.TH[j] + (j === 0 ? 2 * Math.PI : 0);
+    const b = lp.TH[j] + (j === 0 ? (lp.TOT ?? 2 * Math.PI) : 0);
     return lp.TH[i] + (b - lp.TH[i]) * t;
   },
   setLoop(on) {
     if (on && !this._loopData) this._loopData = this.makeLoop();
     this.loop = on ? this._loopData : null;
+    this.origin = 0;
+    this.SH_L = 1.4; this.SH_R = 3.0;
+  },
+  // racing (js/tracks.js): drive on one of the race tracks instead (null = back to the endless road). The track is
+  // a little wider at the sides: 2.5 m of kerb / run-off paint each side before the barriers
+  setTrack(id) {
+    this._tracks = this._tracks || {};
+    if (id && typeof Tracks !== 'undefined' && Tracks.TRACK_BY_ID[id]) {
+      this.loop = this._tracks[id] || (this._tracks[id] = Tracks.buildTrack(Tracks.TRACK_BY_ID[id]));
+      this.SH_L = 2.5; this.SH_R = 2.5;
+    } else { this.loop = null; this.SH_L = 1.4; this.SH_R = 3.0; }
     this.origin = 0;
   },
   makeLoop() {
@@ -187,7 +198,7 @@ Object.assign(ROAD, {
   },
   // ---- the start area (loop only): parking lot -> on-ramp -> acceleration lane -> highway ----
   // s offset from the nearest lap start (negative = before it)
-  lotS(s) { if (!this.loop) return 1e9; const L = this.loop.L, w = this.wrapS(s); return w > L / 2 ? w - L : w; },
+  lotS(s) { if (!this.loop || this.loop.race) return 1e9; const L = this.loop.L, w = this.wrapS(s); return w > L / 2 ? w - L : w; },
   // the acceleration / deceleration lane: one full lane width beside the right lane (centre d)
   auxD() { return this.lane(3) + this.LW; },
   // centre line of the on-ramp (d), from the pad's front edge into the acceleration lane
@@ -227,7 +238,7 @@ Object.assign(ROAD, {
     return U.lerp(eR + 1.6, eR + 0.35, (ls - LOOP.ACC1) / (LOOP.RAIL_OPEN1 - LOOP.ACC1));
   },
   railOpen(side, s) {
-    if (!this.loop || side < 0) return false;
+    if (!this.loop || this.loop.race || side < 0) return false;
     const ls = this.lotS(s);
     return (ls > LOOP.OFF0 && ls < LOOP.OFF_RAIL1) || (ls > LOOP.RAIL_OPEN0 && ls < LOOP.RAIL_OPEN1);
   },

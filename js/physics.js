@@ -65,6 +65,7 @@ const M4 = {
   // (the keyboard values above are overwritten by the preset picked in Settings - see KB_PRESETS)
   ratio: 14.5,    // steering ratio (wheel deg : road-wheel deg)
   brakeGrip: 1.23, // braking grip multiplier on top of the tyre grip (stronger, shorter stops)
+  brakeBoost: 1.5, // Season 1: brakes 50% more effective (every vehicle, every mode): stopping force x1.5
 };
 
 // Keyboard steering presets (Settings > Keyboard steering). "classic" is the tuning as it was before
@@ -221,8 +222,8 @@ class PlayerCar {
 
     // ---- brakes (ABS clamps each axle to its grip) ----
     const sgnU = this.u >= 0 ? 1 : -1;
-    const bF = brake * 2.0 * m * g; // big M Compound brakes; ABS caps each axle at its grip below
-    const bk = M4.brakeGrip;         // extra braking grip (arcade-strong stops, ~1.65 g)
+    const bF = brake * 2.0 * m * g * M4.brakeBoost; // big M Compound brakes; ABS caps each axle at its grip below
+    const bk = M4.brakeGrip * M4.brakeBoost;          // extra braking grip (arcade-strong stops, ~2.5 g with the Season 1 boost)
     let Fxf = -sgnU * Math.min(bF * 0.64, muF * 0.96 * bk);
     let Fxr = -sgnU * Math.min(bF * 0.36, muR * 0.96 * bk);
     this.brakeOn = brake > 0.05;

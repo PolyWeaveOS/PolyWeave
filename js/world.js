@@ -135,7 +135,7 @@ class World {
   update(ps, cam) {
     const ci = Math.floor(ps / this.CH);
     let built = 0;
-    for (let k = ci - 2; k <= ci + 11; k++) {
+    for (let k = ci - 2; k <= ci + 11 && !this.raceOn; k++) {   // (racing: the track is built whole by js/race.js)
       if (!this.chunks.has(k) && built < 1) { this.chunks.set(k, this.build(k)); built++; }   // (one per frame: no hitches)
     }
     for (const [k, c] of this.chunks) {
@@ -186,7 +186,7 @@ class World {
   }
 
   // (start of a run: everything appears at once, no fade)
-  fillAll(ps) { const ci = Math.floor(ps / this.CH); for (let k = ci - 2; k <= ci + 11; k++) if (!this.chunks.has(k)) { const c = this.build(k); c.userData.t0 = -1e9; this.chunks.set(k, c); } }
+  fillAll(ps) { if (this.raceOn) return; const ci = Math.floor(ps / this.CH); for (let k = ci - 2; k <= ci + 11; k++) if (!this.chunks.has(k)) { const c = this.build(k); c.userData.t0 = -1e9; this.chunks.set(k, c); } }
 
   // where a chunk's geometry is anchored: endless road = along z (floating origin); loop = world origin
   zbase(k) { return ROAD.loop ? 0 : -(k * this.CH - ROAD.origin); }
@@ -233,7 +233,7 @@ class World {
     for (const c of [...this.chunks.values(), ...this.dying.values()]) { this.scene.remove(c); c.traverse(x => { if (x.geometry) x.geometry.dispose(); }); }
     this.chunks.clear(); this.dying.clear(); this._lakes = null;
     if (this.lot) { this.scene.remove(this.lot); this.lot.traverse(x => x.geometry && x.geometry.dispose()); this.lot = null; }
-    if (ROAD.loop) { this.lot = this.buildLot(); this.scene.add(this.lot); }
+    if (ROAD.loop && !ROAD.loop.race) { this.lot = this.buildLot(); this.scene.add(this.lot); }
   }
 
   build(k) {

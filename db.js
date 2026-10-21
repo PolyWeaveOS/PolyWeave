@@ -18,9 +18,11 @@ const zlib = require('zlib');
 const crypto = require('crypto');
 const { DatabaseSync } = require('node:sqlite');
 const Titles = require('./js/titles');
+const Tracks = require('./js/tracks');
 
 const FILE = process.env.PW_DB || path.join(__dirname, 'polyweave.db');
-const SEASON = 0;                 // 0 = pre-season (beta). Seasons come later.
+const SEASON = 1;                 // the current season (0 = the beta; Season 1 started 2026-10-19). Older seasons stay viewable.
+const SEASONS = [0, 1];
 const MODES = ['sp', 'mp'];
 const OWNER_NAMES = ['curryeater', 'polyweave'];   // get the Owner title (account names, any upper / lower case)
 const BIKE_NAMES = ['curryeater', 'polyweave'];   // may ride the motorcycle (owners only, not released yet; same list in js/main.js)
@@ -52,6 +54,14 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT, from_uid TEXT NOT NULL, to_uid TEXT NOT NULL, body TEXT NOT NULL, t INTEGER NOT NULL, read INTEGER NOT NULL DEFAULT 0);
   CREATE INDEX IF NOT EXISTS msg_pair ON messages (from_uid, to_uid, t);
   CREATE INDEX IF NOT EXISTS msg_unread ON messages (to_uid, read);
+  CREATE TABLE IF NOT EXISTS laps (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, uid TEXT NOT NULL, track TEXT NOT NULL, ms INTEGER NOT NULL, season INTEGER NOT NULL, t INTEGER NOT NULL,
+    removed INTEGER NOT NULL DEFAULT 0);
+  CREATE INDEX IF NOT EXISTS laps_board ON laps (track, season, removed, uid, ms);
+  CREATE TABLE IF NOT EXISTS race_results (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, uid TEXT NOT NULL, track TEXT NOT NULL, pos INTEGER, n INTEGER NOT NULL, pts INTEGER NOT NULL,
+    ms INTEGER, season INTEGER NOT NULL, t INTEGER NOT NULL, removed INTEGER NOT NULL DEFAULT 0);
+  CREATE INDEX IF NOT EXISTS race_board ON race_results (season, removed, uid);
 `);
 
 // newer columns (added to databases made before them)
@@ -212,10 +222,11 @@ function resetTitles() {
 }
 
 // ---------------------------------------------------------------- leaderboards
-// best counted run per player (newest-first tie break: the earlier run ranks higher), ranked
-const cache = new Map();          // mode -> { t, list }
-function board(mode) {
-  const c = cache.get(mode);
+// best counted run per player (newest-first tie break: the earlier run ranks higher), ranked. season: which
+// season's board (default: the current one)
+const cache = new Map();          // mode:season -> { t, list }
+function board(mode, season = SEASON) {
+  const key = mode + ':' + season, c = cache.get(key);
   if (c && Date.now() - c.t < 3000) return c.list;
   const list = db.prepare(`
     SELECT b.uid, b.score, b.t, b.dur, b.server, u.title,
@@ -224,14 +235,62 @@ function board(mode) {
           WHERE mode = ? AND season = ? AND removed = 0 GROUP BY uid) b
     JOIN users u ON u.uid = b.uid
     WHERE u.banned = 0
-    ORDER BY rank`).all(mode, SEASON);
-  cache.set(mode, { t: Date.now(), list });
+    ORDER BY rank`).all(mode, season);
+  cache.set(key, { t: Date.now(), list });
   return list;
 }
-const top = (mode, n = 100) => board(mode).slice(0, n);
+const top = (mode, n = 100, season = SEASON) => board(mode, season).slice(0, n);
 // your rank + the k players ahead of you and k behind
-function around(mode, uid, k = 10) {
-  const list = board(mode), i = list.findIndex(e => e.uid === uid);
+function around(mode, uid, k = 10, season = SEASON) {
+  const list = board(mode, season), i = list.findIndex(e => e.uid === uid);
+  return { total: list.length, rank: i >= 0 ? i + 1 : null, list: i >= 0 ? list.slice(Math.max(0, i - k), i + k + 1) : [] };
+}
+// racing: best lap per player on a track (singleplayer time trials), fastest first
+function lapBoard(track, season = SEASON) {
+  const key = 'lap:' + track + ':' + season, c = cache.get(key);
+  if (c && Date.now() - c.t < 3000) return c.list;
+  const list = db.prepare(`
+    SELECT b.uid, b.ms, b.t, u.title, ROW_NUMBER() OVER (ORDER BY b.ms ASC, b.t ASC) AS rank
+    FROM (SELECT uid, MIN(ms) AS ms, t FROM laps WHERE track = ? AND season = ? AND removed = 0 GROUP BY uid) b
+    JOIN users u ON u.uid = b.uid WHERE u.banned = 0 ORDER BY rank`).all(track, season);
+  cache.set(key, { t: Date.now(), list });
+  return list;
+}
+const lapTop = (track, n = 100, season = SEASON) => lapBoard(track, season).slice(0, n);
+function lapAround(track, uid, k = 10, season = SEASON) {
+  const list = lapBoard(track, season), i = list.findIndex(e => e.uid === uid);
+  return { total: list.length, rank: i >= 0 ? i + 1 : null, list: i >= 0 ? list.slice(Math.max(0, i - k), i + k + 1) : [] };
+}
+// a checked time-trial lap: returns { rank (if it's a new personal best), best }
+function addLap(uid, track, ms) {
+  ensureUser(uid);
+  const b = db.prepare('SELECT MIN(ms) AS ms FROM laps WHERE uid = ? AND track = ? AND season = ? AND removed = 0').get(uid, track, SEASON);
+  const before = (b && b.ms) || 0, improved = !before || ms < before;
+  db.prepare('INSERT INTO laps (uid, track, ms, season, t) VALUES (?, ?, ?, ?, ?)').run(uid, track, Math.round(ms), SEASON, Date.now());
+  cache.delete('lap:' + track + ':' + SEASON);
+  const rank = improved ? (lapBoard(track).findIndex(e => e.uid === uid) + 1 || null) : null;
+  return { rank, best: improved ? Math.round(ms) : before };
+}
+// racing: every finished race (rows [{ uid, pos (null = DNF), ms (server-measured, penalties included) }],
+// n = drivers on the grid). The races leaderboard is each driver's fastest finish on a track.
+function addRace(track, n, rows) {
+  const ins = db.prepare('INSERT INTO race_results (uid, track, pos, n, pts, ms, season, t) VALUES (?, ?, ?, ?, 0, ?, ?, ?)'), t = Date.now();
+  for (const r of rows) { ensureUser(r.uid); ins.run(r.uid, track, r.pos || null, n, r.pos ? Math.round(r.ms) : null, SEASON, t); }
+  cache.delete('races:' + track + ':' + SEASON);
+}
+function raceBoard(track, season = SEASON) {
+  const key = 'races:' + track + ':' + season, c = cache.get(key);
+  if (c && Date.now() - c.t < 3000) return c.list;
+  const list = db.prepare(`
+    SELECT b.uid, b.ms, b.t, u.title, ROW_NUMBER() OVER (ORDER BY b.ms ASC, b.t ASC) AS rank
+    FROM (SELECT uid, MIN(ms) AS ms, t FROM race_results WHERE track = ? AND season = ? AND removed = 0 AND pos IS NOT NULL AND ms IS NOT NULL GROUP BY uid) b
+    JOIN users u ON u.uid = b.uid WHERE u.banned = 0 ORDER BY rank`).all(track, season);
+  cache.set(key, { t: Date.now(), list });
+  return list;
+}
+const raceTop = (track, n = 100, season = SEASON) => raceBoard(track, season).slice(0, n);
+function raceAround(track, uid, k = 10, season = SEASON) {
+  const list = raceBoard(track, season), i = list.findIndex(e => e.uid === uid);
   return { total: list.length, rank: i >= 0 ? i + 1 : null, list: i >= 0 ? list.slice(Math.max(0, i - k), i + k + 1) : [] };
 }
 const rankOf = (mode, uid) => { const i = board(mode).findIndex(e => e.uid === uid); return i >= 0 ? i + 1 : null; };
@@ -254,7 +313,7 @@ function addRun(r) {
       r.verified, ok ? 0 : 1, r.note || null, log);
   if (!ok) return { rank: null, best: before, improved: false, newTitles: [], team: null };
   const newTitles = Titles.titlesForRun(r.score).filter(id => gift(r.uid, id)).concat(statTitles(r.uid));
-  cache.delete(r.mode);
+  cache.delete(r.mode + ':' + SEASON);
   const rank = improved ? rankOf(r.mode, r.uid) : null;
   if (rank) noteRank(r.mode, r.uid, rank);
   const team = r.mode === 'mp' && r.room ? teamRun(r.room, now - (r.dur || 0) * 1000, now) : null;
@@ -438,8 +497,33 @@ if (!getMeta('bughunter_chickle_v1')) {
   }
 }
 
+// Season 1 (once, 2026-10-19): the beta is over. New accounts stop getting Beta Tester (players who have it keep
+// it); the beta leaderboards stay as their own season (0) and every board starts fresh for Season 1.
+if (!getMeta('season1_v1')) {
+  setMeta('season1_v1', Date.now());
+  setBetaOpen(false);
+  console.log('database: Season 1 started (beta closed: no more Beta Tester; beta leaderboards kept as season 0)');
+}
+
+// End of a season: the top 5 of its singleplayer and multiplayer leaderboards get the season's title
+// (1st Champion, 2nd-3rd Podium, 4th-5th Contender: Titles.SEASON_REWARDS) in their inbox, and the racing boards'
+// 1st / 2nd / 3rd on every track (Track / Race Champion, Finalist, Podium: Titles.RACE_REWARDS). node admin.js season-rewards 1
+function seasonRewards(season) {
+  const sent = [];
+  for (const mode of MODES) for (const e of top(mode, 5, season)) {
+    const id = Titles.seasonReward(season, e.rank);
+    if (id && gift(e.uid, id, `Season ${season} · ${mode === 'mp' ? 'multiplayer' : 'singleplayer'} leaderboard · #${e.rank}`)) sent.push({ uid: e.uid, mode, rank: e.rank, title: id });
+  }
+  // racing: 1st / 2nd / 3rd on every track's time-trial and races boards (a title won on two tracks comes once)
+  for (const t of Tracks.TRACKS) for (const [board, list] of [['tt', lapTop(t.id, 3, season)], ['races', raceTop(t.id, 3, season)]]) for (const e of list) {
+    const id = Titles.seasonReward(season, e.rank, board);
+    if (id && gift(e.uid, id, `Season ${season} · ${t.name} ${board === 'tt' ? 'time trials' : 'races'} · #${e.rank}`)) sent.push({ uid: e.uid, mode: board + ':' + t.id, rank: e.rank, title: id });
+  }
+  return sent;
+}
+
 module.exports = {
-  db, SEASON, SECRET, ensureUser, grant, gift, inboxOf, unclaimed, claim, top, around, rankOf, bestOf, addRun, spendToken, profile, addPlayTime,
+  db, SEASON, SEASONS, SECRET, lapTop, lapAround, addLap, addRace, raceTop, raceAround, seasonRewards, ensureUser, grant, gift, inboxOf, unclaimed, claim, top, around, rankOf, bestOf, addRun, spendToken, profile, addPlayTime,
   titlesOf, ownerCounts, alphaOpen, setAlphaOpen, betaOpen, setBetaOpen, resetTitles, statTitles, statsOf, pendingOf, equipped, equip, isBanned, setBanned, setRemoved, removeAbove, runsOf, runLog, recentRejected,
   areFriends, friendsOf, requestsIn, requestsOut, socialSettings, setSocialSettings, sendRequest, respond, cancelRequest, unfriend,
   sendMessage, chatWith, markRead, unreadBy, OWNER_NAMES, BIKE_NAMES,
