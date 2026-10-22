@@ -405,7 +405,7 @@ const Race = {
     RaceWorld.build(theme);
     RaceWorld.setLights(0);
     if (ROAD.loop.track.street) world.ground.material.color.set(theme === 'snow' ? 0xd5dade : 0x8d9096);   // (street circuit: the city is paved)
-    F1Mode.enable(); showF1(true);                     // (racing is always in the F1 car, with its own physics)
+    F1Mode.enable(f1Cfg()); showF1(true);              // (racing is always in the F1 car, with its own physics + your Parts setup)
     Net.setModel(f1Livery());                          // (other racers draw your F1 paint pattern from this)
     this.active = true; document.body.classList.add('raceMode');
     lockLaneAssist(true);
@@ -426,6 +426,7 @@ const Race = {
     world.ground.material.color.set(world.th.ground);
     ROAD.setTrack(null);
     $id('raceResults').classList.add('hidden'); $id('raceBanner').classList.add('hidden'); RaceLights.hide();
+    const sl = $id('raceStand'); sl.classList.add('hidden'); sl.classList.remove('tower'); sl.innerHTML = ''; this.towerRows = null;   // (the timing tower / lobby list: gone with the race)
   },
   place(g, speed = 0) {
     const sp = this.gridSpot(g);
@@ -528,7 +529,7 @@ const Race = {
       const c = f1Cfg(), see = m => Object.assign(m, { transparent: true, opacity: 0.45 });
       const paint = see(f1Paint.clone()); f1Pattern(paint, c.pattern, c.accent);   // (clone() drops the pattern shader: put it back)
       const rim = see(f1Rim.clone()), done = new Map([[paint, paint], [rim, rim]]);
-      this.ghostCar = makeF1(paint, { rimStyle: c.rimStyle }, { rimMat: rim });
+      this.ghostCar = makeF1(paint, { rimStyle: c.rimStyle, tyre: c.tyre, wing: c.wing, fwing: c.fwing }, { rimMat: rim });
       this.ghostCar.root.traverse(o => {                // (every other part: its own see-through copy of the material)
         if (!o.isMesh) return;
         const m = o.material; if (!done.has(m)) done.set(m, see(m.clone()));
@@ -541,38 +542,23 @@ const Race = {
     g.visible = true; g.position.set(q[0], 0, q[1]); g.rotation.y = -q[2];
   },
 
-  // ---------------- penalties (F1-style, kept simple)
-  //  - jump start: moving before the lights go out -> 5 s time penalty (time trial: +5 s on that lap)
-  //  - track limits: all four wheels past the white line at the track's edge. Races: 3 warnings, then 5 s for
-  //    each one after that. Time trial: no penalty, the run-off slows the car (main.js).
-  //  - causing a collision: hitting the car in front hard -> 5 s
-  // Race penalties are added to your race time at the finish.
-  resetPenalties() { this.pen = 0; this.warn = 0; this.offArm = true; this.onT = 0; this.bumpT = -9; },
+  // ---------------- penalties: races have only one - causing a car collision (hitting the car in front of you
+  // hard) is +5 s, for the driver who caused it (the one behind; the car that was hit gets nothing). No track-limit
+  // or jump-start penalties (the grass slows you down, and the car can't move before green). Added to your race
+  // time at the finish.
+  resetPenalties() { this.pen = 0; this.bumpT = -9; },
   penalty(sec, why) {
     if (this.kind === 'tt') return;
     this.pen += sec;
-    hud.message(`${why} · ${sec} SECOND PENALTY`, true);
+    hud.message(`${why} · +${sec} SEC`, true);
   },
-  trackLimits(dt) {
-    const limit = 2 * ROAD.LW + 0.78, ad = Math.abs(car.d);  // (centre this far out: all four wheels past the line)
-    const racing = this.kind === 'mp' && this.st === 'racing' && this.myGrid >= 0 && !this.finished;
-    if (ad > limit && Math.abs(car.u) > 11) {
-      this.onT = 0;
-      if (!this.offArm) return;
-      this.offArm = false;
-      if (this.kind === 'tt') return;                   // (time trial: no lap deleted - the grass / gravel slows you down instead: main.js)
-      if (!racing) { hud.message('TRACK LIMITS'); return; }
-      this.warn++;
-      if (this.warn <= 3) hud.message(`TRACK LIMITS · WARNING ${this.warn}/3`, true);
-      else this.penalty(5, 'TRACK LIMITS');
-    } else if (ad < limit - 0.6 && (this.onT += dt) > 1) this.offArm = true;
-  },
-  // a hard hit on another driver (main.js): your fault if they were ahead of you
+  // a hard hit on another driver (main.js): your fault if they were ahead of you (their game sees you behind them,
+  // so only you get it)
   onBump(v, id) {
     if (this.kind !== 'mp' || this.st !== 'racing' || this.myGrid < 0 || this.finished || v < 4) return;
     const p = Net.players.get(id); if (!p || !p.now) return;
     const now = performance.now() / 1000;
-    if (p.now.s - car.s > 0.8 && now - this.bumpT > 5) { this.bumpT = now; this.penalty(5, 'CAUSING A COLLISION'); }
+    if (p.now.s - car.s > 0.8 && now - this.bumpT > 5) { this.bumpT = now; this.penalty(5, 'CAR COLLISION'); }
   },
 
   // ---------------- lap timing (called every frame after the car moved)
@@ -812,15 +798,13 @@ const Race = {
     box.classList.remove('hidden');
   },
 
-  // ---------------- the start: throttle only counts after the green light
-  // While the lights are on, the throttle (and brake) do nothing - the car can't creep. Holding the throttle when
-  // the lights turn green still does nothing: you have to let go and press it again after green (a real reaction).
-  thrLock: false,
+  // ---------------- the start: the throttle only works from the green light
+  // While the lights are on, the throttle (and brake) do nothing - the car can't creep. Hold the throttle and you
+  // launch the moment the lights go green.
   gate(ctl) {
-    if (!this.active) { this.thrLock = false; return; }
+    if (!this.active) return;
     const myStart = this.kind === 'tt' || (this.st === 'grid' && this.myGrid >= 0) || (this.st === 'racing' && this.myGrid >= 0);
-    if (myStart && this.goAt !== undefined && !this.started) { this.thrLock = true; ctl.throttle = 0; ctl.brake = 0; return; }
-    if (this.thrLock) { if ((ctl.throttle || 0) < 0.05) this.thrLock = false; else ctl.throttle = 0; }
+    if (myStart && this.goAt !== undefined && !this.started) { ctl.throttle = 0; ctl.brake = 0; }
   },
 
   // ---------------- per frame: start lights, jump starts, track limits, HUD
@@ -834,10 +818,9 @@ const Race = {
       const n = now < this.lightsAt ? 0 : Math.min(5, Math.floor(now - this.lightsAt) + 1);
       if (now < this.goAt) {
         RaceWorld.setLights(n); RaceLights.show(n);
-        if (!this.jump && this.gridPos && Math.hypot(car.x - this.gridPos.x, car.z - this.gridPos.z) > 1.0) {   // moved before lights out
-          this.jump = true;
-          if (this.kind === 'tt') { this.penLap = 5000; hud.message('JUMP START · +5 SECONDS ON THIS LAP', true); }
-          else this.penalty(5, 'JUMP START');
+        // (time trial: moving before lights out is +5 s on the lap; races have no jump-start penalty)
+        if (!this.jump && this.kind === 'tt' && this.gridPos && Math.hypot(car.x - this.gridPos.x, car.z - this.gridPos.z) > 1.0) {
+          this.jump = true; this.penLap = 5000; hud.message('JUMP START · +5 SECONDS ON THIS LAP', true);
         }
       } else {                                          // lights out: GO
         this.lapTop = 0; this.raceTop = 0; this.raceBest = null;
@@ -854,7 +837,6 @@ const Race = {
       this.lapTop = Math.max(this.lapTop || 0, v); if (this.started) this.raceTop = Math.max(this.raceTop || 0, v);
       if (this.kind === 'tt' && this.started && this.lapT0 !== null) this.ghostRecord(dt, now - this.lapT0);
       this.timing(now);
-      if (this.started && (this.kind === 'tt' || this.kind === 'mp')) this.trackLimits(dt);
     }
     this.cpUpdate(now);
     this.ghostShow(now);
@@ -903,7 +885,7 @@ const Race = {
     H.querySelector('.rhLap').textContent = lap;
     H.querySelector('.rhTime').textContent = main;
     H.querySelector('.rhBest').textContent = (this.best ? 'BEST ' + fmtLap(this.best) : 'BEST N/A') + (this.last ? '   LAST ' + fmtLap(this.last) : '') +
-      (this.kind === 'mp' && this.myGrid >= 0 && (this.st === 'racing' || this.st === 'grid') ? (this.warn ? `   TRACK LIMITS ${Math.min(3, this.warn)}/3` : '') + (this.pen ? `   PENALTY +${this.pen}s` : '') : '');
+      (this.kind === 'mp' && this.myGrid >= 0 && (this.st === 'racing' || this.st === 'grid') ? (this.pen ? `   PENALTY +${this.pen}s` : '') : '');
     // fair play warning (wrong way / blocking): big red banner with the seconds left
     const gw = this.gr && this.gr.warn;
     if (gw) banner = `⚠ ${gw.why} · ${Math.max(0, Math.ceil(5 - (now - gw.t0)))}`;

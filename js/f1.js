@@ -26,17 +26,68 @@ const F1_PHYS = {
   kbSmooth: 12, kbFlipSmooth: 13,   // (steering eases in a little more gently than the road car's 18: smoother turn-in)
 };
 const KB_BOOST = 1.2;               // keyboard: max turn (kbTurnG + its grip ceilings) and turning speed (kbSmooth / kbFlipSmooth / kbBuild)
+// ---- Racing Garage > Parts: tyres (coloured ring on the sidewall) and the rear wing ----
+// soft: fastest, turns the least; medium: in between (the car as it was); hard: slowest, turns the most.
+// No rear wing: less acceleration, more top speed (and a little lighter).
+// accel = engine pull, traction = grip under power (the launch is traction-limited, so both make the gap)
+const F1_TYRES = {
+  soft:   { name: 'Soft',   ring: '#e8333a', speed: 1.04, accel: 1.12, traction: 1.1,  turn: 0.9 },
+  medium: { name: 'Medium', ring: '#f2d24a', speed: 1,    accel: 1,    traction: 1,    turn: 1 },
+  hard:   { name: 'Hard',   ring: '#a6e88f', speed: 0.96, accel: 0.88, traction: 0.9,  turn: 1.1 },
+};
+const F1_WING_OFF = { speed: 1.05, accel: 0.92, kg: -8 };
+// front wing: low downforce = more top speed, turns less; high = turns more, less top speed (downforce adds grip)
+const F1_FWING = { low: { name: 'Low', speed: 1.03, turn: 0.93 }, std: { name: 'Standard', speed: 1, turn: 1 }, high: { name: 'High', speed: 0.97, turn: 1.07 } };
+// gearbox: short gears = quicker acceleration, lower top speed; long = the opposite
+const F1_GEARS = { short: { name: 'Short', accel: 1.14, traction: 1.05, speed: 0.96 }, std: { name: 'Standard', accel: 1, traction: 1, speed: 1 }, long: { name: 'Long', accel: 0.86, traction: 0.95, speed: 1.04 } };
+// brake bias: front = stronger brakes but turns a little less while braking; rear = weaker brakes, the car rotates more
+const F1_BIAS = { front: { name: 'Front', brake: 1.12, turn: 0.96 }, mid: { name: 'Balanced', brake: 1, turn: 1 }, rear: { name: 'Rear', brake: 0.88, turn: 1.05 } };
+const F1_KG = 798;                   // (shown: the car's weight)
+// setup multipliers for the Parts choices (c = { tyre, wing, fwing, gear, bias }, Settings.f1): speed (top speed),
+// accel (engine pull), traction (grip under power), turn (cornering), grip (sideways grip), brake (braking grip), kg
+function f1Setup(c = {}) {
+  const T = F1_TYRES[c.tyre] || F1_TYRES.medium, W = c.wing === false ? F1_WING_OFF : { speed: 1, accel: 1, kg: 0 };
+  const FW = F1_FWING[c.fwing] || F1_FWING.std, G = F1_GEARS[c.gear] || F1_GEARS.std, B = F1_BIAS[c.bias] || F1_BIAS.mid;
+  return { speed: T.speed * W.speed * FW.speed * G.speed, accel: T.accel * W.accel * G.accel, traction: T.traction * G.traction,
+    turn: T.turn * FW.turn * B.turn, grip: (1 + (T.turn - 1) * 0.6) * (1 + (FW.turn - 1) * 0.6), brake: B.brake, kg: F1_KG + W.kg };
+}
+// 0-200 km/h (s) and 200-0 km/h braking distance (m), measured by running the game's own physics on a spare car with
+// that setup (only while not racing - the Garage), remembered per setup
+const F1_MEASURED = new Map();
+function f1Measure(c) {
+  const key = [c.tyre, c.wing, c.fwing, c.gear, c.bias].join('|');
+  if (F1_MEASURED.has(key)) return F1_MEASURED.get(key);
+  if (F1Mode.on) return null;
+  F1Mode.enable(c);
+  const pc = new PlayerCar(), h = 1 / 240, go = { throttle: 1, brake: 0, steer: 0, source: 'keys' }, stop = { throttle: 0, brake: 1, steer: 0, source: 'keys' };
+  let t = 0;
+  while (pc.u * 3.6 < 200 && t < 30) { pc.step(h, go); pc.v = pc.r = 0; t += h; }
+  let dist = 0;
+  for (let i = 0; i < 240 * 15 && pc.u > 0.3; i++) { pc.step(h, stop); pc.v = pc.r = 0; dist += pc.u * h; }
+  F1Mode.disable();
+  const m = { accel: t, braking: dist };
+  F1_MEASURED.set(key, m);
+  return m;
+}
+// the Garage's stat bars: { weight kg, accel (0-200 km/h s), top (km/h), handling, grip (out of 100), braking (m) }
+const f1Stats = c => {
+  const S = f1Setup(c), m = f1Measure(c) || { accel: 0, braking: 0 };
+  return { weight: S.kg, accel: m.accel, top: 345 * S.speed, handling: 75 * S.turn, grip: 78 * S.grip, braking: m.braking };
+};
 const F1Mode = {
   on: false, saved: null,
-  enable() {
+  // setup: { tyre, wing, fwing, gear, bias } from the Racing Garage (f1Setup)
+  enable(setup = {}) {
     if (this.on) return;
     this.saved = JSON.parse(JSON.stringify(M4));
-    const P = F1_PHYS;
-    Object.assign(M4, { mu: P.mu, muX: P.muX, turnG: P.turnG, latG: P.latG, vmax: P.vmax, brakeGrip: P.brakeGrip, brakeBoost: P.brakeBoost });
-    M4.torque = M4.torque.map(([r, t]) => [r, t * P.torqueScale]);
-    const K = KB_BOOST;
+    const P = F1_PHYS, S = f1Setup(setup);
+    // (tires: sideways grip (mu) follows the turning; grip under power (muX) is the tire's traction - softs launch hardest)
+    Object.assign(M4, { mu: P.mu * S.grip, muX: P.muX * S.traction, turnG: P.turnG * S.turn, latG: P.latG * S.turn, vmax: P.vmax * S.speed, brakeGrip: P.brakeGrip, brakeBoost: P.brakeBoost * S.brake });   // (brake bias: the F1's stops are limited by brake force, not grip)
+    M4.torque = M4.torque.map(([r, t]) => [r, t * P.torqueScale * S.accel]);
+    const K = KB_BOOST * S.turn;
     M4.kbTurnG = P.kbTurnG.map(([v, g]) => [v, g * K]); M4.kbTurnCap = P.kbTurnCap * K; M4.kbPressCap = P.kbPressCap * K; M4.kbCounter = P.kbCounter; M4.kbCapBlend = P.kbCapBlend;
-    M4.kbSmooth = P.kbSmooth * K; M4.kbFlipSmooth = P.kbFlipSmooth * K; M4.kbBuild *= K;
+    const Ks = KB_BOOST;                                 // (turning speed: keyboard boost only)
+    M4.kbSmooth = P.kbSmooth * Ks; M4.kbFlipSmooth = P.kbFlipSmooth * Ks; M4.kbBuild *= Ks;
     this.on = true;
   },
   disable() {
@@ -129,16 +180,30 @@ function f1Pattern(mat, pattern = 'plain', color2 = '#d42a2a') {
   return mat;
 }
 function f1SetPattern(mat, pattern, color2) { const u = mat.userData.f1u; if (!u) return; u.uF1Pat.value = F1_PAT_INDEX[pattern] || 0; u.uF1Col2.value.set(color2); }
-// what other racers are sent so they draw your pattern and rims: 'f1:<pattern>:<colour 2>:<rim style>:<rim colour>'
+// what other racers are sent so they draw your pattern, rims and parts:
+// 'f1:<pattern>:<colour 2>:<rim style>:<rim colour>:<tyre s|m|h><rear wing 1|0><front wing l|s|h>'
 const F1_RIM_KEYS = ['five', 'ten', 'disc'];
 const hex6 = (c, d) => (/^#[0-9a-f]{6}$/i.test(c) ? c.toLowerCase() : d);
-const f1LiveryKey = (pattern, color2, rimStyle, rimColor) => `f1:${F1_PAT_INDEX[pattern] ? pattern : 'plain'}:${hex6(color2, '#d42a2a')}:${F1_RIM_KEYS.includes(rimStyle) ? rimStyle : 'five'}:${hex6(rimColor, '#c4c9cf')}`;
+const f1LiveryKey = (pattern, color2, rimStyle, rimColor, tyre, wing, fwing) => `f1:${F1_PAT_INDEX[pattern] ? pattern : 'plain'}:${hex6(color2, '#d42a2a')}:${F1_RIM_KEYS.includes(rimStyle) ? rimStyle : 'five'}:${hex6(rimColor, '#c4c9cf')}` +
+  `:${(F1_TYRES[tyre] ? tyre : 'medium')[0]}${wing === false ? 0 : 1}${(F1_FWING[fwing] ? fwing : 'std')[0]}`;
 const f1ParseLivery = key => {
-  const m = /^f1:([a-z]+):(#[0-9a-f]{6})(?::([a-z]+):(#[0-9a-f]{6}))?$/.exec(key || ''), lv = { pattern: 'plain', color2: '#d42a2a', rimStyle: 'five', rimColor: '#c4c9cf' };
+  const m = /^f1:([a-z]+):(#[0-9a-f]{6})(?::([a-z]+):(#[0-9a-f]{6}))?(?::([smh])([01])([lsh])?)?$/.exec(key || ''), lv = { pattern: 'plain', color2: '#d42a2a', rimStyle: 'five', rimColor: '#c4c9cf', tyre: 'medium', wing: true, fwing: 'std' };
   if (m && F1_PAT_INDEX[m[1]] !== undefined) { lv.pattern = m[1]; lv.color2 = m[2]; }
   if (m && m[3] && F1_RIM_KEYS.includes(m[3])) { lv.rimStyle = m[3]; lv.rimColor = m[4]; }
+  if (m && m[5]) { lv.tyre = { s: 'soft', m: 'medium', h: 'hard' }[m[5]]; lv.wing = m[6] === '1'; }
+  if (m && m[7]) lv.fwing = { l: 'low', s: 'std', h: 'high' }[m[7]];
   return lv;
 };
+// the parts on a car already built: tyre compound (the ring colour), the rear wing (with its posts) on / off, and
+// the front wing's flaps (low: none, standard: one, high: two)
+const F1_RING_MAT = {};
+const f1RingMat = tyre => F1_RING_MAT[tyre] || (F1_RING_MAT[tyre] = new THREE.MeshStandardMaterial({ color: (F1_TYRES[tyre] || F1_TYRES.medium).ring, roughness: 0.6, side: THREE.DoubleSide }));
+function f1SetParts(v, tyre, wing, fwing) {
+  for (const r of v.rings || []) r.material = f1RingMat(F1_TYRES[tyre] ? tyre : 'medium');
+  for (const w of v.wing || []) w.visible = wing !== false;
+  const fw = F1_FWING[fwing] ? fwing : 'std';
+  if (v.fwing) { for (const m of v.fwing.std) m.visible = fw === 'std'; for (const m of v.fwing.high) m.visible = fw === 'high'; }
+}
 // change the rim style on a car already built (your own, from the Garage)
 function f1SetRim(v, style) { const G = f1Parts(); for (const r of v.rims || []) r.geometry = G.rims[style] || G.rims.five; }
 // the paint for a car: your own (already double-sided, its pattern set from the Garage) or another racer's (a copy of
@@ -188,6 +253,11 @@ function f1Parts() {
   const prof = [[ri, -hw + rec], [ri, -hw], [W.r, -hw], [W.r, hw], [ri, hw], [ri, hw - rec]].map(([a, b]) => new THREE.Vector2(a, b));
   g.tyre = new THREE.LatheGeometry(prof, 16).rotateZ(Math.PI / 2);
   g.hub = new THREE.CylinderGeometry(ri, ri, W.w - 2 * rec, 16).rotateZ(Math.PI / 2);
+  // the tyre compound's ring: a coloured band round the middle of each sidewall (like the real ones)
+  const ringAt = sg => new THREE.RingGeometry(0.289, 0.311, 16).rotateY(Math.PI / 2).translate(sg * (hw + 0.002), 0, 0);
+  { const a = ringAt(1).toNonIndexed(), b = ringAt(-1).toNonIndexed(), m = new THREE.BufferGeometry();
+    m.setAttribute('position', new THREE.Float32BufferAttribute([...a.attributes.position.array, ...b.attributes.position.array], 3));
+    m.setAttribute('normal', new THREE.Float32BufferAttribute([...a.attributes.normal.array, ...b.attributes.normal.array], 3)); g.ring = m; }
   // rims (Garage: style + colour), each built for the +x face and mirrored for the other: a lip round the edge, then
   // five spokes / ten thin spokes / a solid aero disc, and a centre nut, on the dark hub
   const merge = list => {        // (several geometries -> one, so a wheel stays a handful of meshes)
@@ -234,6 +304,15 @@ function f1Parts() {
   // edge lightly chamfered - no slots (the model's wing elements had gaps between them once it was made thinner)
   const wc = (w, yb, yt, c) => [[-w + c, yb], [w - c, yb], [w, yb + c], [w, yt - c], [w - c, yt], [-w + c, yt], [-w, yt - c], [-w, yb + c]];
   g.wing = f1Prism([[2.06, wc(0.53, 0.82, 0.9, 0.02)], [2.12, wc(0.53, 0.81, 0.93, 0.02)], [2.57, wc(0.53, 0.81, 0.93, 0.02)]]);
+  // front wing flaps (Parts > Front wing), from inside the nose (x 0.08) to inside each endplate (x 0.82, the plates
+  // are x 0.80-0.85) so they're joined at both ends, behind and above the model's main plane: low = none,
+  // standard = one flap, high = two steeper flaps. Each flap: a thin plate rising from its front edge (z0, y0) to its
+  // back edge (z1, y1).
+  const flap = (sg, z0, y0, z1, y1) => { const r = y => [[sg * 0.08, y], [sg * 0.82, y], [sg * 0.82, y + 0.024], [sg * 0.08, y + 0.024]]; return f1Prism([[z0, r(y0)], [z1, r(y1)]]); };
+  g.fwing = {
+    std: [-1, 1].map(sg => flap(sg, -2.14, 0.21, -1.92, 0.31)),
+    high: [-1, 1].flatMap(sg => [flap(sg, -2.14, 0.21, -1.93, 0.34), flap(sg, -2.0, 0.33, -1.86, 0.45)]),
+  };
   // the sidepod intakes (square recesses in the sidepod fronts): filled in tyre black so they always match the wheels
   g.intakes = [-1, 1].map(sg => new THREE.BoxGeometry(0.205, 0.235, 0.05).translate(sg * 0.485, 0.43, -0.168));
   g.frontBlocks = [-1, 1].map(sg => new THREE.BoxGeometry(0.12, 0.2, 0.24).translate(sg * 0.67, 0.35, -1.27));
@@ -268,19 +347,23 @@ function makeF1(paint, livery, opts = {}) {
   F1Car.when(g => { v.paintMesh = new THREE.Mesh(g, pm); v.paintMesh.castShadow = true; body.add(v.paintMesh); });
   const G = f1Parts(), part = (geo, mat) => { const m = new THREE.Mesh(geo, mat); m.castShadow = true; body.add(m); return m; };
   part(G.hull, pm); part(G.rear, pm);
-  for (const geo of [...G.rearBlocks, ...G.frontBlocks, ...G.posts, G.wing]) part(geo, pm);   // (no endplates: the owner found them odd)
+  for (const geo of [...G.rearBlocks, ...G.frontBlocks]) part(geo, pm);   // (no endplates: the owner found them odd)
+  v.wing = [...G.posts, G.wing].map(geo => part(geo, pm));   // (the rear wing and its two posts: Parts can take it off)
+  v.fwing = { std: G.fwing.std.map(geo => part(geo, pm)), high: G.fwing.high.map(geo => part(geo, pm)) };   // (front wing flaps: f1SetParts)
   v.lid = part(G.opening, M.carbon); part(G.intake, M.carbon);
   for (const geo of G.intakes) part(geo, F1_TYRE);
   // wheels (round, shared geometry) on their pivots
-  v.wheels = []; v.rims = [];
+  v.wheels = []; v.rims = []; v.rings = [];
   for (const [front, z] of [[true, W.fz], [false, W.rz]]) for (const sg of [-1, 1]) {
     const pivot = new THREE.Group(); pivot.position.set(sg * W.tr, W.r, z);
     const mesh = new THREE.Group();
     const tyre = new THREE.Mesh(G.tyre, F1_TYRE); tyre.castShadow = true;
     const hub = new THREE.Mesh(G.hub, F1_HUB), rim = new THREE.Mesh(G.rims[lv.rimStyle] || G.rims.five, opts.rimMat || f1RimMat(lv.rimColor));
-    mesh.add(tyre, hub, rim); pivot.add(mesh); root.add(pivot); v.rims.push(rim);
+    const ring = new THREE.Mesh(G.ring, f1RingMat(lv.tyre || 'medium'));   // (the compound's coloured ring, both sidewalls)
+    mesh.add(tyre, hub, rim, ring); pivot.add(mesh); root.add(pivot); v.rims.push(rim); v.rings.push(ring);
     v.wheels.push({ pivot, mesh, side: sg, front, base: 0, spinSign: 1 });
   }
+  f1SetParts(v, lv.tyre, lv.wing, lv.fwing);
   v.brake = new THREE.Object3D(); v.brake.visible = false; root.add(v.brake);
   v.indL = new THREE.Object3D(); v.indR = new THREE.Object3D();
   // cockpit view: the steering wheel with its display (turns with yours)

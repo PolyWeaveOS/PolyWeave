@@ -99,16 +99,36 @@
       </button>
     </div>
     <!-- Season 1 limited-time mode: racing (bigger than the buttons above, under them) -->
-    <button class="ltmCard" id="ltmRace" data-go="scrRace">
+    <button class="ltmCard" id="ltmRace" data-go="scrRaceHub">
       <span class="ltmFlag"><svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><g transform="rotate(-12 32 32)"><rect class="fg" x="18" y="13" width="3.6" height="40" rx="1.6"/><path class="fg" d="M21.6 15c5-3 10 3 15 0s9-3 12-1v18c-3-2-7-2-12 1s-10-3-15 0z"/></g></svg></span>
       <span class="ltmText"><span class="ltmTag">LIMITED-TIME MODE · SEASON 1</span><b>RACING</b><span class="ltmSub">Three circuits · 2–10 player races · best-lap leaderboards</span></span>
       <span class="ltmGo">PLAY ›</span>
     </button>
   </div>
 
+  <!-- racing hub (Season 1 LTM, from the home RACING card): race, the racing garage (F1 car), leaderboard -->
+  <div id="scrRaceHub" class="screen title hidden">
+    <button class="back playBack" data-go="scrTitle">← BACK</button>
+    <h1 class="logo small">RAC<span>ING</span></h1>
+    <div class="cards">
+      <button class="card" data-go="scrRace">
+        <svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><g transform="rotate(-12 32 32)"><rect class="fg" x="18" y="13" width="3.6" height="40" rx="1.6"/><path class="fg" d="M21.6 15c5-3 10 3 15 0s9-3 12-1v18c-3-2-7-2-12 1s-10-3-15 0z"/></g></svg>
+        <b>RACE</b>
+      </button>
+      <button class="card" data-go="scrGarage">
+        <svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><g transform="translate(-2 -4)"><path class="fg" d="M12 38c0-3 1.6-4.6 4.4-5.2l6-1.4 5.6-5.3c1.4-1.3 3.2-2.1 5.1-2.1h6.4c2 0 3.8.8 5.1 2.3l3.6 4.4 3.3.7c2.6.6 4.5 2.8 4.5 5.5V41c0 1.1-.9 2-2 2H14c-1.1 0-2-.9-2-2z"/><circle class="bg" cx="21.5" cy="42.5" r="5.5"/><circle class="fg" cx="21.5" cy="42.5" r="3"/><circle class="bg" cx="43.5" cy="42.5" r="5.5"/><circle class="fg" cx="43.5" cy="42.5" r="3"/></g></svg>
+        <b>GARAGE</b>
+      </button>
+      <button class="card" data-go="scrRaceLB">
+        <svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><rect class="fg" x="25" y="19" width="14" height="27" rx="1.5"/><rect class="fg" x="10" y="28" width="14" height="18" rx="1.5"/><rect class="fg" x="40" y="33" width="14" height="13" rx="1.5"/><rect class="fg" x="9" y="45" width="46" height="4" rx="2"/></svg>
+        <b>LEADERBOARD</b>
+      </button>
+    </div>
+  </div>
+
   <!-- racing (Season 1 LTM): pick a track to queue for a race or set lap times; host a public / private race -->
   <div id="scrRace" class="screen panel wide hidden">
-    <div class="hdr"><button class="back" data-go="scrTitle">← BACK</button><h1>RACING <span class="ltmPill">SEASON 1 · LIMITED TIME</span></h1><button class="rcLB" data-go="scrRaceLB">LEADERBOARD</button></div>
+    <div class="hdr"><button class="back" data-go="scrRaceHub">← BACK</button><h1>RACING <span class="ltmPill">SEASON 1 · LIMITED TIME</span></h1></div>
     <label class="mpField"><span class="mpLabel">Driver Name</span><input type="text" class="nameIn" maxlength="16" placeholder="Driver" spellcheck="false" autocomplete="off"></label>
     <div class="acctNote"></div>
     <div class="raceGrid">
@@ -167,9 +187,11 @@
   <!-- garage: pick your car, paint it, wheels, calipers, tint (js/garage.js) -->
   <div id="scrGarage" class="screen hidden">
     <div class="garagePanel">
-      <div class="hdr"><button class="back" data-go="scrTitle">← BACK</button><h1>GARAGE</h1></div>
+      <div class="hdr"><button class="back" id="gBack">← BACK</button><h1 id="gTitle">GARAGE</h1></div>
       <div class="gCars" id="gCars"></div>
-      <div class="gF1Tag hidden" id="gF1Tag">RACING MODE ONLY · this car is only used in Racing</div>
+      <!-- the Racing Garage (F1 car): Customize (paint, wheels) / Parts (tyres, rear wing, stats) -->
+      <div class="tabs gTop hidden"><button class="tab sel" data-gtop="custom">CUSTOMIZE</button><button class="tab" data-gtop="parts">PARTS</button></div>
+      <div class="gCustomize">
       <div class="gTabs"><button class="sel" data-gt="paint">PAINT</button><button data-gt="wheels">WHEELS</button><button data-gt="extras">EXTRAS</button></div>
       <div class="gPane" data-gp="paint">
         <div class="gLabel" id="gColLabel">Colour</div><div class="gSwatches" id="gPaint"></div>
@@ -188,6 +210,27 @@
         <div class="gLabel">Window tint</div><div class="seg" id="gTint"><button data-v="light">Light</button><button data-v="medium">Medium</button><button data-v="dark">Dark</button><button data-v="limo">Limo</button></div></div>
         <div class="gF1Only hidden"><div class="gLabel">Accent (nose tip, sidepod tops, engine cover, wings)</div><div class="gSwatches" id="gF1Accent"></div>
         <div class="hidden" id="gF1Helmet"></div></div>
+      </div>
+      </div>
+      <div class="gParts hidden">
+        <div class="gLabel">Car stats</div>
+        <div class="gStats" id="gStats"></div>
+        <div class="gHelpTxt">Acceleration: 0–200 km/h. Braking: 200–0 km/h. White mark: the standard setup.</div>
+        <div class="gLabel">Tires</div>
+        <div class="gTyres" id="gTyres"></div>
+        <div class="gOpts" data-opt="tyre"><div data-v="soft">Soft - Fastest | Turns the Least</div><div data-v="medium">Medium - Middle Speed | Middle Turning</div><div data-v="hard">Hard - Slowest | Turns the Most</div></div>
+        <div class="gLabel">Rear wing</div>
+        <div class="seg" id="gWing"><button data-v="on">On</button><button data-v="off">Off</button></div>
+        <div class="gOpts" data-opt="wing"><div data-v="on">On - Faster Acceleration | Less Top Speed</div><div data-v="off">Off - Slower Acceleration | Higher Top Speed</div></div>
+        <div class="gLabel">Front wing</div>
+        <div class="seg" id="gFWing"><button data-v="low">Low</button><button data-v="std">Standard</button><button data-v="high">High</button></div>
+        <div class="gOpts" data-opt="fwing"><div data-v="low">Low - Higher Top Speed | Turns Less</div><div data-v="std">Standard - Balanced</div><div data-v="high">High - Turns More | Less Top Speed</div></div>
+        <div class="gLabel">Gearbox</div>
+        <div class="seg" id="gGear"><button data-v="short">Short</button><button data-v="std">Standard</button><button data-v="long">Long</button></div>
+        <div class="gOpts" data-opt="gear"><div data-v="short">Short - Faster Acceleration | Less Top Speed</div><div data-v="std">Standard - Balanced</div><div data-v="long">Long - Slower Acceleration | Higher Top Speed</div></div>
+        <div class="gLabel">Brake bias</div>
+        <div class="seg" id="gBias"><button data-v="front">Front</button><button data-v="mid">Balanced</button><button data-v="rear">Rear</button></div>
+        <div class="gOpts" data-opt="bias"><div data-v="front">Front - Stronger Brakes | Turns Less</div><div data-v="mid">Balanced - Balanced</div><div data-v="rear">Rear - Weaker Brakes | Turns More</div></div>
       </div>
       <div class="gNote"></div>
     </div>
@@ -274,7 +317,7 @@
 
   <!-- racing leaderboard (from the Racing page; Season 1 only): time trials (best lap) / races (best 3-lap race), per track -->
   <div id="scrRaceLB" class="screen panel hidden">
-    <div class="hdr"><button class="back" data-go="scrRace">← BACK</button><h1>RACING LEADERBOARD</h1></div>
+    <div class="hdr"><button class="back" data-go="scrRaceHub">← BACK</button><h1>RACING LEADERBOARD</h1></div>
     <div class="acct left" data-acct></div>
     <div class="tabs"><button class="tab sel" data-rlbkind="tt">TIME TRIALS</button><button class="tab" data-rlbkind="races">RACES</button></div>
     <div class="rlbRow"><div class="subTabs"><button class="sel" data-rlbview="top">TOP 100</button><button data-rlbview="me">YOUR POSITION</button></div><div class="subTabs" id="rlbTracks"></div></div>
@@ -304,6 +347,10 @@
       <section>
         <h2>Racing</h2>
         <label class="chk"><input type="checkbox" id="ghostOn"> Ghost car in time trials (your best lap)</label>
+      </section>
+      <section>
+        <h2>Menu</h2>
+        <label class="chk"><input type="checkbox" id="updatePopupOn"> Show the update popup when the game starts</label>
       </section>
     </div>
     <div class="setPane grid hidden" data-sp="controls">
@@ -468,6 +515,33 @@
     <div class="cfStage"><div class="cfGlow"></div><div class="cfRing"></div><div class="cfTitle" id="cfTitle"></div></div>
     <div class="cfDesc" id="cfDesc"></div>
     <div class="cfBtns"><button id="cfEquip" class="go">EQUIP</button><button id="cfOk">LATER</button></div>
+  </div>
+</div>
+<!-- launch popup (main.js Welcome): "sign in with Google" when not signed in, then "Version 1.1 is here" once -->
+<div id="welcome" class="hidden">
+  <div class="wcCard">
+    <div class="wcSlide" data-wc="signin">
+      <div class="wcTag">WELCOME TO POLYWEAVE</div>
+      <h2>Sign in with Google</h2>
+      <p>Sign in to get on the leaderboards, save your scores and lap times, earn titles and add friends.</p>
+      <div class="acct" data-acct></div>
+    </div>
+    <div class="wcSlide" data-wc="update">
+      <div class="wcTag">UPDATE</div>
+      <h2>Version 1.1 is here</h2>
+      <p class="wcSub">New</p>
+      <div class="wcNew">
+        <b>Customize your F1 car</b> in the new <b>Racing Garage</b> (Racing → Garage): paint, patterns and rims, plus Parts - tires, rear wing, front wing, gearbox and brake bias - with stats that show what each one does.
+        <button id="wcGarage">OPEN RACING GARAGE</button>
+      </div>
+      <p class="wcSub">Bug fixes</p>
+      <ul class="wcList">
+        <li><b>Racing timing tower</b> no longer stays on screen after you leave a race queue and go back to normal driving.</li>
+        <li><b>Race starts:</b> holding the throttle when the lights go green now launches the car straight away (the car wouldn't move until you let go and pressed again).</li>
+      </ul>
+      <div class="wcThanks">Thanks to <b>beachrat</b> and <b>TTNoManchas</b> for finding these bugs. They've been awarded the <span class="ttl r-legendary neon">Bug Hunter</span> title.</div>
+    </div>
+    <div class="wcFoot"><span class="wcDots"></span><button id="wcNext" class="go">NEXT</button></div>
   </div>
 </div>
 <!-- friend messages / requests pop in here (top right) -->

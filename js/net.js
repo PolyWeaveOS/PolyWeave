@@ -199,7 +199,7 @@ const Net = {
     if (!/^#[0-9a-f]{6}$/i.test(color)) color = '#a6b0b8';   // only plain colours from other players
     title = Titles.TITLE_BY_ID[title] ? title : null;
     veh = veh === 'bike' || veh === 'van' ? veh : 'car';   // (the owners' van: the server only passes it on for them)
-    model = PLAYER_CARS[model] || /^f1:[a-z]+:#[0-9a-f]{6}(:[a-z]+:#[0-9a-f]{6})?$/.test(model) ? model : 'm4';   // (racing: 'f1:<pattern>:<colour 2>')
+    model = PLAYER_CARS[model] || /^f1:[a-z]+:#[0-9a-f]{6}(:[a-z]+:#[0-9a-f]{6})?(:[smh][01][lsh]?)?$/.test(model) ? model : 'm4';   // (racing: 'f1:<pattern>:<colour 2>[:<rims>][:<tyre><wing><front wing>]')
     let p = this.players.get(id);
     if (!p) { p = { id, name, color, buf: [] }; this.players.set(id, p); }
     if (p.name !== name || p.color !== color || p.title !== title || p.veh !== veh || p.model !== model || !p.g) { p.name = name; p.color = color; p.title = title; p.veh = veh; p.model = model; this.removeVis(p); this.makeVis(p); }

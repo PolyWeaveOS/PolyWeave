@@ -1,8 +1,9 @@
 'use strict';
 // =====================================================================
-//  Garage (main menu): pick your car (the BMW M4 Competition, plus the F1 car used only in Racing), paint it
-//  (colour + gloss / metallic / matte), wheels (five styles, any colour), brake caliper colour and window tint.
-//  The F1 car has its own setup (Settings.f1: body, finish, rims, accent, helmet - see f1Cfg / setF1Cfg in main.js).
+//  Garage (main menu): pick your car (the BMW M4 Competition), paint it (colour + gloss / metallic / matte), wheels
+//  (five styles, any colour), brake caliper colour and window tint.
+//  The same screen is the Racing Garage (Racing > Garage, setMode(true)): only the F1 car, with CUSTOMIZE (paint,
+//  pattern, rims) and PARTS (tyres, rear wing, and the car's stats). Its setup is Settings.f1 (f1Cfg / setF1Cfg in main.js).
 //  The car stands on the right, unblurred, slowly turning (drag to turn it yourself); the options are on the left.
 // =====================================================================
 const GARAGE_PAINTS = [['Brooklyn Grey', '#a6b0b8'], ['Alpine White', '#eef0ee'], ['Black Sapphire', '#14161a'], ['Dravit Grey', '#6b6e68'],
@@ -19,6 +20,7 @@ const Garage = (() => {
   const $ = id => document.getElementById(id);
   const scr = $('scrGarage');
   let yaw = 0.9, lastDrag = -1e9, dragging = null, open = false, f1 = false;   // f1: setting up the F1 car (racing only)
+  let turned = false;                                    // (you dragged the car round: it stays where you left it, no more slow turning)
   // the setup being edited and where changes go (the road car's or the F1's)
   const cfg = () => (f1 ? f1Cfg() : carCfg());
   const setCfg = patch => (f1 ? setF1Cfg(patch) : setCarCfg(patch));
@@ -39,22 +41,62 @@ const Garage = (() => {
     return () => bs.forEach(b => b.classList.toggle('sel', b.dataset.v === get()));
   };
 
-  // the cars: the road car(s), then the F1 car (shown here, but only driven in Racing)
+  // the road car(s) (the F1 car lives in the Racing Garage)
   const cars = $('gCars');
-  const pickF1 = on => { f1 = on; if (!Race.active) showF1(on); };
   for (const k of PLAYER_CAR_KEYS) {
     const b = document.createElement('button'); b.className = 'gCar'; b.dataset.k = k;
     const [make, ...model] = PLAYER_CARS[k].name.split(' ');
     b.innerHTML = `<small>${make.toUpperCase()}</small><b>${model.join(' ').toUpperCase()}</b>`;
-    b.onclick = () => { pickF1(false); installCar(k); refresh(); };
+    b.onclick = () => { installCar(k); refresh(); };
     cars.appendChild(b);
   }
-  {
-    const b = document.createElement('button'); b.className = 'gCar f1'; b.dataset.k = 'f1';
-    b.innerHTML = '<b>F1 CAR</b>';
-    b.onclick = () => { pickF1(true); refresh(); };
-    cars.appendChild(b);
+  // ---- Racing Garage > Parts: tyres (soft / medium / hard), rear wing, and the stats they make (js/f1.js f1Stats)
+  const tyres = $('gTyres');
+  for (const [k, T] of Object.entries(F1_TYRES)) {
+    const b = document.createElement('button'); b.className = 'gTyre'; b.dataset.k = k;
+    b.innerHTML = `<i style="--rc:${T.ring}"></i><b>${T.name.toUpperCase()}</b>`;
+    b.onclick = () => { setF1Cfg({ tyre: k }); refresh(); };
+    tyres.appendChild(b);
   }
+  // stat rows: [key, name, bar fill 0..1, the number shown, better when higher]
+  const kmh = v => (Settings.units === 'kmh' ? Math.round(v) + ' km/h' : Math.round(v / 1.609) + ' mph');
+  const STATS = [
+    ['weight', 'Weight', v => (v - 700) / 150, v => Math.round(v) + ' kg', false],
+    ['accel', 'Acceleration', v => (5.6 - v) / 2, v => v.toFixed(2) + ' s', false],   // (0-200 km/h)
+    ['top', 'Top speed', v => (v - 280) / 120, kmh, true],
+    ['handling', 'Handling', v => v / 100, v => Math.round(v), true],
+    ['grip', 'Grip', v => v / 100, v => Math.round(v), true],
+    ['braking', 'Braking', v => (55 - v) / 30, v => (Settings.units === 'kmh' ? Math.round(v) + ' m' : Math.round(v * 3.281) + ' ft'), false],   // (200-0 km/h)
+  ];
+  const statBox = $('gStats');
+  statBox.innerHTML = STATS.map(([k, n]) => `<div class="gStat" data-s="${k}"><span class="n">${n}</span><span class="bar"><i></i><u></u></span><b></b></div>`).join('');
+  function drawStats() {
+    const now = f1Stats(f1Cfg()), base = f1Stats({});
+    for (const [k, , fill, txt, up] of STATS) {
+      const row = statBox.querySelector(`[data-s="${k}"]`), d = now[k] - base[k], better = Math.abs(d) > 1e-6 && (d > 0) === up;
+      row.querySelector('i').style.width = Math.round(U.clamp(fill(now[k]), 0.03, 1) * 100) + '%';
+      row.querySelector('u').style.left = Math.round(U.clamp(fill(base[k]), 0.03, 1) * 100) + '%';   // (the standard setup's mark)
+      const b = row.querySelector('b'); b.textContent = txt(now[k]);
+      b.className = Math.abs(d) < 1e-6 ? '' : better ? 'up' : 'down';
+    }
+  }
+  // which garage: the road car's, or the Racing Garage (the F1 car)
+  let racing = false;
+  function setMode(on) {
+    racing = f1 = on;
+    $('gTitle').textContent = on ? 'RACING GARAGE' : 'GARAGE';
+    cars.classList.toggle('hidden', on);
+    scr.querySelector('.gTop').classList.toggle('hidden', !on);
+    showTop('custom');
+    PARENT.scrGarage = on ? 'scrRaceHub' : undefined;
+  }
+  function showTop(t) {
+    scr.querySelectorAll('[data-gtop]').forEach(b => b.classList.toggle('sel', b.dataset.gtop === t));
+    scr.querySelector('.gCustomize').classList.toggle('hidden', t !== 'custom');
+    scr.querySelector('.gParts').classList.toggle('hidden', t !== 'parts');
+  }
+  scr.querySelectorAll('[data-gtop]').forEach(b => b.addEventListener('click', () => showTop(b.dataset.gtop)));
+  $('gBack').onclick = () => show(racing ? 'scrRaceHub' : 'scrTitle');
   // wheels
   const rims = $('gRims');
   for (const [k, n] of GARAGE_RIMS) {
@@ -87,12 +129,22 @@ const Garage = (() => {
     swatches($('gF1Helmet'), GARAGE_HELMETS, () => f1Cfg().helmet, c => setF1Cfg({ helmet: c })),
     seg($('gFinish'), () => cfg().finish, v => setCfg({ finish: v })),
     seg($('gTint'), () => carCfg().tint, v => setCarCfg({ tint: v })),
+    seg($('gWing'), () => (f1Cfg().wing === false ? 'off' : 'on'), v => setF1Cfg({ wing: v === 'on' })),
+    seg($('gFWing'), () => f1Cfg().fwing, v => setF1Cfg({ fwing: v })),
+    seg($('gGear'), () => f1Cfg().gear, v => setF1Cfg({ gear: v })),
+    seg($('gBias'), () => f1Cfg().bias, v => setF1Cfg({ bias: v })),
   ];
   const pick = $('gPaintPick'), note = scr.querySelector('.gNote');
   pick.addEventListener('input', () => { setCfg({ color: pick.value }); refresh(); });
   function refresh() {
     const c = cfg();
-    for (const b of cars.children) b.classList.toggle('sel', f1 ? b.dataset.k === 'f1' : b.dataset.k === carKey);
+    for (const b of cars.children) b.classList.toggle('sel', b.dataset.k === carKey);
+    for (const b of tyres.children) b.classList.toggle('sel', b.dataset.k === f1Cfg().tyre);
+    { // each part's description lines: the chosen one stands out
+      const fc = f1Cfg(), cur = { tyre: fc.tyre, wing: fc.wing === false ? 'off' : 'on', fwing: fc.fwing, gear: fc.gear, bias: fc.bias };
+      scr.querySelectorAll('.gOpts').forEach(o => o.querySelectorAll('[data-v]').forEach(l => l.classList.toggle('sel', l.dataset.v === cur[o.dataset.opt])));
+    }
+    if (f1) drawStats();
     rims.classList.toggle('hidden', f1);                 // (the F1 car has its own wheels: only their colour changes)
     for (const b of rims.children) { b.classList.toggle('sel', b.dataset.k === carCfg().rim); if (b.dataset.k === 'stock') b.classList.toggle('hidden', !playerVis.M.wheelGeoms); }
     scr.querySelector('.gCarOnly').classList.toggle('hidden', f1);
@@ -102,11 +154,10 @@ const Garage = (() => {
     f1Rims.classList.toggle('hidden', !f1);
     for (const b of f1Rims.children) b.classList.toggle('sel', b.dataset.k === f1Cfg().rimStyle);
     if (f1 && !scr.querySelector('[data-gp="extras"]').classList.contains('hidden')) scr.querySelector('[data-gt="paint"]').click();   // (was on Extras)
-    $('gF1Tag').classList.toggle('hidden', !f1);
     scr.querySelector('.gF1Pat').classList.toggle('hidden', !f1);
     $('gColLabel').textContent = f1 ? 'Colour 1' : 'Colour';
     for (const b of pats.children) b.classList.toggle('sel', b.dataset.k === f1Cfg().pattern);
-    note.textContent = f1 ? 'The F1 car is only for Racing mode: pick a pattern and colour 2 to paint it. Everywhere else you drive your road car.' : '';
+    note.textContent = '';
     for (const m of marks) m();
     pick.value = c.color; pick2.value = f1Cfg().accent;
   }
@@ -121,16 +172,17 @@ const Garage = (() => {
     if (e.target.closest('.garagePanel')) return;
     dragging = { x: e.clientX, id: e.pointerId }; try { scr.setPointerCapture(e.pointerId); } catch (x) { /* */ }
   });
-  scr.addEventListener('pointermove', e => { if (!dragging || e.pointerId !== dragging.id) return; yaw -= (e.clientX - dragging.x) * 0.008; dragging.x = e.clientX; lastDrag = performance.now(); });
+  scr.addEventListener('pointermove', e => { if (!dragging || e.pointerId !== dragging.id) return; yaw -= (e.clientX - dragging.x) * 0.008; dragging.x = e.clientX; lastDrag = performance.now(); turned = true; });
   const up = e => { if (dragging && e.pointerId === dragging.id) dragging = null; };
   scr.addEventListener('pointerup', up); scr.addEventListener('pointercancel', up);
 
   return {
     // (leaving the Garage: the road car is back on show, unless you're racing)
-    shown(on) { open = on; if (on) { if (f1 && !Race.active) showF1(true); refresh(); } else if (f1 && !Race.active) showF1(false); },
+    // (each visit starts slowly turning again, until you drag the car)
+    shown(on) { if (on && !open) turned = false; open = on; if (on) { if (f1 && !Race.active) showF1(true); refresh(); } else if (f1 && !Race.active) showF1(false); },
     // the camera while the Garage is open: low 3/4 view, the car on the right of the screen (the panel is on the left)
     camera(dt) {
-      if (performance.now() - lastDrag > 2500 && !dragging) yaw += dt * 0.18;
+      if (!turned && !dragging) yaw += dt * 0.18;
       const fov = 38, asp = innerWidth / innerHeight, tn = Math.tan(fov * Math.PI / 360), panel = Math.min(0.46, 400 / innerWidth);
       // far enough back that the whole car (with room around it) fits in the space right of the panel
       const d = U.clamp(3.1 / (tn * asp * (1 - panel)), 5.4, 15), y = 0.55 + d * 0.13;
@@ -142,7 +194,7 @@ const Garage = (() => {
       camera.lookAt(cx + Math.cos(a) * k, 0.55, cz + Math.sin(a) * k);
       camera.fov = fov; camera.near = 0.25; camera.updateProjectionMatrix();
     },
-    refresh,
+    refresh, setMode,
     get open() { return open; },
     get f1Preview() { return open && f1; },   // (the F1 car is on show in the Garage)
   };

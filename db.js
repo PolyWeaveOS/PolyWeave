@@ -497,6 +497,17 @@ if (!getMeta('bughunter_chickle_v1')) {
   }
 }
 
+// Bug Hunter for beachrat and TTNoManchas (once each, 2026-10-21: racing bugs fixed in version 1.1), with the
+// same thank-you note. (Each waits until that account exists here.)
+for (const name of ['beachrat', 'ttnomanchas']) {
+  const key = 'bughunter_' + name + '_v1'; if (getMeta(key)) continue;
+  const u = Object.values(readAccounts()).find(a => a && a.name && a.name.toLowerCase() === name);
+  if (!u) continue;
+  setMeta(key, Date.now());
+  const sent = gift(u.id, 'bughunter', 'Thank you for helping improve the game\n-PolyWeave');
+  console.log(`Bug Hunter for ${u.name}: ${sent ? 'sent' : 'already had / waiting'}`);
+}
+
 // Season 1 (once, 2026-10-19): the beta is over. New accounts stop getting Beta Tester (players who have it keep
 // it); the beta leaderboards stay as their own season (0) and every board starts fresh for Season 1.
 if (!getMeta('season1_v1')) {

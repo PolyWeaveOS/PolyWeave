@@ -323,7 +323,7 @@ function setVehicle(v) {
 }
 // ---------- racing: the F1 car (js/f1.js) in your Garage paint, shown instead of the car / bike / van ----------
 // Its own Garage setup (Settings.f1): colour 1 + finish, a paint pattern (js/f1.js F1_PATTERNS) in colour 2 (accent)
-const F1_DEFAULT = { color: '#f2f2ee', finish: 'gloss', accent: '#d42a2a', pattern: 'plain', helmet: '#ffd84a', rim: '#c4c9cf', rimStyle: 'five' };   // (white with red, like the owner's reference car)
+const F1_DEFAULT = { color: '#f2f2ee', finish: 'gloss', accent: '#d42a2a', pattern: 'plain', helmet: '#ffd84a', rim: '#c4c9cf', rimStyle: 'five', tyre: 'medium', wing: true, fwing: 'std', gear: 'std', bias: 'mid' };   // (tyre / wing / front wing / gearbox / brake bias: Racing Garage > Parts)   // (white with red, like the owner's reference car)
 const f1Cfg = () => Object.assign({}, F1_DEFAULT, Settings.f1 || {});
 const f1Paint = new THREE.MeshPhysicalMaterial({ color: F1_DEFAULT.color, roughness: 0.24, metalness: 0.55, envMapIntensity: 1.1, clearcoat: 1, clearcoatRoughness: 0.06,
   side: THREE.DoubleSide });   // (the model's faces are drawn from both sides)
@@ -338,14 +338,14 @@ function applyF1Cfg() {
   f1Paint.envMapIntensity = 0.55;
   f1Accent.color.set(c.accent); f1Helmet.color.set(c.helmet); f1Rim.color.set(c.rim);
   f1SetPattern(f1Paint, c.pattern, c.accent);
-  try { f1SetRim(playerF1, c.rimStyle); } catch (e) { /* (first call: the car isn't built yet - it's built with the style) */ }
+  try { f1SetRim(playerF1, c.rimStyle); f1SetParts(playerF1, c.tyre, c.wing, c.fwing); } catch (e) { /* (first call: the car isn't built yet - it's built with the style) */ }
 }
-const f1Livery = () => { const c = f1Cfg(); return f1LiveryKey(c.pattern, c.accent, c.rimStyle, c.rim); };   // (racing: other drivers draw your pattern + rims from this)
+const f1Livery = () => { const c = f1Cfg(); return f1LiveryKey(c.pattern, c.accent, c.rimStyle, c.rim, c.tyre, c.wing, c.fwing); };   // (racing: other drivers draw your pattern, rims and parts from this)
 function setF1Cfg(patch) {
   Settings.f1 = Object.assign({}, Settings.f1, patch); applyF1Cfg(); saveSettings();
   if (typeof Race !== 'undefined' && Race.active) Net.setModel(f1Livery());   // (changed it in a race lobby: others see it)
 }
-const playerF1 = makeF1(f1Paint, { rimStyle: f1Cfg().rimStyle }, { rimMat: f1Rim }); playerF1.root.visible = false; playerRoot.add(playerF1.root);
+const playerF1 = makeF1(f1Paint, { rimStyle: f1Cfg().rimStyle, tyre: f1Cfg().tyre, wing: f1Cfg().wing, fwing: f1Cfg().fwing }, { rimMat: f1Rim }); playerF1.root.visible = false; playerRoot.add(playerF1.root);
 const f1Color = () => f1Cfg().color;                    // (racing: other drivers see your car in this colour)
 function showF1(on) {
   playerF1.root.visible = on;
@@ -770,9 +770,10 @@ const menu = document.getElementById('menu');
 const $id = id => document.getElementById(id);
 let screen = 'scrTitle', settingsFrom = 'scrTitle';
 // where Back / Esc goes from each screen (anything not listed: the main menu)
-const PARENT = { scrSP: 'scrPlay', scrMP: 'scrPlay', scrTitles: 'scrProfile', scrRaceLB: 'scrRace' };
+const PARENT = { scrSP: 'scrPlay', scrMP: 'scrPlay', scrTitles: 'scrProfile', scrRace: 'scrRaceHub', scrRaceLB: 'scrRaceHub' };   // (scrGarage: set by Garage.setMode)
 function show(id) {
   if (id === 'scrSettings' && screen !== 'scrSettings') settingsFrom = screen;
+  if (id === 'scrGarage' && screen !== 'scrGarage' && typeof Garage !== 'undefined') Garage.setMode(screen === 'scrRaceHub');   // (from the racing hub: the Racing Garage, F1 car only)
   screen = id;
   for (const s of menu.querySelectorAll('.screen')) s.classList.toggle('hidden', s.id !== id);
   if (id === 'scrMP') Net.refreshList();
@@ -873,6 +874,9 @@ mmEl.addEventListener('change', () => { Settings.minimap = mmEl.checked; saveSet
 const ghEl = $id('ghostOn');                            // (racing: a see-through car on your best lap in time trials - race.js ghostShow)
 ghEl.checked = Settings.ghost !== false;               // (on by default)
 ghEl.addEventListener('change', () => { Settings.ghost = ghEl.checked; saveSettings(); });
+const upEl = $id('updatePopupOn');                      // (the "Version 1.1 is here" popup on every launch - Welcome; not the sign-in one)
+upEl.checked = Settings.updatePopup !== false;
+upEl.addEventListener('change', () => { Settings.updatePopup = upEl.checked; saveSettings(); });
 // (paint, wheels and the rest of the car's looks are in the Garage: js/garage.js)
 // Settings tabs: gameplay / controls / graphics / audio
 let setTab = 'gameplay';
@@ -956,8 +960,37 @@ Account.onChange = () => {
   acctMsg = ''; renderAccount(); syncBest(game.mode === 'mp' ? 'mp' : 'sp'); loadOwnerTools();
   setVehicle(Settings.vehicle);                        // (the motorcycle only for its accounts; anyone else is in the car)
   if (game.mode === 'sp' && game.scored && !spToken) fetchSpToken();   // (signed in during a scored run: the next one counts)
+  if (Account.ready) Welcome.update();
 };
 Account.onMsg = t => { acctMsg = t; renderAccount(); };
+// ---------- launch popup (index.html #welcome): "Sign in with Google" every launch while you're not signed in
+// (where sign-in exists: not on CrazyGames), then "Version 1.1 is here" every launch unless switched off in
+// Settings > Gameplay (Settings.updatePopup; that setting doesn't touch the sign-in slide). Signing in from the
+// popup moves on to the next slide.
+const Welcome = {
+  slides: null, i: 0,
+  update() {
+    if (!this.slides) {                                  // (the first time the account state is known: which slides)
+      this.slides = [];
+      if (!Account.signedIn && Account.clientId) this.slides.push('signin');
+      if (Settings.updatePopup !== false) this.slides.push('update');
+      if (!this.slides.length) return;
+      $id('welcome').classList.remove('hidden'); this.draw();
+    } else if (Account.signedIn && this.slides[this.i] === 'signin' && !$id('welcome').classList.contains('hidden')) this.next();
+  },
+  draw() {
+    const cur = this.slides[this.i], last = this.i === this.slides.length - 1;
+    document.querySelectorAll('#welcome .wcSlide').forEach(s => s.classList.toggle('on', s.dataset.wc === cur));
+    document.querySelector('#welcome .wcDots').innerHTML = this.slides.length > 1 ? this.slides.map((_, j) => `<i${j === this.i ? ' class="on"' : ''}></i>`).join('') : '';
+    $id('wcNext').textContent = cur === 'signin' && !Account.signedIn ? (last ? 'MAYBE LATER' : 'NOT NOW') : last ? 'GOT IT' : 'NEXT';
+  },
+  next() {
+    if (++this.i >= this.slides.length) $id('welcome').classList.add('hidden'); else this.draw();
+  },
+};
+$id('wcNext').onclick = () => Welcome.next();
+// "Open Racing Garage" on the update slide: close the popup and go there (through the racing hub, so Back leads to it)
+$id('wcGarage').onclick = () => { $id('welcome').classList.add('hidden'); show('scrRaceHub'); show('scrGarage'); };
 Account.onNeedName = () => { $id('acctName').value = ''; $id('acctNameErr').textContent = ''; if (!menuOpen) openMenu('scrName'); else show('scrName'); };
 $id('acctNameSave').onclick = async () => {
   const err = await Account.setName($id('acctName').value);
