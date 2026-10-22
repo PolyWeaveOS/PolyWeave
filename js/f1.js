@@ -92,6 +92,7 @@ const F1Mode = {
   },
   disable() {
     if (!this.on) return;
+    for (const k of Object.keys(M4)) if (!(k in this.saved)) delete M4[k];   // (settings only racing adds go too)
     Object.assign(M4, this.saved);                     // (the normal car's numbers, exactly as they were)
     this.on = false;
   },
@@ -194,6 +195,11 @@ const f1ParseLivery = key => {
   if (m && m[7]) lv.fwing = { l: 'low', s: 'std', h: 'high' }[m[7]];
   return lv;
 };
+// how far the front wheels look turned: the real steering angle is tiny at speed (a degree or two), so the car looked
+// stiff - shown bigger the faster you go, easing softly toward ~34 deg (no hard cap to stick at), and the caller
+// smooths it over time (f1VisDamp) so the wheels never snap
+const f1VisSteer = (steer, u) => 0.6 * Math.tanh(steer * (1 + Math.abs(u) * 0.12) / 0.6);
+const f1VisDamp = (v, target, dt) => (v.visSteer = (v.visSteer || 0) + (target - (v.visSteer || 0)) * (1 - Math.exp(-dt * 14)));
 // the parts on a car already built: tyre compound (the ring colour), the rear wing (with its posts) on / off, and
 // the front wing's flaps (low: none, standard: one, high: two)
 const F1_RING_MAT = {};

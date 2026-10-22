@@ -421,7 +421,7 @@ const Net = {
         p.lean = U.damp(p.lean || 0, U.clamp(-Math.atan2(ay, 9.81) * 0.85, -0.72, 0.72), 6, dt);
         p.vis.lean.rotation.z = p.lean;
         animateWheels(p.vis, v * dt, (s.steer || 0) * 0.55);
-      } else animateWheels(p.vis, (s.v || 0) * dt, s.steer || 0);
+      } else animateWheels(p.vis, (s.v || 0) * dt, p.vis.f1 && typeof f1VisSteer === 'function' ? f1VisDamp(p.vis, f1VisSteer(s.steer || 0, s.v || 0), dt) : s.steer || 0);   // (F1: the turn shown clearly, like your own)
     }
   },
 

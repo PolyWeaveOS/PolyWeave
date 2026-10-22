@@ -103,6 +103,105 @@ function raceTrace(R, p, st) {
     console.log(`race check: ${p.name} (${p.account ? p.account.id : 'guest'}) ${R.track}: ${T.bad}`);
   }
 }
+// ---------------------------------------------------------------- admin panel API (see the /api/admin/ gate below)
+const Titles = require('./js/titles');
+const isAdmin = u => !!(u && u.id && DB.adminUid() && u.id === DB.adminUid());
+const fmtN = n => Math.round(n).toLocaleString('en-US');
+function adminApi(route, url, req, json, body) {
+  const q = k => url.searchParams.get(k);
+  const nameOf = uid => Accounts.nameOf(uid) || '?';
+  const userInfo = uid => { const r = DB.userRow(uid) || {}; return { uid, name: nameOf(uid), banned: !!r.banned && DB.isBanned(uid), banUntil: DB.banUntil(uid), playS: Math.round(r.play_s || 0),
+    sp: DB.bestOf('sp', uid), mp: DB.bestOf('mp', uid), rankSp: DB.rankOf('sp', uid), rankMp: DB.rankOf('mp', uid), title: DB.equipped(uid) }; };
+  const withName = rows => rows.map(r => Object.assign({ name: nameOf(r.uid) }, r));
+  if (route === '/api/admin/overview') {
+    const users = Accounts.all();
+    let inGame = 0; for (const r of rooms.values()) inGame += r.players.size;
+    json(200, Object.assign({ accounts: users.length, signedIn: users.filter(x => x.name).length, onlineNow: online.size, inGame }, DB.adminOverview()));
+    return;
+  }
+  if (route === '/api/admin/players') {               // ?q=part of a name (empty: newest first)
+    const s = String(q('q') || '').toLowerCase().trim();
+    const list = Accounts.all().filter(x => x.name && (!s || x.name.toLowerCase().includes(s))).sort((a, b) => (b.created || 0) - (a.created || 0)).slice(0, 60);
+    json(200, { list: list.map(x => Object.assign(userInfo(x.id), { joined: x.created || null })) });
+    return;
+  }
+  if (route === '/api/admin/player') {
+    const a = Accounts.byName(q('name')); if (!a) { json(404, { error: 'No player with that name.' }); return; }
+    json(200, Object.assign(userInfo(a.id), { joined: a.created || null, owned: DB.titlesOf(a.id), runs: withName(DB.adminRuns({ uid: a.id, limit: 60 })) }));
+    return;
+  }
+  if (route === '/api/admin/runs') {                  // filters: name, mode, status, minScore, maxScore, minDur, maxDur, minPps, days, limit
+    const f = {}; for (const k of ['mode', 'status', 'minScore', 'maxScore', 'minDur', 'maxDur', 'minPps', 'limit']) { const v = q(k); if (v !== null && v !== '') f[k] = v; }
+    if (q('name')) { const a = Accounts.byName(q('name')); if (!a) { json(200, { list: [] }); return; } f.uid = a.id; }
+    if (+q('days') > 0) f.since = Date.now() - +q('days') * 86400e3;
+    json(200, { list: withName(DB.adminRuns(f)) });
+    return;
+  }
+  if (route === '/api/admin/racing') {                // ?track=&kind=laps|races
+    const track = Tracks.TRACK_BY_ID[q('track')] ? q('track') : Tracks.TRACKS[0].id;
+    json(200, { track, list: withName(q('kind') === 'races' ? DB.adminRaces(track) : DB.adminLaps(track)) });
+    return;
+  }
+  if (route === '/api/admin/log') { json(200, { list: DB.adminLogList(200) }); return; }
+  if (route === '/api/admin/action' && req.method === 'POST') {
+    body(m => {
+      const who = () => { const a = Accounts.byName(m.name); if (!a) throw new Error('No player called "' + m.name + '".'); return a; };
+      let msg;
+      try {
+        switch (m.action) {
+          case 'ban': {                                  // days 0 / empty = permanent
+            const a = who(), days = Math.max(0, Math.min(3650, Math.floor(+m.days || 0)));
+            if (isAdmin(a)) throw new Error('That\'s the admin account.');
+            DB.setBanned(a.id, true, days); msg = `${a.name} leaderboard banned ${days ? 'for ' + days + ' days (scores + stats reset when it ends)' : 'permanently'}.`;
+            DB.adminLog('ban', a.name, days ? days + ' days' : 'permanent'); break;
+          }
+          case 'unban': { const a = who(); DB.setBanned(a.id, false); msg = `${a.name} unbanned.`; DB.adminLog('unban', a.name); break; }
+          case 'grant': {
+            const a = who(); if (!Titles.TITLE_BY_ID[m.title]) throw new Error('Unknown title.');
+            const note = m.note ? String(m.note).slice(0, 300) : null;
+            msg = DB.gift(a.id, m.title, note) ? `"${Titles.TITLE_BY_ID[m.title].name}" sent to ${a.name}'s inbox.` : `${a.name} already has "${Titles.TITLE_BY_ID[m.title].name}" (or it's waiting in their inbox).`;
+            DB.adminLog('grant', a.name, m.title + (note ? ' - ' + note : '')); break;
+          }
+          case 'revoke': {
+            const a = who(); if (!Titles.TITLE_BY_ID[m.title]) throw new Error('Unknown title.');
+            DB.db.prepare('DELETE FROM user_titles WHERE uid = ? AND title = ?').run(a.id, m.title);
+            DB.db.prepare("DELETE FROM inbox WHERE uid = ? AND kind = 'title' AND item = ? AND claimed IS NULL").run(a.id, m.title);
+            if (DB.equipped(a.id) === m.title) DB.equip(a.id, null);
+            msg = `${a.name} lost "${Titles.TITLE_BY_ID[m.title].name}".`; DB.adminLog('revoke', a.name, m.title); break;
+          }
+          case 'removeRun': case 'restoreRun': {
+            const id = Math.floor(+m.id), on = m.action === 'removeRun', row = DB.db.prepare('SELECT verified FROM runs WHERE id = ?').get(id);
+            if (!row) throw new Error('No run #' + id + '.');
+            if (!on && row.verified < 0) throw new Error('Run #' + id + ' failed the checks - it can\'t be put on the leaderboard.');   // (a rejected run never goes on)
+            DB.setRemoved(id, on);
+            msg = `Run #${id} ${on ? 'taken off the leaderboard' : 'restored'}.`; DB.adminLog(m.action, '#' + id); break;
+          }
+          case 'trim': {                                 // every run of a player above a score off the board
+            const a = who(), mode = m.mode === 'mp' ? 'mp' : 'sp', max = +m.max;
+            if (!Number.isFinite(max)) throw new Error('Give a score.');
+            msg = `${a.name}: ${DB.removeAbove(a.id, mode, max)} ${mode} runs above ${fmtN(max)} removed.`; DB.adminLog('trim', a.name, `${mode} > ${max}`); break;
+          }
+          case 'lap': case 'race': {                     // status: 0 = counted (approve / restore), 1 = removed, 2 = held
+            const st = [0, 1, 2].includes(+m.status) ? +m.status : 1, id = Math.floor(+m.id);
+            if (!DB.setLapStatus(m.action === 'lap' ? 'laps' : 'race_results', id, st)) throw new Error('Nothing with id ' + id + '.');
+            msg = `${m.action === 'lap' ? 'Lap' : 'Race result'} #${id} ${['approved / counted', 'removed', 'held'][st]}.`; DB.adminLog(m.action + ' ' + ['count', 'remove', 'hold'][st], '#' + id); break;
+          }
+          default: throw new Error('Unknown action.');
+        }
+      } catch (e) { json(400, { error: e.message }); return; }
+      json(200, { ok: true, msg });
+    });
+    return;
+  }
+  json(404, { error: 'Not found' });
+}
+
+// a refused race lap / finish of a signed-in driver: recorded once per race (admin panel + the auto-ban count)
+function raceFlag(R, p, note, ms = 0) {
+  if (!p.account || !p.account.name) return;
+  R.flagged = R.flagged || new Set(); if (R.flagged.has(p.id)) return; R.flagged.add(p.id);
+  try { DB.flagRacing(p.account.id, 'race', note, ms); } catch (e) { console.log('race flag error:', e.message); }
+}
 const raceSet = (room, st, endsAt = 0) => { room.race.st = st; room.race.endsAt = endsAt; broadcast(room, raceMsg(room)); };
 function raceTick() {
   const now = Date.now();
@@ -117,7 +216,7 @@ function raceTick() {
         R.hold = Math.round(300 + Math.random() * 2200);
         R.grid = [...room.players.keys()].slice(0, Tracks.RACE_MAX); R.goAt = now + 2000 + 5000 + R.hold;
         R.who = {}; for (const id of R.grid) { const p = room.players.get(id); R.who[id] = { name: p.name, color: p.color, uid: p.account && p.account.name ? p.account.id : null }; }   // (for the results, even if they leave; uid: signed in, for Race Points)
-        R.finish = new Map(); R.lap = new Map(); R.lapAt = new Map(); R.tr = new Map(); R.firstAt = 0; R.results = [];
+        R.finish = new Map(); R.lap = new Map(); R.lapAt = new Map(); R.tr = new Map(); R.flagged = new Set(); R.firstAt = 0; R.results = [];
         raceSet(room, 'grid', R.goAt);
       }
     } else if (R.st === 'grid') { if (now >= R.goAt) raceSet(room, 'racing', R.goAt + RACE_LIMIT_MS); }
@@ -396,7 +495,7 @@ const server = http.createServer((req, res) => {
         if (isNew && DB.alphaOpen()) DB.gift(user.id, 'alpha');   // (Alpha Tester: switched off since the beta)
         if (isNew && DB.betaOpen()) DB.gift(user.id, 'beta');     // (new players get Beta Tester until it's switched off)
         DB.gift(user.id, 'verified');                           // (signed in with Google; only sent once)
-        json(200, { session: token, name: user.name, title: DB.equipped(user.id) });
+        json(200, Object.assign({ session: token, name: user.name, title: DB.equipped(user.id), banned: DB.isBanned(user.id), banUntil: DB.banUntil(user.id) }, isAdmin(user) ? { admin: true } : {}));
       })
         .catch(e => json(401, { error: e.message }));
     });
@@ -405,7 +504,7 @@ const server = http.createServer((req, res) => {
   const bearer = () => Accounts.bySession(String(req.headers.authorization || '').replace(/^Bearer /, ''));
   if (route === '/api/account') {                       // who am I? (Authorization: Bearer <session>)
     const u = bearer();
-    json(u ? 200 : 401, u ? { name: u.name, title: DB.equipped(u.id) } : { error: 'not signed in' });
+    json(u ? 200 : 401, u ? Object.assign({ name: u.name, title: DB.equipped(u.id), banned: DB.isBanned(u.id), banUntil: DB.banUntil(u.id) }, isAdmin(u) ? { admin: true } : {}) : { error: 'not signed in' });   // (banned: leaderboard banned - the launch popup tells them; banUntil: when a temporary ban ends)
     return;
   }
   // owner tools: the video recorder (tools/recorder.js) is only handed to the owners' accounts (Bearer).
@@ -420,13 +519,31 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
+  // ---- ADMIN (the PolyWeave account only - checked here on every request against its locked Google id, db.js
+  // adminUid; anyone else gets a plain 404 as if none of this existed). The panel's code (admin/panel.js, never served
+  // as a static file) is only handed to the admin. Every change is written to the admin log.
+  if (route === '/api/tools/admin' || route.startsWith('/api/admin/')) {
+    const u = bearer();
+    if (!isAdmin(u)) { res.writeHead(404); res.end('Not found'); return; }
+    if (route === '/api/tools/admin') {
+      fs.readFile(path.join(ROOT, 'admin', 'panel.js'), (err, data) => {
+        if (err) { res.writeHead(404); res.end('Not found'); return; }
+        res.writeHead(200, { 'Content-Type': TYPES['.js'], 'Cache-Control': 'no-store' }); res.end(data);
+      });
+      return;
+    }
+    try { adminApi(route, url, req, json, body); } catch (e) { console.log('admin error:', e.message); json(500, { error: e.message }); }
+    return;
+  }
   // profiles: GET /api/profile?name=<driver> (anyone's), GET /api/profile (Bearer: your own, with your titles)
   if (route === '/api/profile') {
     const qn = url.searchParams.get('name');
     const u = qn ? Accounts.byName(qn) : bearer();
     if (!u || !u.name) { json(qn ? 404 : 401, { error: qn ? 'No driver with that name.' : 'Sign in to see your profile.' }); return; }
-    if (DB.isBanned(u.id)) { json(404, { error: 'No driver with that name.' }); return; }
-    const pr = Object.assign({ name: u.name, joined: u.created || null }, DB.profile(u.id));
+    // leaderboard banned: the profile still opens, marked banned, with no stats (shown as N/A)
+    const banned = DB.isBanned(u.id);
+    // (it still shows the date joined and time played; banUntil: when a temporary ban ends)
+    const pr = banned ? { name: u.name, joined: u.created || null, banned: true, banUntil: DB.banUntil(u.id), title: DB.equipped(u.id), playS: DB.profile(u.id).playS } : Object.assign({ name: u.name, joined: u.created || null }, DB.profile(u.id));
     if (!qn) Object.assign(pr, { self: true, owned: DB.titlesOf(u.id), owners: DB.ownerCounts() });
     json(200, pr);
     return;
@@ -642,14 +759,18 @@ const server = http.createServer((req, res) => {
       const min = Tracks.minLapMs(Tracks.trackLength(m.track)), pen = Number(m.pen) === 5 ? 5000 : 0, raw = ms - pen;   // (raw: driven, without the jump-start +5 s)
       const sp = Array.isArray(m.splits) ? m.splits.map(Number) : [], S = tok.s || [], SLACK = 2000;
       const off = (game, server) => Math.abs(game - server) > SLACK;
-      const why = !(ms >= min && ms < 30 * 60e3) ? 'too fast'
+      const why = !(ms >= min && ms < 30 * 60e3) ? 'faster than flat out'
         : S.length !== 3 || sp.length !== 2 || !sp.every(Number.isFinite) ? 'no sector times'
         : !(sp[0] >= min / 3 && sp[1] - sp[0] >= min / 3 && raw - sp[1] >= min / 3) ? 'a sector too fast'
         : off(sp[0], S[1] - S[0]) ? `sector 1 ${sp[0]} ms, server saw ${S[1] - S[0]} ms`
         : off(sp[1] - sp[0], S[2] - S[1]) ? `sector 2 ${sp[1] - sp[0]} ms, server saw ${S[2] - S[1]} ms`
         : off(raw - sp[1], now - S[2]) ? `sector 3 ${raw - sp[1]} ms, server saw ${now - S[2]} ms`
         : off(raw, now - S[0]) ? `lap ${raw} ms, server saw ${now - S[0]} ms` : null;
-      if (why) { console.log(`lap rejected: ${u.name} ${m.track} ${ms} ms: ${why}`); json(200, { rank: null, rejected: why }); return; }
+      if (why) {                                         // (recorded once per lap token: admin panel + the auto-ban count)
+        console.log(`lap rejected: ${u.name} ${m.track} ${ms} ms: ${why}`);
+        if (DB.spendToken(tok.n)) DB.flagRacing(u.id, 'lap', `lap ${m.track}: ${why}`, ms);
+        json(200, { rank: null, rejected: why }); return;
+      }
       if (!DB.spendToken(tok.n)) { json(409, { error: 'That lap was already submitted.' }); return; }
       json(200, DB.addLap(u.id, m.track, ms));
     });
@@ -770,7 +891,10 @@ wss.on('connection', ws => {
       if (m.t === 'rlap') {                              // (in order, and not quicker than a flat-out lap)
         const n = Math.floor(num(m.lap, 0, 99));
         if (n === done + 1 && now - lastAt >= minLap) { R.lap.set(p.id, n); R.lapAt.set(p.id, now); }
-        else if (n > done) console.log(`race check: ${p.name} ${R.track}: lap ${n} refused (had ${done}, ${now - lastAt} ms, min ${minLap})`);
+        else if (n > done) {
+          console.log(`race check: ${p.name} ${R.track}: lap ${n} refused (had ${done}, ${now - lastAt} ms, min ${minLap})`);
+          if (n === done + 1) raceFlag(R, p, `race ${R.track}: lap quicker than flat out (${now - lastAt} ms, min ${minLap})`);
+        }
         return;
       }
       if (R.finish.has(p.id)) return;
@@ -778,6 +902,7 @@ wss.on('connection', ws => {
       if (done < R.laps - 1 || now - lastAt < minLap || ms < minLap * R.laps) return;   // (skipped laps / too quick to be real)
       if (!RACE_TEST && (!T || T.bad || T.maxS < R.laps * L - 300)) {                 // (didn't really drive the distance)
         console.log(`race check: ${p.name} ${R.track}: finish refused (${T ? T.bad || 'covered ' + Math.round(T.maxS) + ' of ' + Math.round(R.laps * L) + ' m' : 'no position reports'})`);
+        raceFlag(R, p, `race ${R.track}: ` + (T && T.bad ? 'race: ' + T.bad : `finish refused, ${T ? 'covered ' + Math.round(T.maxS) + ' of ' + Math.round(R.laps * L) + ' m' : 'no position reports'}`), ms);
         return;
       }
       const pen = Math.round(num(m.pen, 0, 300));          // (penalty seconds the game handed out: jump start, track limits, collisions)

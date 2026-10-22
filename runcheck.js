@@ -121,7 +121,9 @@ function verify(run, ctx) {
     } else return fail(`event ${i}: unknown event`);
   }
   if (Math.abs(score - claimed) > 2 + claimed * 0.002) return fail(`log adds up to ${Math.round(score)}, not ${Math.round(claimed)}`);
-  if (dur > 30 && near > dur * 4) return fail(`${near} near misses in ${Math.round(dur)} s is more than traffic allows`);
+  // (every run, short ones too - a cheater stopped each run at 29 s when this only counted past 30 s; the +10 lets a
+  //  short run start with a quick burst)
+  if (near > dur * 4 + 10) return fail(`${near} near misses in ${Math.round(dur)} s is more than traffic allows`);
   // multiplayer: the server watched this player's position the whole time. Speed points per metre driven
   // are highest at top speed: (290 - 130) x 0.55 per (290 / 3.6) m = 1.093 per metre.
   if (ctx.mp) {

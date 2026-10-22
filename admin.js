@@ -6,7 +6,9 @@
 //    sudo -u polyweave node admin.js rejected             runs the checks turned down, and why
 //    sudo -u polyweave node admin.js log <runId>          the event log of a run (kept for personal bests / rejected runs)
 //    sudo -u polyweave node admin.js remove <runId>       take a run off the leaderboard (restore <runId> undoes it)
-//    sudo -u polyweave node admin.js ban <name>           hide all their runs and block new ones (unban <name> undoes it)
+//    sudo -u polyweave node admin.js ban <name> [days]    leaderboard ban: hide all their runs and block new ones; with
+//                                                         days it ends by itself and resets their scores + stats
+//                                                         (unban <name> lifts it early, no reset)
 //    sudo -u polyweave node admin.js trim <name> sp|mp <max>  take all their runs above <max> points off the board
 //    sudo -u polyweave node admin.js grant <name> <title> ["message"]  send a title to their inbox, with an optional
 //                                                         message (\n = new line); revoke <name> <title> takes it away
@@ -41,7 +43,7 @@ switch (cmd) {
   }
   case 'player': {
     const u = who(a), row = DB.db.prepare('SELECT * FROM users WHERE uid = ?').get(u.id);
-    console.log(`${u.name}  (id ${u.id})${row.banned ? '  BANNED' : ''}`);
+    console.log(`${u.name}  (id ${u.id})${row.banned ? '  BANNED' + (row.ban_until ? ` until ${day(row.ban_until)} UTC` : ' (permanent)') : ''}`);
     console.log(`titles: ${DB.titlesOf(u.id).join(', ') || '-'}   equipped: ${row.title || '-'}   time in scored runs: ${(row.play_s / 3600).toFixed(1)} h`);
     for (const m of ['sp', 'mp']) console.log(`${m}: best ${fmt(DB.bestOf(m, u.id))}, rank ${DB.rankOf(m, u.id) || '-'}`);
     for (const r of DB.runsOf(u.id, 30)) console.log('  ' + runRow(r));
@@ -58,9 +60,9 @@ switch (cmd) {
   case 'remove': case 'restore':
     console.log(DB.setRemoved(+a, cmd === 'remove') ? `Run #${a} ${cmd === 'remove' ? 'removed' : 'restored'}.` : `No run #${a}.`);
     break;
-  case 'ban': case 'unban': {
-    const u = who(a); DB.setBanned(u.id, cmd === 'ban');
-    console.log(`${u.name} ${cmd === 'ban' ? 'banned' : 'unbanned'}.`);
+  case 'ban': case 'unban': {   // ban <name> [days]: no days = permanent; with days, scores + stats reset when it ends
+    const u = who(a), days = Number(b) || 0; DB.setBanned(u.id, cmd === 'ban', days);
+    console.log(`${u.name} ${cmd === 'ban' ? 'leaderboard banned ' + (days ? `for ${days} days (scores and stats reset when it ends)` : 'permanently') : 'unbanned'}.`);
     break;
   }
   case 'grant': case 'revoke': {

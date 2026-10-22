@@ -413,6 +413,7 @@
     <div class="hdr"><button class="back" id="profBack">← BACK</button><h1 id="profHead">PROFILE</h1></div>
     <div id="profNote" class="sub"></div>
     <div id="profBody" class="hidden">
+      <div id="profBan" class="profBan hidden">LEADERBOARD BANNED</div>
       <div class="profTop">
         <div class="profCard">
           <div class="profName" id="profName"></div>
@@ -520,6 +521,12 @@
 <!-- launch popup (main.js Welcome): "sign in with Google" when not signed in, then "Version 1.1 is here" once -->
 <div id="welcome" class="hidden">
   <div class="wcCard">
+    <div class="wcSlide" data-wc="banned">
+      <div class="wcTag wcRed">ACCOUNT NOTICE</div>
+      <h2>You have been leaderboard banned</h2>
+      <p>You can still play, but no runs are saved on the leaderboard.</p>
+      <div class="wcBanLeft hidden" id="wcBanLeft"></div>
+    </div>
     <div class="wcSlide" data-wc="signin">
       <div class="wcTag">WELCOME TO POLYWEAVE</div>
       <h2>Sign in with Google</h2>

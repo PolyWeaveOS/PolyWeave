@@ -62,13 +62,15 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT, uid TEXT NOT NULL, track TEXT NOT NULL, pos INTEGER, n INTEGER NOT NULL, pts INTEGER NOT NULL,
     ms INTEGER, season INTEGER NOT NULL, t INTEGER NOT NULL, removed INTEGER NOT NULL DEFAULT 0);
   CREATE INDEX IF NOT EXISTS race_board ON race_results (season, removed, uid);
+  CREATE TABLE IF NOT EXISTS admin_log (id INTEGER PRIMARY KEY AUTOINCREMENT, t INTEGER NOT NULL, action TEXT NOT NULL, target TEXT, detail TEXT);
 `);
 
 // newer columns (added to databases made before them)
 {
   const have = new Set(db.prepare('PRAGMA table_info(users)').all().map(c => c.name));
   for (const [col, def] of [['best_rank_sp', 'INTEGER'], ['best_rank_mp', 'INTEGER'],
-    ['allow_requests', 'INTEGER NOT NULL DEFAULT 1'], ['hide_activity', 'INTEGER NOT NULL DEFAULT 0'], ['best_team', 'REAL NOT NULL DEFAULT 0']]) if (!have.has(col)) db.exec(`ALTER TABLE users ADD COLUMN ${col} ${def}`);
+    ['allow_requests', 'INTEGER NOT NULL DEFAULT 1'], ['hide_activity', 'INTEGER NOT NULL DEFAULT 0'], ['best_team', 'REAL NOT NULL DEFAULT 0'],
+    ['ban_until', 'INTEGER']]) if (!have.has(col)) db.exec(`ALTER TABLE users ADD COLUMN ${col} ${def}`);
   const haveR = new Set(db.prepare('PRAGMA table_info(runs)').all().map(c => c.name));
   if (!haveR.has('dist')) db.exec('ALTER TABLE runs ADD COLUMN dist REAL');
   if (!haveR.has('room')) db.exec('ALTER TABLE runs ADD COLUMN room TEXT');   // (multiplayer: which server, for team runs)
@@ -262,10 +264,18 @@ function lapAround(track, uid, k = 10, season = SEASON) {
   return { total: list.length, rank: i >= 0 ? i + 1 : null, list: i >= 0 ? list.slice(Math.max(0, i - k), i + k + 1) : [] };
 }
 // a checked time-trial lap: returns { rank (if it's a new personal best), best }
+// (racing review queue: a lap / race time more than 8% quicker than the current track record - once the board has 3+
+//  drivers - is saved HELD (removed = 2): off the board until the admin approves it in the admin panel)
+const HOLD_FACTOR = 0.92;
+const tooGood = (list, ms) => list.length >= 3 && ms < list[0].ms * HOLD_FACTOR;
 function addLap(uid, track, ms) {
   ensureUser(uid);
   const b = db.prepare('SELECT MIN(ms) AS ms FROM laps WHERE uid = ? AND track = ? AND season = ? AND removed = 0').get(uid, track, SEASON);
   const before = (b && b.ms) || 0, improved = !before || ms < before;
+  if (tooGood(lapBoard(track), ms)) {
+    db.prepare('INSERT INTO laps (uid, track, ms, season, t, removed) VALUES (?, ?, ?, ?, ?, 2)').run(uid, track, Math.round(ms), SEASON, Date.now());
+    return { rank: null, best: before, held: true };
+  }
   db.prepare('INSERT INTO laps (uid, track, ms, season, t) VALUES (?, ?, ?, ?, ?)').run(uid, track, Math.round(ms), SEASON, Date.now());
   cache.delete('lap:' + track + ':' + SEASON);
   const rank = improved ? (lapBoard(track).findIndex(e => e.uid === uid) + 1 || null) : null;
@@ -274,8 +284,8 @@ function addLap(uid, track, ms) {
 // racing: every finished race (rows [{ uid, pos (null = DNF), ms (server-measured, penalties included) }],
 // n = drivers on the grid). The races leaderboard is each driver's fastest finish on a track.
 function addRace(track, n, rows) {
-  const ins = db.prepare('INSERT INTO race_results (uid, track, pos, n, pts, ms, season, t) VALUES (?, ?, ?, ?, 0, ?, ?, ?)'), t = Date.now();
-  for (const r of rows) { ensureUser(r.uid); ins.run(r.uid, track, r.pos || null, n, r.pos ? Math.round(r.ms) : null, SEASON, t); }
+  const ins = db.prepare('INSERT INTO race_results (uid, track, pos, n, pts, ms, season, t, removed) VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)'), t = Date.now(), board = raceBoard(track);
+  for (const r of rows) { ensureUser(r.uid); ins.run(r.uid, track, r.pos || null, n, r.pos ? Math.round(r.ms) : null, SEASON, t, r.pos && tooGood(board, r.ms) ? 2 : 0); }
   cache.delete('races:' + track + ':' + SEASON);
 }
 function raceBoard(track, season = SEASON) {
@@ -311,7 +321,7 @@ function addRun(r) {
               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(r.uid, r.mode, Math.round(r.score), r.dur || 0, r.near || 0, r.topKmh || 0, r.peak || 1, r.dist || 0, r.server || null, r.room || null, SEASON, now,
       r.verified, ok ? 0 : 1, r.note || null, log);
-  if (!ok) return { rank: null, best: before, improved: false, newTitles: [], team: null };
+  if (!ok) return { rank: null, best: before, improved: false, newTitles: [], team: null, autoBanned: autoBan(r.uid) };
   const newTitles = Titles.titlesForRun(r.score).filter(id => gift(r.uid, id)).concat(statTitles(r.uid));
   cache.delete(r.mode + ':' + SEASON);
   const rank = improved ? rankOf(r.mode, r.uid) : null;
@@ -459,8 +469,100 @@ const markRead = (uid, from) => db.prepare('UPDATE messages SET read = 1 WHERE t
 const unreadBy = uid => Object.fromEntries(db.prepare('SELECT from_uid, COUNT(*) AS n FROM messages WHERE to_uid = ? AND read = 0 GROUP BY from_uid').all(uid).map(r => [r.from_uid, r.n]));
 
 // ---------------------------------------------------------------- admin (admin.js)
-const isBanned = uid => { const r = db.prepare('SELECT banned FROM users WHERE uid = ?').get(uid); return !!(r && r.banned); };
-function setBanned(uid, on) { ensureUser(uid); db.prepare('UPDATE users SET banned = ? WHERE uid = ?').run(on ? 1 : 0, uid); cache.clear(); }
+// Leaderboard bans: permanent (ban_until empty) or until a time (a temporary ban). While banned, runs aren't saved and
+// the player is off every board. When a temporary ban runs out, their scores and stats are reset - every run, lap and
+// race result taken off, best ranks and best team run cleared - keeping only the date they joined and time played.
+function endBan(uid) {
+  for (const t of ['runs', 'laps', 'race_results']) db.prepare(`UPDATE ${t} SET removed = 1 WHERE uid = ?`).run(uid);
+  db.prepare('UPDATE users SET banned = 0, ban_until = NULL, best_rank_sp = NULL, best_rank_mp = NULL, best_team = 0 WHERE uid = ?').run(uid);
+  cache.clear();
+}
+// (checked whenever a ban matters, so an expired one ends - and resets - right on time)
+const isBanned = uid => {
+  const r = db.prepare('SELECT banned, ban_until FROM users WHERE uid = ?').get(uid);
+  if (!r || !r.banned) return false;
+  if (r.ban_until && r.ban_until <= Date.now()) { endBan(uid); return false; }
+  return true;
+};
+const banUntil = uid => { const r = db.prepare('SELECT banned, ban_until FROM users WHERE uid = ?').get(uid); return r && r.banned ? r.ban_until || null : null; };
+// on = true: banned (days: a temporary ban for that many days; none = permanent); on = false: unbanned (no reset)
+function setBanned(uid, on, days) {
+  ensureUser(uid);
+  db.prepare('UPDATE users SET banned = ?, ban_until = ? WHERE uid = ?').run(on ? 1 : 0, on && days > 0 ? Date.now() + days * 86400e3 : null, uid);
+  cache.clear();
+}
+// Auto-ban: 3 runs rejected for a reason only a faked run can have, within 24 hours = a 7-day leaderboard ban (scores
+// and stats reset when it ends). Reasons an honest player could hit through lag or an old cached copy of the game -
+// multiplayer distance / proximity mismatches, a log that doesn't add up, timing oddities - never count. Owners never.
+const CHEAT_ONLY = ['impossible near-miss gap', 'faster than the car can go', "near-miss points don't match", 'too many near misses at once',
+  'more than traffic allows', 'multiplier went up without a near miss', 'proximity bonus outside multiplayer', 'bad proximity bonus',
+  'bad speed chunk', 'bad shoulder time', 'unknown event', 'malformed', 'bad score', 'bad duration', 'bad log',
+  // racing (flagRacing): a lap / lap split quicker than the car flat out, a car that teleported in a race
+  'faster than flat out', 'a sector too fast', 'race: moved', 'lap quicker than flat out'];
+const cheatOnly = note => !!note && CHEAT_ONLY.some(s => note.includes(s));
+function autoBan(uid) {
+  if (isBanned(uid)) return false;
+  const acct = readAccounts()[uid];
+  if (acct && acct.name && OWNER_NAMES.includes(acct.name.toLowerCase())) return false;
+  const n = db.prepare('SELECT note FROM runs WHERE uid = ? AND verified = -1 AND t > ?').all(uid, Date.now() - 86400e3).filter(r => cheatOnly(r.note)).length;
+  if (n < 3) return false;
+  setBanned(uid, true, 7);
+  console.log(`auto-ban: ${(acct && acct.name) || uid} - ${n} faked-run rejections in 24 h -> 7-day leaderboard ban`);
+  return true;
+}
+// a refused time-trial lap / race finish: kept as a rejected run (mode 'lap' / 'race', off every board) so the admin
+// panel shows it and the cheat-only ones count toward the auto-ban
+function flagRacing(uid, mode, note, ms = 0) {
+  ensureUser(uid);
+  db.prepare('INSERT INTO runs (uid, mode, score, dur, season, t, verified, removed, note) VALUES (?, ?, ?, ?, ?, ?, -1, 1, ?)').run(uid, mode, Math.round(ms) || 0, (ms || 0) / 1000, SEASON, Date.now(), String(note).slice(0, 300));
+  return autoBan(uid);
+}
+
+// ---------------------------------------------------------------- admin panel (server.js /api/admin/*, admin only)
+// The admin is ONE account, locked by its Google id (not its name, so renaming can't pass it on): the account called
+// PolyWeave when this first runs (meta admin_uid).
+if (!getMeta('admin_uid')) { const a = Object.values(readAccounts()).find(x => x && x.name && x.name.toLowerCase() === 'polyweave'); if (a) setMeta('admin_uid', a.id); }
+const adminUid = () => getMeta('admin_uid');
+const adminLog = (action, target, detail) => db.prepare('INSERT INTO admin_log (t, action, target, detail) VALUES (?, ?, ?, ?)').run(Date.now(), action, target || null, detail || null);
+const adminLogList = (n = 200) => db.prepare('SELECT * FROM admin_log ORDER BY id DESC LIMIT ?').all(n);
+// runs with filters: { uid, mode ('sp'|'mp'|'lap'|'race'), status ('verified'|'rejected'|'removed'|'counted'), minScore,
+// maxScore, minDur, maxDur, minPps (points per second), since (ms), limit }
+function adminRuns(f = {}) {
+  const w = [], a = [];
+  if (f.uid) { w.push('uid = ?'); a.push(f.uid); }
+  if (['sp', 'mp', 'lap', 'race'].includes(f.mode)) { w.push('mode = ?'); a.push(f.mode); }
+  if (f.status === 'verified') w.push('verified = 1');
+  else if (f.status === 'rejected') w.push('verified = -1');
+  else if (f.status === 'removed') w.push('verified = 1 AND removed = 1');
+  else if (f.status === 'counted') w.push('removed = 0');
+  for (const [k, col, op] of [['minScore', 'score', '>='], ['maxScore', 'score', '<='], ['minDur', 'dur', '>='], ['maxDur', 'dur', '<='], ['since', 't', '>=']])
+    if (Number.isFinite(+f[k]) && f[k] !== '' && f[k] !== null && f[k] !== undefined) { w.push(`${col} ${op} ?`); a.push(+f[k]); }
+  if (Number.isFinite(+f.minPps) && +f.minPps > 0) { w.push('dur > 0 AND score / dur >= ?'); a.push(+f.minPps); }
+  return db.prepare(`SELECT id, uid, mode, score, dur, near, top_kmh, peak, server, t, verified, removed, note FROM runs ${w.length ? 'WHERE ' + w.join(' AND ') : ''} ORDER BY t DESC LIMIT ?`)
+    .all(...a, Math.min(500, Math.max(1, +f.limit || 100)));
+}
+// racing: every lap / race result on a track (status: 0 counted, 1 removed, 2 held for review)
+const adminLaps = (track, n = 200) => db.prepare('SELECT id, uid, ms, t, removed FROM laps WHERE track = ? AND season = ? ORDER BY removed = 2 DESC, ms ASC LIMIT ?').all(track, SEASON, n);
+const adminRaces = (track, n = 200) => db.prepare('SELECT id, uid, pos, n, ms, t, removed FROM race_results WHERE track = ? AND season = ? AND ms IS NOT NULL ORDER BY removed = 2 DESC, ms ASC LIMIT ?').all(track, SEASON, n);
+function setLapStatus(table, id, status) {   // table 'laps' | 'race_results'; status 0 / 1 / 2
+  if (!['laps', 'race_results'].includes(table)) return false;
+  const n = db.prepare(`UPDATE ${table} SET removed = ? WHERE id = ?`).run(status, id).changes; cache.clear(); return n > 0;
+}
+const heldCount = () => db.prepare('SELECT (SELECT COUNT(*) FROM laps WHERE removed = 2) + (SELECT COUNT(*) FROM race_results WHERE removed = 2) AS n').get().n;
+function adminOverview() {
+  const day = Date.now() - 86400e3, c = q => db.prepare(q).get(day).n;
+  return {
+    bannedPerm: db.prepare('SELECT COUNT(*) AS n FROM users WHERE banned = 1 AND ban_until IS NULL').get().n,
+    bannedTemp: db.prepare('SELECT COUNT(*) AS n FROM users WHERE banned = 1 AND ban_until IS NOT NULL').get().n,
+    runs24: c('SELECT COUNT(*) AS n FROM runs WHERE t > ? AND verified = 1'), rejected24: c('SELECT COUNT(*) AS n FROM runs WHERE t > ? AND verified = -1'),
+    runsTotal: db.prepare('SELECT COUNT(*) AS n FROM runs WHERE verified = 1').get().n, laps24: c('SELECT COUNT(*) AS n FROM laps WHERE t > ?'),
+    held: heldCount(), playHours: Math.round(db.prepare('SELECT SUM(play_s) AS s FROM users').get().s / 360) / 10,
+  };
+}
+const userRow = uid => db.prepare('SELECT uid, title, banned, ban_until, play_s, created, best_rank_sp, best_rank_mp FROM users WHERE uid = ?').get(uid);
+// temporary bans that ran out while nobody looked (the boards hide banned players without asking isBanned)
+function sweepBans() { for (const r of db.prepare('SELECT uid FROM users WHERE banned = 1 AND ban_until IS NOT NULL AND ban_until <= ?').all(Date.now())) endBan(r.uid); }
+setInterval(sweepBans, 60e3).unref();
 function setRemoved(id, on) { const n = db.prepare('UPDATE runs SET removed = ? WHERE id = ?').run(on ? 1 : 0, id).changes; cache.clear(); return n > 0; }
 const runsOf = (uid, n = 30) => db.prepare('SELECT id, mode, score, dur, near, top_kmh, peak, server, t, verified, removed, note FROM runs WHERE uid = ? ORDER BY t DESC LIMIT ?').all(uid, n);
 const runLog = id => { const r = db.prepare('SELECT log FROM runs WHERE id = ?').get(id); return r && r.log ? JSON.parse(zlib.gunzipSync(r.log)) : null; };
@@ -508,6 +610,18 @@ for (const name of ['beachrat', 'ttnomanchas']) {
   console.log(`Bug Hunter for ${u.name}: ${sent ? 'sent' : 'already had / waiting'}`);
 }
 
+// Leaderboard bans (once each, 2026-10-22): lmaoooo permanently (faked runs: made-up near misses, every run kept
+// under 30 s to slip past the old check), BWOMACK for 7 days from when this first runs (his 1.97M mp run, 4 min after
+// lmaoooo's on the same server) - when it ends his scores and stats reset (db.js endBan). Each waits for the account.
+for (const [name, days] of [['lmaoooo', 0], ['bwomack', 7]]) {
+  const key = 'ban_' + name + '_v1'; if (getMeta(key)) continue;
+  const u = Object.values(readAccounts()).find(a => a && a.name && a.name.toLowerCase() === name);
+  if (!u) continue;
+  setMeta(key, Date.now());
+  setBanned(u.id, true, days);
+  console.log(`Leaderboard ban: ${u.name} ${days ? 'for ' + days + ' days' : 'permanently'}`);
+}
+
 // Season 1 (once, 2026-10-19): the beta is over. New accounts stop getting Beta Tester (players who have it keep
 // it); the beta leaderboards stay as their own season (0) and every board starts fresh for Season 1.
 if (!getMeta('season1_v1')) {
@@ -535,7 +649,7 @@ function seasonRewards(season) {
 
 module.exports = {
   db, SEASON, SEASONS, SECRET, lapTop, lapAround, addLap, addRace, raceTop, raceAround, seasonRewards, ensureUser, grant, gift, inboxOf, unclaimed, claim, top, around, rankOf, bestOf, addRun, spendToken, profile, addPlayTime,
-  titlesOf, ownerCounts, alphaOpen, setAlphaOpen, betaOpen, setBetaOpen, resetTitles, statTitles, statsOf, pendingOf, equipped, equip, isBanned, setBanned, setRemoved, removeAbove, runsOf, runLog, recentRejected,
+  titlesOf, ownerCounts, alphaOpen, setAlphaOpen, betaOpen, setBetaOpen, resetTitles, statTitles, statsOf, pendingOf, equipped, equip, isBanned, banUntil, setBanned, sweepBans, flagRacing, adminUid, adminLog, adminLogList, adminRuns, adminLaps, adminRaces, setLapStatus, adminOverview, userRow, readAccounts, setRemoved, removeAbove, runsOf, runLog, recentRejected,
   areFriends, friendsOf, requestsIn, requestsOut, socialSettings, setSocialSettings, sendRequest, respond, cancelRequest, unfriend,
   sendMessage, chatWith, markRead, unreadBy, OWNER_NAMES, BIKE_NAMES,
 };

@@ -957,7 +957,8 @@ function renderAccount() {
   }
 }
 Account.onChange = () => {
-  acctMsg = ''; renderAccount(); syncBest(game.mode === 'mp' ? 'mp' : 'sp'); loadOwnerTools();
+  acctMsg = ''; renderAccount(); syncBest(game.mode === 'mp' ? 'mp' : 'sp'); loadOwnerTools(); loadAdmin();
+  if (window.AdminPanel) AdminPanel.account();          // (signed out / another account: the admin button goes)
   setVehicle(Settings.vehicle);                        // (the motorcycle only for its accounts; anyone else is in the car)
   if (game.mode === 'sp' && game.scored && !spToken) fetchSpToken();   // (signed in during a scored run: the next one counts)
   if (Account.ready) Welcome.update();
@@ -972,9 +973,14 @@ const Welcome = {
   update() {
     if (!this.slides) {                                  // (the first time the account state is known: which slides)
       this.slides = [];
+      if (Account.user && Account.user.banned) this.slides.push('banned');   // (leaderboard banned: told first, every launch)
       if (!Account.signedIn && Account.clientId) this.slides.push('signin');
       if (Settings.updatePopup !== false) this.slides.push('update');
       if (!this.slides.length) return;
+      $id('welcome').classList.remove('hidden'); this.draw();
+    } else if (Account.user && Account.user.banned && !this.slides.includes('banned')) {   // (signed in just now, banned: tell them)
+      this.slides.splice(this.i + (this.slides[this.i] === 'signin' ? 1 : 0), 0, 'banned');
+      if (this.slides[this.i] === 'signin') this.i++;
       $id('welcome').classList.remove('hidden'); this.draw();
     } else if (Account.signedIn && this.slides[this.i] === 'signin' && !$id('welcome').classList.contains('hidden')) this.next();
   },
@@ -982,10 +988,18 @@ const Welcome = {
     const cur = this.slides[this.i], last = this.i === this.slides.length - 1;
     document.querySelectorAll('#welcome .wcSlide').forEach(s => s.classList.toggle('on', s.dataset.wc === cur));
     document.querySelector('#welcome .wcDots').innerHTML = this.slides.length > 1 ? this.slides.map((_, j) => `<i${j === this.i ? ' class="on"' : ''}></i>`).join('') : '';
-    $id('wcNext').textContent = cur === 'signin' && !Account.signedIn ? (last ? 'MAYBE LATER' : 'NOT NOW') : last ? 'GOT IT' : 'NEXT';
+    $id('wcNext').textContent = cur === 'signin' && !Account.signedIn ? (last ? 'MAYBE LATER' : 'NOT NOW') : cur === 'banned' ? 'OK' : last ? 'GOT IT' : 'NEXT';
+    // (a temporary ban: when it ends, counting down, and that the scores and stats reset then)
+    clearInterval(this.banT);
+    const until = cur === 'banned' && Account.user && Account.user.banUntil, bl = $id('wcBanLeft');
+    bl.classList.toggle('hidden', !until);
+    if (until) {
+      const tick = () => { bl.innerHTML = `Ban ends in <b>${banLeft(until)}</b><br><span>When it ends, your scores and stats are reset (your date joined and time played stay).</span>`; };
+      tick(); this.banT = setInterval(tick, 1000);
+    }
   },
   next() {
-    if (++this.i >= this.slides.length) $id('welcome').classList.add('hidden'); else this.draw();
+    if (++this.i >= this.slides.length) { $id('welcome').classList.add('hidden'); clearInterval(this.banT); } else this.draw();
   },
 };
 $id('wcNext').onclick = () => Welcome.next();
@@ -1272,19 +1286,34 @@ async function openProfile(name) {
   const hm = s => { const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60); return h ? `${h}h ${m}m` : `${m}m`; };
   const pts = n => n ? U.fmt(n) : '—';
   // top row: this season's best runs with their leaderboard spot; then all-time bests; date joined bottom right
+  const B = !!p.banned, sp = p.sp || {}, mpS = p.mp || {};   // (a banned profile comes without stats)
   const tiles = [
-    ['Season best · singleplayer', pts(p.sp.season), p.sp.rank ? '#' + p.sp.rank : ''],
-    ['Season best · multiplayer', pts(p.mp.season), p.mp.rank ? '#' + p.mp.rank : ''],
-    ['Best singleplayer run', pts(p.sp.best), ''],
-    ['Best multiplayer run', pts(p.mp.best), ''],
-    ['Time played', hm(p.playS), ''],
-    ['Total near misses', U.fmt(p.near), ''],
-    ['Total distance', (p.distM / (mph ? 1609.34 : 1000)).toFixed(p.distM > 1e5 ? 0 : 1) + (mph ? ' mi' : ' km'), ''],
-    ['Date joined', p.joined ? new Date(p.joined).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—', ''],
+    ['Season best · singleplayer', B ? '' : pts(sp.season), sp.rank ? '#' + sp.rank : ''],
+    ['Season best · multiplayer', B ? '' : pts(mpS.season), mpS.rank ? '#' + mpS.rank : ''],
+    ['Best singleplayer run', B ? '' : pts(sp.best), ''],
+    ['Best multiplayer run', B ? '' : pts(mpS.best), ''],
+    ['Total distance', B ? '' : (p.distM / (mph ? 1609.34 : 1000)).toFixed(p.distM > 1e5 ? 0 : 1) + (mph ? ' mi' : ' km'), ''],
+    ['Total near misses', B ? '' : U.fmt(p.near), ''],
+    ['Time played', hm(p.playS || 0), '', true],
+    ['Date joined', p.joined ? new Date(p.joined).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—', '', true],
   ];
+  // leaderboard banned: a note at the top (with a live countdown for a temporary ban), every stat N/A except the
+  // date joined and time played (the tiles marked true)
+  banTag($id('profBan'), p.banned ? (p.banUntil || 0) : null);
+  if (p.banned) for (const tl of tiles) if (!tl[3]) { tl[1] = 'N/A'; tl[2] = ''; }
   const st = $id('profStats'); st.innerHTML = '';
   for (const [k, v, sub] of tiles) { const d = el('div', 'stat'); d.append(el('span', 'k', k), el('span', 'v', v)); if (sub) d.append(el('span', 's rank', sub)); st.appendChild(d); }
   body.classList.remove('hidden');
+}
+// leaderboard ban countdown: "6d 23h 59m 12s"
+const banLeft = until => { const s = Math.max(0, Math.floor((until - Date.now()) / 1000)), d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60); return (d ? d + 'd ' : '') + (d || h ? h + 'h ' : '') + m + 'm ' + (s % 60) + 's'; };
+// the LEADERBOARD BANNED tag (profile): until = null: not banned; 0: permanent; a time: counts down every second
+let banTimer = null;
+function banTag(box, until) {
+  clearInterval(banTimer); box.classList.toggle('hidden', until === null);
+  if (until === null) return;
+  const draw = () => { box.textContent = until ? `LEADERBOARD BANNED · ${banLeft(until)} LEFT` : 'LEADERBOARD BANNED'; if (until && (Date.now() >= until || box.offsetParent === null)) clearInterval(banTimer); };
+  draw(); if (until) banTimer = setInterval(draw, 1000);
 }
 function showProfTitle() {
   const tb = $id('profTitle'); tb.innerHTML = '';
@@ -1790,7 +1819,7 @@ function updatePlayerVisual(dt) {
   playerGlass.opacity = camMode === 1 && !menuOpen ? 0.14 : glassOut;   // (outside: the Garage window tint)
   if (playerF1.root.visible) {                         // racing: the F1 car
     playerF1.root.rotation.x = level ? 0 : bm.pitch * 0.5; playerF1.root.rotation.z = level ? 0 : bm.roll * 0.4;
-    animateWheels(playerF1, car.u * dt, car.steer);
+    animateWheels(playerF1, car.u * dt, f1VisDamp(playerF1, f1VisSteer(car.steer, car.u), dt));   // (front wheels: the turn shown clearly, smoothly - js/f1.js)
     playerF1.brake.visible = car.brakeOn && car.gear >= 0;
     playerF1.helmet.visible = !inCockpit;               // (the cockpit view is from inside the helmet)
     playerF1.cockpit.visible = inCockpit;
@@ -2224,6 +2253,17 @@ function loadOwnerTools() {
       document.body.appendChild(s);
     })
     .catch(() => { toolsFor = null; });
+}
+// Admin panel: only asked for when the server says this account is the admin, and the server checks again before
+// handing it over (admin/panel.js; everyone else gets a 404). The panel adds its own button + screen.
+let adminFor = null;
+function loadAdmin() {
+  if (!Account.signedIn || !Account.user.admin || !Account.session || adminFor === Account.session || window.AdminPanel) return;
+  adminFor = Account.session;
+  fetch((Account.base || '') + '/api/tools/admin', { headers: { Authorization: 'Bearer ' + Account.session }, cache: 'no-store' })
+    .then(r => (r.ok ? r.text() : null))
+    .then(src => { if (!src || window.AdminPanel) return; const s = document.createElement('script'); s.src = URL.createObjectURL(new Blob([src], { type: 'text/javascript' })); document.body.appendChild(s); })
+    .catch(() => { adminFor = null; });
 }
 // restore the last visual style (older saves used a toon on/off flag)
 setFx(Number.isInteger(Settings.fx) ? Settings.fx : (Settings.toon ? 1 : 0), true);

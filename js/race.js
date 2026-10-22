@@ -702,7 +702,7 @@ const Race = {
     let rows = [], html;
     if (S.kind === 'tt') {
       rows.push(['Personal best', !S.before ? 'N/A' : S.pb ? `${dl(S.ms - S.before)} (${fmtLap(S.before)})` : `${fmtLap(S.before)} (${dl(S.ms - S.before)})`]);
-      rows.push(['Leaderboard', !Account.signedIn ? 'Sign in to save lap times' : S.rank === 'off' ? 'Not saved' : S.rank ? '#' + S.rank : S.rank === null ? 'Not a new best' : 'Saving…']);
+      rows.push(['Leaderboard', !Account.signedIn ? 'Sign in to save lap times' : S.rank === 'off' ? 'Not saved' : S.rank === 'held' ? 'Waiting for review' : S.rank ? '#' + S.rank : S.rank === null ? 'Not a new best' : 'Saving…']);
       rows.push(['Top speed', spd(S.top || 0)]);
       if (S.pen) rows.push(['Jump start', `+${S.pen} s`]);
       html = `<div class="fcTag">TIME TRIAL · ${T ? T.short : ''}</div><div class="fcTitle${S.pb ? ' pb' : ''}">${S.pb ? 'NEW PERSONAL BEST' : 'LAP COMPLETE'}</div>` +
@@ -750,7 +750,7 @@ const Race = {
       const j = await r.json();
       if (j.rank) setTimeout(() => hud.message(`LAP LEADERBOARD #${j.rank}`), 1400);
       else if (j.error) console.warn('lap not saved:', j.error);
-      this.finUpdate({ rank: j.rank || (j.error || j.rejected ? 'off' : null) });
+      this.finUpdate({ rank: j.held ? 'held' : j.rank || (j.error || j.rejected ? 'off' : null) });   // (held: much quicker than the record - waits for a review)
     } catch (e) { this.finUpdate({ rank: 'off' }); }
   },
 

@@ -49,7 +49,7 @@ const Account = {
       const r = await fetch(this.base + '/api/auth/google', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ credential: resp.credential }) });
       const j = await r.json();
       if (!r.ok) { this.msg(j.error || 'Sign-in failed.'); return; }
-      this.session = j.session; this.user = { name: j.name, title: j.title || null };
+      this.session = j.session; this.user = { name: j.name, title: j.title || null, banned: !!j.banned, banUntil: j.banUntil || null, admin: !!j.admin };
       try { localStorage.setItem('pw_session', j.session); } catch (e) { /* ignore */ }
       this.changed();
       if (!j.name && this.onNeedName) this.onNeedName();      // first time: pick a driver name

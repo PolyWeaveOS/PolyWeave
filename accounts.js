@@ -68,10 +68,12 @@ function setName(user, name) {
   if (!NAME_RE.test(name)) return 'Names are 3-16 characters: letters, numbers, spaces, _ . -';
   const low = name.toLowerCase();
   for (const u of Object.values(db.users)) if (u !== user && u.name && u.name.toLowerCase() === low) return 'That name is taken.';
+  if (low === 'polyweave' && !(user.name && user.name.toLowerCase() === 'polyweave')) return 'That name is taken.';   // (the game's own account - nobody else can ever pick it)
   user.name = name; save();
   return null;
 }
 const nameOf = uid => (db.users[uid] && db.users[uid].name) || null;
 const byName = name => { const low = String(name || '').toLowerCase(); return Object.values(db.users).find(u => u.name && u.name.toLowerCase() === low) || null; };
 
-module.exports = { enabled: () => !!CLIENT_ID, clientId: () => CLIENT_ID, login, bySession, logout, setName, nameOf, byName };
+const all = () => Object.values(db.users);   // (admin panel: how many have signed in)
+module.exports = { enabled: () => !!CLIENT_ID, clientId: () => CLIENT_ID, login, bySession, logout, setName, nameOf, byName, all };
