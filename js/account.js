@@ -16,6 +16,12 @@ const Account = {
     // CrazyGames version: guests only (CrazyGames doesn't allow outside logins such as Google)
     if (CG) { this.base = await Net.findBase(); this.ready = true; this.changed(); return; }
     try { this.session = localStorage.getItem('pw_session'); } catch (e) { /* ignore */ }
+    // opened from someone's invite link (?ref=<name>): remembered until this browser makes a new account
+    try {
+      const u = new URL(location.href), ref = u.searchParams.get('ref');
+      if (ref && /^[A-Za-z0-9_.\- ]{3,16}$/.test(ref)) localStorage.setItem('pw_ref', ref);
+      if (ref !== null) { u.searchParams.delete('ref'); history.replaceState(null, '', u.pathname + u.search + u.hash); }
+    } catch (e) { /* ignore */ }
     this.base = await Net.findBase();
     if (!this.base) { this.ready = true; this.changed(); return; }
     try { const c = await (await fetch(this.base + '/api/config', { cache: 'no-store' })).json(); this.clientId = c.googleClientId || ''; } catch (e) { /* offline */ }
@@ -46,9 +52,11 @@ const Account = {
   },
   async onGoogle(resp) {
     try {
-      const r = await fetch(this.base + '/api/auth/google', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ credential: resp.credential }) });
+      let ref = null; try { ref = localStorage.getItem('pw_ref'); } catch (e) { /* ignore */ }
+      const r = await fetch(this.base + '/api/auth/google', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ credential: resp.credential, ref }) });
       const j = await r.json();
       if (!r.ok) { this.msg(j.error || 'Sign-in failed.'); return; }
+      try { localStorage.removeItem('pw_ref'); } catch (e) { /* ignore */ }   // (only a brand-new account counts, and only once)
       this.session = j.session; this.user = { name: j.name, title: j.title || null, banned: !!j.banned, banUntil: j.banUntil || null, admin: !!j.admin };
       try { localStorage.setItem('pw_session', j.session); } catch (e) { /* ignore */ }
       this.changed();

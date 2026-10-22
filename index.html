@@ -422,6 +422,12 @@
         </div>
         <div class="profStats" id="profStats"></div>
       </div>
+      <!-- your own profile: your invite link + how many players you've referred -->
+      <div id="profRef" class="profRef hidden">
+        <div class="profRefHead">INVITE FRIENDS</div>
+        <div class="profRefRow"><input type="text" class="refLink" readonly><button class="refCopy">COPY LINK</button></div>
+        <div class="profRefNote refNote"></div>
+      </div>
     </div>
   </div>
 
@@ -458,6 +464,12 @@
             <label class="chk"><input type="checkbox" id="frAllow"> Allow friend requests</label>
             <label class="chk"><input type="checkbox" id="frHide"> Hide my activity</label>
             <label class="chk"><input type="checkbox" id="frPopups"> Message pop-ups</label>
+          </div>
+          <!-- invite friends: same as on your profile -->
+          <div id="frRef" class="profRef hidden">
+            <div class="profRefHead">INVITE FRIENDS</div>
+            <div class="profRefRow"><input type="text" class="refLink" readonly><button class="refCopy">COPY LINK</button></div>
+            <div class="profRefNote refNote"></div>
           </div>
         </div>
         <div class="frChat" id="frChat">

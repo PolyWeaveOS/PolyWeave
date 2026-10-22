@@ -38,6 +38,10 @@ const Social = {
       if (!s.error) this.data = s;
       if (!ib.error) this.items = ib.items || [];
     } catch (e) { /* offline */ }
+    // the chat on screen has messages the server says you haven't seen (they came while this tab was in the
+    // background, while driving, or while the connection was down): load them in, which also marks them read
+    const f = this.data && this.chatVisible(this.chat) && this.data.friends.find(x => x.name === this.chat);
+    if (f && f.unread) { f.unread = 0; this.openChat(f.name, true); }
     this.badges();
     this.render();
   },
@@ -59,6 +63,7 @@ const Social = {
     const id = which === 'friends' ? 'scrFriends' : 'scrInbox';
     if (!menuOpen) openMenu(id); else show(id);
     this.render(); this.refresh();
+    if (id === 'scrFriends' && typeof loadFriendRef === 'function') loadFriendRef();   // (invite link + players referred)
     if (chatWith) this.openChat(chatWith);
   },
   render() {
@@ -199,20 +204,25 @@ const Social = {
   },
 
   // ---------------------------------------------------------------- chats
-  async openChat(name) {
+  async openChat(name, quiet) {          // (quiet: reloading the chat already open - doesn't move the cursor)
     this.chat = name;
     $id('chatEmpty').classList.add('hidden');
     for (const id of ['chatHead', 'chatLog', 'chatForm']) $id(id).classList.remove('hidden');
     const f = this.data && this.data.friends.find(x => x.name === name);
     const head = $id('chatHead'); head.innerHTML = ''; head.append(el('b', '', name), el('span', '', f ? this.activityText(f.p) : ''));
-    const log = $id('chatLog'); log.innerHTML = '';
+    const log = $id('chatLog');
+    if (!quiet) log.innerHTML = '';
     let r;
     try { r = await this.api('/api/chat?with=' + encodeURIComponent(name)); } catch (e) { return; }
     if (this.chat !== name || r.error) return;
+    log.innerHTML = '';
     for (const m of r.messages) this.bubble(m.me, m.body, m.t);
-    if (f) f.unread = 0;
+    log.scrollTop = log.scrollHeight;
+    // read now (the server marked them read with that request). Looked up again: the friends list may have been
+    // reloaded meanwhile, and the old copy would bring the unread count back
+    const g = this.data && this.data.friends.find(x => x.name === name); if (g) g.unread = 0;
     this.badges(); this.renderFriends();
-    $id('chatText').focus();
+    if (!quiet) $id('chatText').focus();
   },
   closeChat() {
     this.chat = null;
@@ -390,7 +400,10 @@ $id('chatForm').onsubmit = e => { e.preventDefault(); const i = $id('chatText');
 Net.onSocial = m => Social.onLive(m);
 // signed in and the connection dropped: reconnect (friends, messages)
 Net.onClosed = () => { if (Account.signedIn) setTimeout(() => { if (Account.signedIn && !Net.ws) Net.connect().catch(() => {}); }, 5000); };
-Net.onOpened = () => { Social.actKey = ''; setTimeout(() => Social.reportActivity(), 300); };
+Net.onOpened = () => { Social.actKey = ''; setTimeout(() => Social.reportActivity(), 300); if (Account.signedIn) setTimeout(() => Social.refresh(), 500); };   // (reconnected: catch up on anything sent while it was down)
+// back to this tab, and every 20 s while Friends is open: catch up (messages that came while away show in the open chat)
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && Account.signedIn) Social.refresh(); });
+setInterval(() => { if (Account.signedIn && menuOpen && screen === 'scrFriends' && document.visibilityState === 'visible') Social.refresh(); }, 20000);
 { const prev = Account.onChange; Account.onChange = () => { if (prev) prev(); Social.accountChanged(); }; }
 if (Account.ready) Social.accountChanged();
 setInterval(() => Social.reportActivity(), 2000);

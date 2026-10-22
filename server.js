@@ -127,7 +127,7 @@ function adminApi(route, url, req, json, body) {
   }
   if (route === '/api/admin/player') {
     const a = Accounts.byName(q('name')); if (!a) { json(404, { error: 'No player with that name.' }); return; }
-    json(200, Object.assign(userInfo(a.id), { joined: a.created || null, owned: DB.titlesOf(a.id), runs: withName(DB.adminRuns({ uid: a.id, limit: 60 })) }));
+    json(200, Object.assign(userInfo(a.id), { joined: a.created || null, owned: DB.titlesOf(a.id), ref: DB.referralStats(a.id), referredBy: DB.referredBy(a.id) ? nameOf(DB.referredBy(a.id)) : null, runs: withName(DB.adminRuns({ uid: a.id, limit: 60 })) }));
     return;
   }
   if (route === '/api/admin/runs') {                  // filters: name, mode, status, minScore, maxScore, minDur, maxDur, minPps, days, limit
@@ -495,6 +495,7 @@ const server = http.createServer((req, res) => {
         if (isNew && DB.alphaOpen()) DB.gift(user.id, 'alpha');   // (Alpha Tester: switched off since the beta)
         if (isNew && DB.betaOpen()) DB.gift(user.id, 'beta');     // (new players get Beta Tester until it's switched off)
         DB.gift(user.id, 'verified');                           // (signed in with Google; only sent once)
+        if (isNew && m.ref) { const by = Accounts.byName(String(m.ref).slice(0, 16)); if (by) DB.addReferral(user.id, by.id); }   // (made from someone's invite link)
         json(200, Object.assign({ session: token, name: user.name, title: DB.equipped(user.id), banned: DB.isBanned(user.id), banUntil: DB.banUntil(user.id) }, isAdmin(user) ? { admin: true } : {}));
       })
         .catch(e => json(401, { error: e.message }));
@@ -544,7 +545,7 @@ const server = http.createServer((req, res) => {
     const banned = DB.isBanned(u.id);
     // (it still shows the date joined and time played; banUntil: when a temporary ban ends)
     const pr = banned ? { name: u.name, joined: u.created || null, banned: true, banUntil: DB.banUntil(u.id), title: DB.equipped(u.id), playS: DB.profile(u.id).playS } : Object.assign({ name: u.name, joined: u.created || null }, DB.profile(u.id));
-    if (!qn) Object.assign(pr, { self: true, owned: DB.titlesOf(u.id), owners: DB.ownerCounts() });
+    if (!qn) Object.assign(pr, { self: true, owned: DB.titlesOf(u.id), owners: DB.ownerCounts(), ref: DB.referralStats(u.id) });
     json(200, pr);
     return;
   }

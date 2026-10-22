@@ -1303,8 +1303,31 @@ async function openProfile(name) {
   if (p.banned) for (const tl of tiles) if (!tl[3]) { tl[1] = 'N/A'; tl[2] = ''; }
   const st = $id('profStats'); st.innerHTML = '';
   for (const [k, v, sub] of tiles) { const d = el('div', 'stat'); d.append(el('span', 'k', k), el('span', 'v', v)); if (sub) d.append(el('span', 's rank', sub)); st.appendChild(d); }
+  // your own: invite link + players referred (they count once they've played 10 minutes)
+  drawRef($id('profRef'), p.self && p.name, p.ref);
   body.classList.remove('hidden');
 }
+// invite box (your profile + the Friends screen): your link and how many players you've referred
+function drawRef(box, name, ref) {
+  box.classList.toggle('hidden', !(name && ref));
+  if (!name || !ref) return;
+  box.querySelector('.refLink').value = 'https://polyweave.org/?ref=' + encodeURIComponent(name);
+  box.querySelector('.refNote').textContent = `Players referred : ${ref.counted} (Referred players must be brand new accounts and play the game for at least 10 minutes)`;
+}
+// Friends screen: fetches your referral count (from your profile)
+async function loadFriendRef() {
+  const box = $id('frRef'), base = await Net.findBase();
+  if (!base || !Account.signedIn) { box.classList.add('hidden'); return; }
+  try {
+    const p = await (await fetch(base + '/api/profile', { cache: 'no-store', headers: { Authorization: 'Bearer ' + Account.session } })).json();
+    drawRef(box, p.self && p.name, p.ref);
+  } catch (e) { /* offline */ }
+}
+for (const b of document.querySelectorAll('.refCopy')) b.onclick = () => {
+  const inp = b.parentNode.querySelector('.refLink'), done = () => { b.textContent = 'COPIED!'; setTimeout(() => (b.textContent = 'COPY LINK'), 1500); };
+  if (navigator.clipboard) navigator.clipboard.writeText(inp.value).then(done, () => { inp.select(); document.execCommand('copy'); done(); });
+  else { inp.select(); document.execCommand('copy'); done(); }
+};
 // leaderboard ban countdown: "6d 23h 59m 12s"
 const banLeft = until => { const s = Math.max(0, Math.floor((until - Date.now()) / 1000)), d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60); return (d ? d + 'd ' : '') + (d || h ? h + 'h ' : '') + m + 'm ' + (s % 60) + 's'; };
 // the LEADERBOARD BANNED tag (profile): until = null: not banned; 0: permanent; a time: counts down every second

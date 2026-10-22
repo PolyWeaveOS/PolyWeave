@@ -126,7 +126,8 @@
     body.innerHTML = ''; const redraw = () => player(name);
     const top = E('div', 'adRow'); top.append(button('← ALL PLAYERS', () => players()), E('b', '', j.name),
       j.banned ? tag(j.banUntil ? 'BANNED · ' + left(j.banUntil) + ' left' : 'BANNED (permanent)', 'bad') : tag('NOT BANNED', 'good'));
-    body.append(top, E('div', 'adHelp', `SP best ${fmt(j.sp)}${j.rankSp ? ' (#' + j.rankSp + ')' : ''} · MP best ${fmt(j.mp)}${j.rankMp ? ' (#' + j.rankMp + ')' : ''} · played ${dur(j.playS)} · joined ${day(j.joined)}`));
+    body.append(top, E('div', 'adHelp', `SP best ${fmt(j.sp)}${j.rankSp ? ' (#' + j.rankSp + ')' : ''} · MP best ${fmt(j.mp)}${j.rankMp ? ' (#' + j.rankMp + ')' : ''} · played ${dur(j.playS)} · joined ${day(j.joined)}`),
+      E('div', 'adHelp', `Referred ${j.ref.counted} player${j.ref.counted === 1 ? '' : 's'}${j.ref.pending ? ` (+${j.ref.pending} under 10 min played)` : ''}${j.referredBy ? ' · invited by ' + j.referredBy : ''}`));
     // bans
     body.append(E('h3', '', 'LEADERBOARD BAN'));
     const b = E('div', 'adRow'), days = E('input'); days.type = 'number'; days.min = 1; days.placeholder = 'days';

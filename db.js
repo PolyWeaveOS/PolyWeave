@@ -63,6 +63,8 @@ db.exec(`
     ms INTEGER, season INTEGER NOT NULL, t INTEGER NOT NULL, removed INTEGER NOT NULL DEFAULT 0);
   CREATE INDEX IF NOT EXISTS race_board ON race_results (season, removed, uid);
   CREATE TABLE IF NOT EXISTS admin_log (id INTEGER PRIMARY KEY AUTOINCREMENT, t INTEGER NOT NULL, action TEXT NOT NULL, target TEXT, detail TEXT);
+  CREATE TABLE IF NOT EXISTS referrals (uid TEXT PRIMARY KEY, by_uid TEXT NOT NULL, t INTEGER NOT NULL);   -- uid = the new player, by_uid = who invited them
+  CREATE INDEX IF NOT EXISTS referrals_by ON referrals (by_uid);
 `);
 
 // newer columns (added to databases made before them)
@@ -393,6 +395,21 @@ function profile(uid) {
     sp: mode('sp'), mp: mode('mp'), near: s.near || 0, distM: Math.round(s.dist || 0),
   };
 }
+// ---------------------------------------------------------------- referrals
+// A brand-new account made from someone's invite link (polyweave.org/?ref=<name>) is tied to them once, for good.
+// It only counts once that player has played 10 minutes and isn't leaderboard banned (so spare accounts are a chore).
+const REF_PLAY_S = 600;
+function addReferral(uid, byUid) {
+  if (!uid || !byUid || uid === byUid) return false;
+  ensureUser(uid);
+  return db.prepare('INSERT OR IGNORE INTO referrals (uid, by_uid, t) VALUES (?, ?, ?)').run(uid, byUid, Date.now()).changes > 0;
+}
+function referralStats(byUid) {
+  const rows = db.prepare('SELECT r.uid, u.play_s, u.banned FROM referrals r LEFT JOIN users u ON u.uid = r.uid WHERE r.by_uid = ?').all(byUid);
+  const ok = rows.filter(r => !r.banned && (r.play_s || 0) >= REF_PLAY_S).length;
+  return { counted: ok, pending: rows.filter(r => !r.banned && (r.play_s || 0) < REF_PLAY_S).length };
+}
+const referredBy = uid => { const r = db.prepare('SELECT by_uid FROM referrals WHERE uid = ?').get(uid); return r ? r.by_uid : null; };
 // a run token can be used once
 function spendToken(n) {
   try { db.prepare('INSERT INTO used_tokens (n, t) VALUES (?, ?)').run(n, Date.now()); return true; } catch (e) { return false; }
@@ -651,5 +668,5 @@ module.exports = {
   db, SEASON, SEASONS, SECRET, lapTop, lapAround, addLap, addRace, raceTop, raceAround, seasonRewards, ensureUser, grant, gift, inboxOf, unclaimed, claim, top, around, rankOf, bestOf, addRun, spendToken, profile, addPlayTime,
   titlesOf, ownerCounts, alphaOpen, setAlphaOpen, betaOpen, setBetaOpen, resetTitles, statTitles, statsOf, pendingOf, equipped, equip, isBanned, banUntil, setBanned, sweepBans, flagRacing, adminUid, adminLog, adminLogList, adminRuns, adminLaps, adminRaces, setLapStatus, adminOverview, userRow, readAccounts, setRemoved, removeAbove, runsOf, runLog, recentRejected,
   areFriends, friendsOf, requestsIn, requestsOut, socialSettings, setSocialSettings, sendRequest, respond, cancelRequest, unfriend,
-  sendMessage, chatWith, markRead, unreadBy, OWNER_NAMES, BIKE_NAMES,
+  sendMessage, chatWith, markRead, unreadBy, OWNER_NAMES, BIKE_NAMES, addReferral, referralStats, referredBy,
 };
