@@ -67,7 +67,7 @@ const makeRoom = (id, name, official, code, scored = true, density = SCORED_DENS
     race: o.race ? { track: o.race.track, laps: Tracks.RACE_LAPS, queue: !!o.race.queue, st: 'lobby', endsAt: 0, goAt: 0, grid: [], finish: new Map(), lap: new Map(), firstAt: 0, results: [] } : null });
 for (const [id, name, theme] of OFFICIAL_ROOMS) rooms.set(id, makeRoom(id, name, true, '', true, SCORED_DENSITY, { theme }));
 const roomInfo = r => ({ id: r.id, name: r.name, players: r.players.size, max: r.race ? Tracks.RACE_MAX : MAX_PLAYERS, scored: r.scored, theme: r.theme, tod: r.tod,
-  race: r.race ? { track: r.race.track, st: r.race.st } : undefined });
+  race: r.race ? { track: r.race.track, st: r.race.st } : undefined, carsOnly: r.carsOnly || undefined });   // (carsOnly: the host allowed cars only)
 const maxOf = room => (room.race ? Tracks.RACE_MAX : MAX_PLAYERS);
 
 // ---------------------------------------------------------------- racing (Season 1 limited-time mode)
@@ -143,6 +143,25 @@ function adminApi(route, url, req, json, body) {
     return;
   }
   if (route === '/api/admin/log') { json(200, { list: DB.adminLogList(200) }); return; }
+  // who's online right now and what they're doing (signed-in players, plus guests on servers)
+  if (route === '/api/admin/online') {
+    const now = Date.now(), where = p => {
+      const a = activityOf(p), r = p.room;
+      return Object.assign({}, a, { since: p.since || null, actAt: p.actAt || null, veh: r ? p.veh || 'car' : undefined, model: r ? p.model || 'm4' : undefined,
+        roomName: r ? r.name : undefined, players: r ? r.players.size : undefined, code: r && r.code ? r.code : undefined });
+    };
+    const list = [];
+    for (const [uid, conns] of online) {
+      const name = nameOf(uid); if (!conns.size) continue;
+      const acts = [...conns].map(where);
+      list.push({ name, banned: DB.isBanned(uid), tabs: acts.length, act: acts.find(x => x.mode === 'mp' || x.mode === 'race') || acts.find(x => x.mode !== 'menu') || acts[0],
+        since: Math.min(...acts.map(x => x.since || now)) });
+    }
+    const guests = [];
+    for (const r of rooms.values()) for (const p of r.players.values()) if (!(p.account && p.account.name)) guests.push({ name: p.name, guest: true, act: where(p), since: p.since || now });
+    json(200, { now, list: list.sort((a, b) => a.name.localeCompare(b.name)), guests });
+    return;
+  }
   if (route === '/api/admin/action' && req.method === 'POST') {
     body(m => {
       const who = () => { const a = Accounts.byName(m.name); if (!a) throw new Error('No player called "' + m.name + '".'); return a; };
@@ -286,7 +305,7 @@ function issueMpToken(p) {
 // a new position from p: add to their run record
 function trackRun(p, st) {
   const R = p.run; if (!R || R.closed || R.room !== p.room) return;
-  if (p.veh === 'bike') R.bike = true;                 // (on the motorcycle at any point: the run is just for fun)
+  if (p.veh === 'bike' || p.veh === 'van') R.bike = true;   // (on the motorcycle or the Bang Bus at any point: the run is just for fun)
   const prev = R.last; R.last = { s: st.s, t: st.t };
   if (!prev) return;
   const dt = st.t - prev.t;                            // (sender's clock)
@@ -328,6 +347,7 @@ const pushTo = (uid, m) => { const s = online.get(uid); if (s) for (const p of s
 // what a connection is doing: menu, singleplayer (world, time of day) or a server (public ones can be joined)
 function activityOf(p) {
   const r = p.room;
+  if (r && r.race) return { mode: 'race', track: r.race.track, st: r.race.st, kind: r.listed ? 'public' : 'private' };   // (a race room)
   if (r) {
     const kind = r.official ? 'official' : r.listed ? 'public' : 'private';
     return { mode: 'mp', kind, name: kind === 'private' ? null : r.name, theme: r.theme, tod: r.tod, scored: r.scored,
@@ -391,6 +411,10 @@ const cleanModel = m => (CAR_MODELS.includes(m) || /^f1:[a-z]{2,10}:#[0-9a-f]{6}
 // the motorcycle and the van: only for the accounts in DB.BIKE_NAMES (anyone else asking for them stays a car;
 // the van drives and scores as a car, other players just see the van)
 const mayBike = p => !!(p.account && p.account.name && DB.BIKE_NAMES.includes(p.account.name.toLowerCase()));
+// the Bang Bus: the owners, and anyone who finished the event's quests (db.js busProgress)
+const mayVan = p => mayBike(p) || !!(p.account && p.account.name && DB.hasBus(p.account.id, p.account.name));
+// (a cars-only server - the host's choice - puts everyone in their car)
+const pickVeh = (p, v) => (p.room && p.room.carsOnly) ? 'car' : (v === 'bike' && mayBike(p)) || (v === 'van' && mayVan(p)) ? v : 'car';
 function cleanExt(p, e) {
   if (!e || typeof e !== 'object') return;
   // (a car can't claim to be motorcycle-sized: that would shrink its proximity / traffic gaps)
@@ -428,12 +452,13 @@ function joinRoom(p, room) {
   const used = new Set([...room.players.values()].map(o => o.slot));
   let slot = 0; while (used.has(slot)) slot++;
   room.players.set(p.id, p); p.room = room; p.st = null; p.agent = null; p.slot = slot;
+  if (room.carsOnly && p.veh !== 'car') { p.veh = 'car'; p.ext.hw = Math.max(p.ext.hw, 0.85); }   // (cars-only server: in your car while you're here, car-sized)
   p.best = room.bests.get(p.name) || 0;                 // best score on this server comes back if you rejoin
   if (!room.traffic && !room.race) room.traffic = new RingTraffic();   // (race tracks have no traffic)
   p.title = titleOf(p);
   send(p.ws, { t: 'joined', id: p.id, room: room.id, name: room.name, official: room.official, listed: room.listed, code: room.code, slot, best: p.best,
     scored: room.scored, density: room.density, theme: room.theme, tod: room.tod, bin: !!p.bin,   // (bin: binary positions understood)
-    race: room.race ? { track: room.race.track, laps: room.race.laps, queue: room.race.queue } : undefined });
+    race: room.race ? { track: room.race.track, laps: room.race.laps, queue: room.race.queue } : undefined, carsOnly: !!room.carsOnly });
   if (room.race) send(p.ws, raceMsg(room));            // (where the race is at: lobby / countdown / racing...)
   issueMpToken(p);                                     // (scored server + signed in: runs can go on the leaderboard)
   broadcast(room, { t: 'roster', list: roster(room) });
@@ -496,7 +521,7 @@ const server = http.createServer((req, res) => {
         if (isNew && DB.betaOpen()) DB.gift(user.id, 'beta');     // (new players get Beta Tester until it's switched off)
         DB.gift(user.id, 'verified');                           // (signed in with Google; only sent once)
         if (isNew && m.ref) { const by = Accounts.byName(String(m.ref).slice(0, 16)); if (by) DB.addReferral(user.id, by.id); }   // (made from someone's invite link)
-        json(200, Object.assign({ session: token, name: user.name, title: DB.equipped(user.id), banned: DB.isBanned(user.id), banUntil: DB.banUntil(user.id) }, isAdmin(user) ? { admin: true } : {}));
+        json(200, Object.assign({ session: token, name: user.name, title: DB.equipped(user.id), banned: DB.isBanned(user.id), banUntil: DB.banUntil(user.id), bus: DB.hasBus(user.id, user.name) }, isAdmin(user) ? { admin: true } : {}));
       })
         .catch(e => json(401, { error: e.message }));
     });
@@ -505,7 +530,14 @@ const server = http.createServer((req, res) => {
   const bearer = () => Accounts.bySession(String(req.headers.authorization || '').replace(/^Bearer /, ''));
   if (route === '/api/account') {                       // who am I? (Authorization: Bearer <session>)
     const u = bearer();
-    json(u ? 200 : 401, u ? Object.assign({ name: u.name, title: DB.equipped(u.id), banned: DB.isBanned(u.id), banUntil: DB.banUntil(u.id) }, isAdmin(u) ? { admin: true } : {}) : { error: 'not signed in' });   // (banned: leaderboard banned - the launch popup tells them; banUntil: when a temporary ban ends)
+    json(u ? 200 : 401, u ? Object.assign({ name: u.name, title: DB.equipped(u.id), banned: DB.isBanned(u.id), banUntil: DB.banUntil(u.id), bus: DB.hasBus(u.id, u.name) }, isAdmin(u) ? { admin: true } : {}) : { error: 'not signed in' });   // (banned: leaderboard banned - the launch popup tells them; banUntil: when a temporary ban ends; bus: Bang Bus unlocked)
+    return;
+  }
+  // the Bang Bus event: GET /api/event (Bearer) -> each quest's progress and whether the bus is unlocked
+  if (route === '/api/event') {
+    const u = bearer();
+    if (!u || !u.name) { json(200, { guest: true }); return; }
+    json(200, Object.assign(DB.busProgress(u.id), { owner: DB.BIKE_NAMES.includes(u.name.toLowerCase()) }));
     return;
   }
   // owner tools: the video recorder (tools/recorder.js) is only handed to the owners' accounts (Bearer).
@@ -801,9 +833,9 @@ const server = http.createServer((req, res) => {
       if (mode === 'mp' && !R) { json(400, { error: 'The server restarted during that run, so it can\'t be checked.' }); return; }
       const run = { score: Number(m.score), dur: Number(m.dur), log: m.log };
       if (!(run.score >= MIN_RUN)) { json(200, { rank: null }); return; }
-      // motorcycle runs are just for fun: no leaderboard, no run record, no stats (the game doesn't send them;
-      // a multiplayer run is also checked against what the server saw)
-      if (m.veh === 'bike' || (R && R.bike)) { if (R) R.closed = true; json(200, { rank: null, fun: true }); return; }
+      // motorcycle and Bang Bus runs are just for fun: no leaderboard, no run record, no stats (the game doesn't send
+      // them; a multiplayer run is also checked against what the server saw)
+      if (m.veh === 'bike' || m.veh === 'van' || (R && R.bike)) { if (R) R.closed = true; json(200, { rank: null, fun: true }); return; }
       if (!DB.spendToken(tok.n)) { json(409, { error: 'That run was already submitted.' }); return; }
       if (R) R.closed = true;
       const v = RunCheck.verify(run, { mode, wallS: (Date.now() - tok.t) / 1000, mp: R ? { dist: R.dist, nearS: R.nearS } : null });
@@ -833,7 +865,7 @@ setInterval(() => { const t = Date.now(); for (const [k, v] of lastHit) if (t - 
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 4096 });   // (run logs go over HTTP, not here)
 let nextId = 1;
 wss.on('connection', ws => {
-  const p = { id: 'p' + (nextId++).toString(36), ws, name: 'Driver', color: '#a6b0b8', room: null, st: null, msgs: 0, best: 0,
+  const p = { id: 'p' + (nextId++).toString(36), ws, name: 'Driver', color: '#a6b0b8', room: null, st: null, msgs: 0, best: 0, since: Date.now(),
     ext: { front: 2.24, rear: -2.55, hw: 0.95 } };
   ws._tw = p;
   ws.on('pong', () => (ws._twDead = false));
@@ -877,7 +909,7 @@ wss.on('connection', ws => {
     if (m.t === 'runtoken') { issueMpToken(p); return; }
     // switched between car and motorcycle while on a server: everyone's roster shows the new one
     if (m.t === 'veh') {
-      p.veh = (m.veh === 'bike' || m.veh === 'van') && mayBike(p) ? m.veh : 'car';
+      p.veh = pickVeh(p, m.veh);
       if (m.model !== undefined) p.model = cleanModel(m.model);
       cleanExt(p, m.ext);
       if (p.room) broadcast(p.room, { t: 'roster', list: roster(p.room) });
@@ -928,7 +960,9 @@ wss.on('connection', ws => {
     // what I'm doing outside servers: menu / singleplayer (world, time of day, scored); servers are known here
     if (m.t === 'activity') {
       const a = m.a || {};
-      p.act = a.mode === 'sp' ? { mode: 'sp', theme: THEMES.includes(a.theme) ? a.theme : 'grass', tod: TODS.includes(a.tod) ? a.tod : 'day', scored: !!a.scored } : { mode: 'menu' };
+      p.act = a.mode === 'sp' ? { mode: 'sp', theme: THEMES.includes(a.theme) ? a.theme : 'grass', tod: TODS.includes(a.tod) ? a.tod : 'day', scored: !!a.scored }
+        : a.mode === 'tt' && Tracks.TRACK_BY_ID[a.track] ? { mode: 'tt', track: a.track } : { mode: 'menu' };   // (tt: a time trial on a track)
+      p.actAt = Date.now();
       if (p.account) presenceChanged(p.account.id);
       return;
     }
@@ -936,7 +970,7 @@ wss.on('connection', ws => {
     if (m.name !== undefined) p.name = p.account && p.account.name ? p.account.name : cleanName(m.name);
     if (m.color !== undefined) p.color = cleanColor(m.color);
     if (m.bin !== undefined) p.bin = m.bin === 1;      // (this game reads the binary snapshots / positions)
-    if (m.veh !== undefined) p.veh = (m.veh === 'bike' || m.veh === 'van') && mayBike(p) ? m.veh : 'car';
+    if (m.veh !== undefined) p.veh = pickVeh(p, m.veh);
     if (m.model !== undefined) p.model = cleanModel(m.model);
     cleanExt(p, m.ext);
     if (m.t === 'join') {
@@ -961,6 +995,7 @@ wss.on('connection', ws => {
       const roomName = String(m.roomName || '').replace(/[^\p{L}\p{N} _.'!\-]/gu, '').trim().slice(0, 24) || `${p.name}'s server`;
       const room = makeRoom('p-' + code, roomName, false, code, scored, Number.isFinite(m.density) ? num(m.density, 0, 1) : 0.55,
         { listed: !!m.listed, theme: THEMES.includes(m.theme) ? m.theme : 'grass', tod: TODS.includes(m.tod) ? m.tod : 'day' });
+      room.carsOnly = m.vehicles === 'cars';             // (the host picked "Cars only": no motorcycles, no Bang Bus)
       rooms.set(room.id, room);
       joinRoom(p, room);
     } else if (m.t === 'leave') leaveRoom(p);

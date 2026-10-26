@@ -72,7 +72,8 @@ db.exec(`
   const have = new Set(db.prepare('PRAGMA table_info(users)').all().map(c => c.name));
   for (const [col, def] of [['best_rank_sp', 'INTEGER'], ['best_rank_mp', 'INTEGER'],
     ['allow_requests', 'INTEGER NOT NULL DEFAULT 1'], ['hide_activity', 'INTEGER NOT NULL DEFAULT 0'], ['best_team', 'REAL NOT NULL DEFAULT 0'],
-    ['ban_until', 'INTEGER']]) if (!have.has(col)) db.exec(`ALTER TABLE users ADD COLUMN ${col} ${def}`);
+    ['ban_until', 'INTEGER'], ['ev_play_s', 'REAL NOT NULL DEFAULT 0'], ['bus', 'INTEGER NOT NULL DEFAULT 0']]) if (!have.has(col)) db.exec(`ALTER TABLE users ADD COLUMN ${col} ${def}`);
+  // (ev_play_s: time played since the Bang Bus event started; bus: 1 = Bang Bus unlocked, for good)
   const haveR = new Set(db.prepare('PRAGMA table_info(runs)').all().map(c => c.name));
   if (!haveR.has('dist')) db.exec('ALTER TABLE runs ADD COLUMN dist REAL');
   if (!haveR.has('room')) db.exec('ALTER TABLE runs ADD COLUMN room TEXT');   // (multiplayer: which server, for team runs)
@@ -376,7 +377,7 @@ function addPlayTime(uid, s) {
   const now = Date.now(), last = lastBeat.get(uid);
   const add = Math.min(s, 75, last ? (now - last) / 1000 + 2 : 60);
   lastBeat.set(uid, now);
-  if (add > 0) { ensureUser(uid); db.prepare('UPDATE users SET play_s = play_s + ? WHERE uid = ?').run(add, uid); }
+  if (add > 0) { ensureUser(uid); db.prepare('UPDATE users SET play_s = play_s + ?, ev_play_s = ev_play_s + ? WHERE uid = ?').run(add, add, uid); }   // (ev_play_s: the Bang Bus event's play time)
 }
 setInterval(() => { const t = Date.now(); for (const [k, v] of lastBeat) if (t - v > 600e3) lastBeat.delete(k); }, 600e3).unref();
 function profile(uid) {
@@ -410,6 +411,32 @@ function referralStats(byUid) {
   return { counted: ok, pending: rows.filter(r => !r.banned && (r.play_s || 0) < REF_PLAY_S).length };
 }
 const referredBy = uid => { const r = db.prepare('SELECT by_uid FROM referrals WHERE uid = ?').get(uid); return r ? r.by_uid : null; };
+
+// ---------------------------------------------------------------- the Bang Bus event
+// Five quests unlock the Bang Bus for good: sign in with Google, play 1 hour, drive 75 miles and score 100k in one
+// run (these three count from the event's start, from 0 for everyone), and refer 3 players (all your referrals so
+// far count). Distance and score come from verified runs that are still on the boards.
+if (!getMeta('bus_event_start')) setMeta('bus_event_start', Date.now());
+const BUS_EVENT_START = +getMeta('bus_event_start');
+const BUS_QUESTS = { play: 3600, drive: 75 * 1609.344, score: 100000, refer: 3 };
+function busProgress(uid) {
+  ensureUser(uid);
+  const u = db.prepare('SELECT ev_play_s, bus FROM users WHERE uid = ?').get(uid);
+  const r = db.prepare("SELECT SUM(dist) AS dist, MAX(score) AS best FROM runs WHERE uid = ? AND t >= ? AND verified = 1 AND removed = 0 AND mode IN ('sp', 'mp')").get(uid, BUS_EVENT_START);
+  const ref = referralStats(uid);
+  const quests = [
+    { id: 'signin', have: 1, need: 1 },
+    { id: 'play', have: Math.floor(u.ev_play_s || 0), need: BUS_QUESTS.play },
+    { id: 'drive', have: Math.round(r.dist || 0), need: Math.round(BUS_QUESTS.drive) },
+    { id: 'score', have: Math.round(r.best || 0), need: BUS_QUESTS.score },
+    { id: 'refer', have: ref.counted, need: BUS_QUESTS.refer, pending: ref.pending },
+  ];
+  let unlocked = !!u.bus;
+  if (!unlocked && quests.every(q => q.have >= q.need)) { db.prepare('UPDATE users SET bus = 1 WHERE uid = ?').run(uid); unlocked = true; }
+  return { start: BUS_EVENT_START, quests, unlocked };
+}
+// the Bang Bus is theirs (finished the quests, or an owner): checks the quests too, so it unlocks the moment they're done
+const hasBus = (uid, name) => !!(name && BIKE_NAMES.includes(String(name).toLowerCase())) || busProgress(uid).unlocked;
 // a run token can be used once
 function spendToken(n) {
   try { db.prepare('INSERT INTO used_tokens (n, t) VALUES (?, ?)').run(n, Date.now()); return true; } catch (e) { return false; }
@@ -648,7 +675,7 @@ if (!getMeta('season1_v1')) {
 }
 
 // End of a season: the top 5 of its singleplayer and multiplayer leaderboards get the season's title
-// (1st Champion, 2nd-3rd Podium, 4th-5th Contender: Titles.SEASON_REWARDS) in their inbox, and the racing boards'
+// (1st Champion, 2nd-3rd Finalist, 4th-5th Podium: Titles.SEASON_REWARDS) in their inbox, and the racing boards'
 // 1st / 2nd / 3rd on every track (Track / Race Champion, Finalist, Podium: Titles.RACE_REWARDS). node admin.js season-rewards 1
 function seasonRewards(season) {
   const sent = [];
@@ -668,5 +695,5 @@ module.exports = {
   db, SEASON, SEASONS, SECRET, lapTop, lapAround, addLap, addRace, raceTop, raceAround, seasonRewards, ensureUser, grant, gift, inboxOf, unclaimed, claim, top, around, rankOf, bestOf, addRun, spendToken, profile, addPlayTime,
   titlesOf, ownerCounts, alphaOpen, setAlphaOpen, betaOpen, setBetaOpen, resetTitles, statTitles, statsOf, pendingOf, equipped, equip, isBanned, banUntil, setBanned, sweepBans, flagRacing, adminUid, adminLog, adminLogList, adminRuns, adminLaps, adminRaces, setLapStatus, adminOverview, userRow, readAccounts, setRemoved, removeAbove, runsOf, runLog, recentRejected,
   areFriends, friendsOf, requestsIn, requestsOut, socialSettings, setSocialSettings, sendRequest, respond, cancelRequest, unfriend,
-  sendMessage, chatWith, markRead, unreadBy, OWNER_NAMES, BIKE_NAMES, addReferral, referralStats, referredBy,
+  sendMessage, chatWith, markRead, unreadBy, OWNER_NAMES, BIKE_NAMES, addReferral, referralStats, referredBy, busProgress, hasBus,
 };

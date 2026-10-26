@@ -58,6 +58,11 @@
   <!-- main menu -->
   <div id="scrTitle" class="screen title">
     <button id="installBtn" class="hidden" title="Install PolyWeave as an app on this computer">INSTALL APP</button>
+    <!-- top right: the updates board (js/updates.js) -->
+    <button id="updatesBtn" title="Updates: what's new">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h13a2 2 0 0 1 2 2v12H6a2 2 0 0 1-2-2z"/><path d="M19 9h1a1 1 0 0 1 1 1v8a1 1 0 0 1-2 0M8 9h7M8 13h7M8 17h4"/></svg>
+      <span>UPDATES</span><i class="updDot"></i>
+    </button>
     <!-- bottom right: friends + inbox -->
     <div class="cornerBtns">
       <button id="friendsBtn" class="roundBtn" title="Friends">
@@ -98,12 +103,43 @@
         <b>SETTINGS</b>
       </button>
     </div>
-    <!-- Season 1 limited-time mode: racing (bigger than the buttons above, under them) -->
-    <button class="ltmCard" id="ltmRace" data-go="scrRaceHub">
-      <span class="ltmFlag"><svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><g transform="rotate(-12 32 32)"><rect class="fg" x="18" y="13" width="3.6" height="40" rx="1.6"/><path class="fg" d="M21.6 15c5-3 10 3 15 0s9-3 12-1v18c-3-2-7-2-12 1s-10-3-15 0z"/></g></svg></span>
-      <span class="ltmText"><span class="ltmTag">LIMITED-TIME MODE · SEASON 1</span><b>RACING</b><span class="ltmSub">Three circuits · 2–10 player races · best-lap leaderboards</span></span>
-      <span class="ltmGo">PLAY ›</span>
-    </button>
+    <!-- limited-time cards (bigger than the buttons above, under them): Season 1 racing + the Bang Bus event -->
+    <div class="ltmRow">
+      <button class="ltmCard" id="ltmRace" data-go="scrRaceHub">
+        <span class="ltmFlag"><svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><g transform="rotate(-12 32 32)"><rect class="fg" x="18" y="13" width="3.6" height="40" rx="1.6"/><path class="fg" d="M21.6 15c5-3 10 3 15 0s9-3 12-1v18c-3-2-7-2-12 1s-10-3-15 0z"/></g></svg></span>
+        <span class="ltmText"><span class="ltmTag">LIMITED-TIME MODE · SEASON 1</span><b>RACING</b><span class="ltmSub">Three circuits · 2–10 player races · best-lap leaderboards</span></span>
+        <span class="ltmGo">PLAY ›</span>
+      </button>
+      <button class="ltmCard evCard" id="ltmEvent">
+        <span class="ltmFlag"><svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><path class="fg" d="M32 49C20 40.5 13.5 34 13.5 26.2c0-5.6 4.3-9.7 9.4-9.7 3.8 0 6.9 2.1 9.1 5.6 2.2-3.5 5.3-5.6 9.1-5.6 5.1 0 9.4 4.1 9.4 9.7C50.5 34 44 40.5 32 49z"/></svg></span>
+        <span class="ltmText"><span class="ltmTag">LIMITED-TIME EVENT</span><b>BANG BUS</b><span class="ltmSub">Finish 5 quests to unlock the Bang Bus</span></span>
+        <span class="ltmGo">QUESTS ›</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- updates board (main menu, top right): the current update and every one before it (js/updates.js) -->
+  <div id="scrUpdates" class="screen panel hidden">
+    <div class="hdr"><button class="back" data-go="scrTitle">← BACK</button><h1>UPDATES</h1></div>
+    <div class="updList" id="updList"></div>
+  </div>
+
+  <!-- the Bang Bus event (home BANG BUS card, or the locked Bang Bus in the Garage): five quests unlock it for good (js/event.js) -->
+  <div id="scrEvent" class="screen panel wide hidden">
+    <div class="hdr"><button class="back" id="evBack">← BACK</button><h1>BANG BUS <span class="ltmPill evPill">LIMITED-TIME EVENT</span></h1></div>
+    <div class="evGrid">
+      <div class="evBus">
+        <img src="assets/bangbus.png" alt="The Bang Bus">
+        <div class="evState" id="evState">LOCKED</div>
+        <div class="evFun">Just for fun: no leaderboard points and no proxy bonus in the Bang Bus</div>
+        <button id="evDrive" class="go hidden">DRIVE THE BANG BUS</button>
+      </div>
+      <div class="evQuests">
+        <div class="evIntro" id="evIntro">Complete all 5 quests to unlock the Bang Bus for good.</div>
+        <div id="evList"></div>
+        <div class="evFine">Time played, distance and score count from the start of the event: time from any driving, distance and score from scored runs (singleplayer or official servers). Players you referred before the event still count.</div>
+      </div>
+    </div>
   </div>
 
   <!-- racing hub (Season 1 LTM, from the home RACING card): race, the racing garage (F1 car), leaderboard -->
@@ -286,6 +322,7 @@
           <div class="pickRow"><span>Visibility</span><div class="seg" id="hostVis"><button data-v="public">Public</button><button data-v="private">Private</button></div></div>
           <div class="pickRow"><span>World</span><div class="seg" id="hostWorld"><button data-v="grass">Grassy</button><button data-v="desert">Desert</button><button data-v="snow">Snowy</button></div></div>
           <div class="pickRow"><span>Time of day</span><div class="seg" id="hostTod"><button data-v="day">Day</button><button data-v="sunset">Evening</button><button data-v="night">Night</button></div></div>
+          <div class="pickRow"><span>Vehicles</span><div class="seg" id="hostVeh"><button data-v="all">All vehicles</button><button data-v="cars">Cars only</button></div></div>
         </div>
         <div class="mode small">
           <h3>SCORED SERVER</h3>
@@ -337,12 +374,12 @@
         <label class="row">Driver side <select id="rhd"><option value="left">Left</option><option value="right">Right</option></select></label>
         <label class="chk"><input type="checkbox" id="tc"> Traction control</label>
         <label class="chk"><input type="checkbox" id="manual"> Manual gearbox</label>
-        <label class="row hidden" id="vehRow">Vehicle <select id="vehSel"><option value="car">Car</option><option value="bike">Motorcycle</option><option value="van">Van</option></select></label>
+        <label class="row hidden" id="vehRow">Vehicle <select id="vehSel"><option value="car">Car</option><option value="bike">Motorcycle</option><option value="van">Bang Bus</option></select></label>
       </section>
       <section>
         <h2>Multiplayer</h2>
         <label class="chk"><input type="checkbox" id="minimapOn"> Minimap</label>
-        <label>Chat size <b id="chatSizeV"></b><input type="range" id="chatSize" min="70" max="200"></label>
+        <label>Chat size <b id="chatSizeV"></b><input type="range" id="chatSize" min="25" max="100"></label>
       </section>
       <section>
         <h2>Racing</h2>
@@ -530,7 +567,7 @@
     <div class="cfBtns"><button id="cfEquip" class="go">EQUIP</button><button id="cfOk">LATER</button></div>
   </div>
 </div>
-<!-- launch popup (main.js Welcome): "sign in with Google" when not signed in, then "Version 1.1 is here" once -->
+<!-- launch popup (main.js Welcome): "sign in with Google" when not signed in, then "Version 1.2 is here" -->
 <div id="welcome" class="hidden">
   <div class="wcCard">
     <div class="wcSlide" data-wc="banned">
@@ -547,18 +584,22 @@
     </div>
     <div class="wcSlide" data-wc="update">
       <div class="wcTag">UPDATE</div>
-      <h2>Version 1.1 is here</h2>
+      <h2>Version 1.2 is here</h2>
       <p class="wcSub">New</p>
-      <div class="wcNew">
-        <b>Customize your F1 car</b> in the new <b>Racing Garage</b> (Racing → Garage): paint, patterns and rims, plus Parts - tires, rear wing, front wing, gearbox and brake bias - with stats that show what each one does.
-        <button id="wcGarage">OPEN RACING GARAGE</button>
+      <div class="wcNew" id="wcEventBox">
+        <b>The Bang Bus event:</b> finish 5 quests to unlock the <b>Bang Bus</b> for good - sign in with Google, play for 1 hour, drive 75 miles, score over 100,000 in one run and refer 3 friends.
+        <button id="wcEvent">SEE THE QUESTS</button>
       </div>
+      <ul class="wcList">
+        <li><b>Invite friends</b> with your own link, on your Profile or in Friends.</li>
+        <li><b>Cars-only servers:</b> when hosting, pick Vehicles → Cars only.</li>
+        <li><b>Updates board</b> at the top right of the menu: everything that's changed, every update.</li>
+      </ul>
       <p class="wcSub">Bug fixes</p>
       <ul class="wcList">
-        <li><b>Racing timing tower</b> no longer stays on screen after you leave a race queue and go back to normal driving.</li>
-        <li><b>Race starts:</b> holding the throttle when the lights go green now launches the car straight away (the car wouldn't move until you let go and pressed again).</li>
+        <li><b>Chat:</b> messages arrive without reloading, and reading one clears its notification.</li>
+        <li><b>Friends and Inbox buttons</b> are bigger and no longer shrink on small screens.</li>
       </ul>
-      <div class="wcThanks">Thanks to <b>beachrat</b> and <b>TTNoManchas</b> for finding these bugs. They've been awarded the <span class="ttl r-legendary neon">Bug Hunter</span> title.</div>
     </div>
     <div class="wcFoot"><span class="wcDots"></span><button id="wcNext" class="go">NEXT</button></div>
   </div>
@@ -576,7 +617,7 @@
   // Remove names from this list to take a vehicle out of traffic; with none loaded the old traffic returns.
   const VEHICLES = ['camry', 'civic', 'model3', 'golf', 'mini', 'mustang', 'p911', 'prius', 'charger', 'gtr',
     'rav4', 'wrangler', 'tahoe', 'f150', 'transit', 'odyssey', 'vwbus', 'boxtruck', 'cascadia'];
-  const files = ['js/platform', 'js/core','js/zones', 'js/models', 'js/playercars', 'js/bike', 'js/lowpoly', 'js/toykit', ...VEHICLES.map(k => 'js/vehicles/' + k), 'js/world', 'js/physics', 'js/traffic', 'js/input', 'js/titles', 'js/hud', 'js/netcodec', 'js/net', 'js/account', 'js/tracks', 'js/f1', 'js/race', 'js/main', 'js/garage', 'js/social', 'js/dropdown', 'js/touch', 'js/crazygames'];
+  const files = ['js/platform', 'js/core','js/zones', 'js/models', 'js/playercars', 'js/bike', 'js/lowpoly', 'js/toykit', ...VEHICLES.map(k => 'js/vehicles/' + k), 'js/world', 'js/physics', 'js/traffic', 'js/input', 'js/titles', 'js/hud', 'js/netcodec', 'js/net', 'js/account', 'js/tracks', 'js/f1', 'js/race', 'js/main', 'js/garage', 'js/social', 'js/event', 'js/updates', 'js/dropdown', 'js/touch', 'js/crazygames'];
   for (const f of files) {
     const s = document.createElement('script');
     s.src = `${f}.js?v=${v}`; s.async = false;

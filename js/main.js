@@ -4,11 +4,14 @@
 // =====================================================================
 
 // ---------- settings ----------
-const DEFAULTS = { density: 0.55, assist: 0, sens: 1.0, kbSens: 1.0, blur: 0, world: 'grass', tod: 'day', hostVis: 'public', hostWorld: 'grass', hostTod: 'day', hostName: '', mirrors: 'medium', units: 'mph', rhd: false, vol: 0.6, tc: true, manual: false, color: '#a6b0b8', mpDensity: 0.55, minimap: true, chatSize: 1.2, assistKb: 1, ghost: true };   // (assist: steering wheel lane assist; assistKb: keyboard / gamepad, 100% = the tuned straighten-up help)
+const DEFAULTS = { density: 0.55, assist: 0, sens: 1.0, kbSens: 1.0, blur: 0, world: 'grass', tod: 'day', hostVis: 'public', hostWorld: 'grass', hostTod: 'day', hostName: '', mirrors: 'medium', units: 'mph', rhd: false, vol: 0.6, tc: true, manual: false, color: '#a6b0b8', mpDensity: 0.55, minimap: true, chatSize: 1.8, assistKb: 1, ghost: true };   // (assist: steering wheel lane assist; assistKb: keyboard / gamepad, 100% = the tuned straighten-up help)
 const SCORED_DENSITY = 0.6;               // scored (leaderboard) runs always use this much traffic
 const Settings = Object.assign({}, DEFAULTS);
 try { Object.assign(Settings, JSON.parse(localStorage.getItem('tw_settings2') || '{}')); } catch (e) { /* ignore */ }
 const saveSettings = () => { try { localStorage.setItem('tw_settings2', JSON.stringify(Settings)); } catch (e) { /* ignore */ } };
+// the chat's default went from 50% to 75% (1.2 -> 1.8): anyone still on the old default moves up once; a size
+// someone picked themselves stays
+if (!Settings.chat75) { if (Math.abs(Settings.chatSize - 1.2) < 1e-6) Settings.chatSize = 1.8; Settings.chat75 = true; }
 // keyboard sensitivity was rescaled (old 2.0x is the new 1.0x): carry a saved value over so the feel doesn't change
 if (Settings.kbV !== 2) {
   try { const saved = JSON.parse(localStorage.getItem('tw_settings2') || '{}'); if (saved.kbSens) Settings.kbSens = U.clamp(saved.kbSens / 2, 0.3, 2); } catch (e) { /* ignore */ }
@@ -194,8 +197,8 @@ const MIRRORS = (() => {
   const list = [];
   const mirror = (key, w, h, c, parent, camPos, camDir, fov, shape) => {
     const mat = new THREE.MeshBasicMaterial({ toneMapped: false, color: 0xffffff });
-    add(glassGeo(w, h, c, shape), mat, 0, 0, 0, 0, 0, 0, parent);
-    list.push({ key, mat, target: null, cam: new THREE.PerspectiveCamera(fov, w / h, 0.3, 450), camPos, camDir: camDir.normalize(), aspect: w / h });
+    const mesh = add(glassGeo(w, h, c, shape), mat, 0, 0, 0, 0, 0, 0, parent);
+    list.push({ key, mat, mesh, target: null, cam: new THREE.PerspectiveCamera(fov, w / h, 0.3, 450), camPos, camDir: camDir.normalize(), aspect: w / h });
   };
   // rear-view mirror: hangs from the windscreen on a short stalk, angled toward the driver
   const rv = new THREE.Group(); rv.position.set(0.0, 1.228, -0.05); cockpit.add(rv);
@@ -227,9 +230,10 @@ const MIRRORS = (() => {
   const Q = { low: { rear: [256, 74], side: [128, 62], samples: 0, every: [2, 4], far: 220 },
               medium: { rear: [384, 110], side: [192, 92], samples: 0, every: [1, 3], far: 320 },
               high: { rear: [512, 148], side: [256, 124], samples: 2, every: [1, 2], far: 450 } };
-  let q = Q.medium;
+  let q = Q.medium, qName = 'medium';
   let off = false;
   const setQuality = name => {
+    qName = name;
     off = name === 'off';                                   // off: plain dark glass, nothing extra drawn (fastest)
     q = Q[name] || Q.medium;
     for (const m of list) {
@@ -264,17 +268,22 @@ const MIRRORS = (() => {
     g.textAlign = 'right'; g.font = '700 17px Segoe UI, Arial'; g.fillStyle = 'rgba(255,255,255,.55)'; g.fillText(car.manual ? 'MANUAL' : 'AUTO', 478, 84);
     gTex.needsUpdate = true;
   };
-  return { list, drawGauge, setQuality, setSide, setMount, frame: 0, every: () => q.every, off: () => off };
+  // another vehicle's mirrors (the van's cab): same live glass, drawn while that glass is on screen
+  const addMirror = (key, w, h, c, parent, camPos, camDir, fov) => { mirror(key, w, h, c, parent, camPos, camDir, fov); setQuality(qName); };
+  return { list, drawGauge, setQuality, setSide, setMount, addMirror, frame: 0, every: () => q.every, off: () => off, gaugeTex: gTex };   // (gaugeTex: the van's dash shows it too)
 })();
 // the mirrors' cameras follow the car (each redrawn every few frames, depending on quality)
 const _mp = new THREE.Vector3(), _md = new THREE.Vector3();
+const shownNow = o => { for (; o; o = o.parent) if (!o.visible) return false; return true; };
 function renderMirrors() {
-  if (!cockpit.visible || MIRRORS.off()) return;
+  if (MIRRORS.off()) return;
+  const on = MIRRORS.list.filter(m => shownNow(m.mesh));   // (the car's cockpit or the van's cab: whichever is on screen)
+  if (!on.length) return;
   playerVis.root.updateMatrixWorld(true);
   const was = renderer.shadowMap.autoUpdate, rtWas = renderer.getRenderTarget();
   renderer.shadowMap.autoUpdate = false;                 // (reuse this frame's shadows)
   const f = MIRRORS.frame++, [eR, eS] = MIRRORS.every();
-  MIRRORS.list.forEach((m, i) => {
+  on.forEach((m, i) => {
     const every = m.key === 'rear' ? eR : eS;
     if ((f + i) % every) return;                          // (door mirrors are staggered against each other)
     _mp.copy(m.camPos).applyMatrix4(playerVis.root.matrixWorld);
@@ -302,8 +311,11 @@ const VEH = {
 };
 let vehicle = 'car';
 const canBike = () => !!(Account.user && Account.user.name && BIKE_NAMES.includes(Account.user.name.toLowerCase()));
+// the Bang Bus (the event's reward: js/event.js): the owners, and anyone who finished its quests
+const canVan = () => canBike() || !!(Account.user && Account.user.name && Account.user.bus);
 function setVehicle(v) {
-  const van = v === 'van' && canBike();
+  if (typeof Net !== 'undefined' && Net.room && Net.room.carsOnly) v = 'car';   // (on a cars-only server: your car until you leave)
+  const van = v === 'van' && canVan();
   vehicle = v === 'bike' && canBike() ? 'bike' : 'car';
   const V = VEH[vehicle], bike = vehicle === 'bike';
   playerVis.root.visible = !bike; playerBike.root.visible = bike;
@@ -313,10 +325,10 @@ function setVehicle(v) {
   Object.assign(proxy, V.ext);
   Net.ext = Object.assign({}, V.ext);
   Net.setVehicle(van && vehicle === 'car' ? 'van' : vehicle);   // (the van drives as a car; others see the van)
-  // the motorcycle is just for fun: no personal bests, leaderboards, runs or stats (a streak with any of it on the
-  // bike counts for nothing, even after switching back to the car)
-  const was = score.funOnly; score.funOnly = bike;
-  if (bike) { if (score.score >= 1) score.fun = true; if (!was && game.mode !== 'menu') hud.message('MOTORCYCLE · JUST FOR FUN, NO STATS'); }
+  // the motorcycle and the Bang Bus are just for fun: no personal bests, leaderboards, runs or stats (a streak with
+  // any of it on them counts for nothing, even after switching back to the car)
+  const fun = bike || van, was = score.funOnly; score.funOnly = fun;
+  if (fun) { if (score.score >= 1) score.fun = true; if (!was && game.mode !== 'menu') hud.message((bike ? 'MOTORCYCLE' : 'BANG BUS') + ' · JUST FOR FUN, NO STATS'); }
   const row = document.getElementById('vehRow'); if (row) row.classList.toggle('hidden', !canBike());
   showVan(van);
   if ((typeof Race !== 'undefined' && Race.active) || (typeof Garage !== 'undefined' && Garage.f1Preview)) showF1(true);   // (racing / the Garage showing the F1: still the F1 car)
@@ -373,16 +385,21 @@ async function readVanFile() {
   const bytes = i => { const bv = J.bufferViews[i]; return buf.slice(bin + (bv.byteOffset || 0), bin + (bv.byteOffset || 0) + bv.byteLength); };
   const acc = i => { const a = J.accessors[i], T = { 5126: Float32Array, 5125: Uint32Array, 5123: Uint16Array, 5121: Uint8Array }[a.componentType];
     const n = { SCALAR: 1, VEC2: 2, VEC3: 3, VEC4: 4 }[a.type], all = bytes(a.bufferView); return new T(all, a.byteOffset || 0, a.count * n); };
+  // two parts sharing the same points: the body (primitive 0) and the window glass (primitive 1, see-through)
   const pr = J.meshes[0].primitives[0], g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(acc(pr.attributes.POSITION), 3));
   if (pr.attributes.NORMAL !== undefined) g.setAttribute('normal', new THREE.BufferAttribute(acc(pr.attributes.NORMAL), 3));
   if (pr.attributes.TEXCOORD_0 !== undefined) g.setAttribute('uv', new THREE.BufferAttribute(acc(pr.attributes.TEXCOORD_0), 2));
   if (pr.indices !== undefined) g.setIndex(new THREE.BufferAttribute(acc(pr.indices), 1));
+  // (2 and 3: the headlight and tail-light lenses - the body's own triangles, drawn again as glow when they're lit)
+  const part = n => { const p = J.meshes[0].primitives[n]; if (!p) return null; const pg = new THREE.BufferGeometry(); for (const k of ['position', 'normal', 'uv']) if (g.attributes[k]) pg.setAttribute(k, g.attributes[k]); pg.setIndex(new THREE.BufferAttribute(acc(p.indices), 1)); return pg; };
+  const gg = part(1), headG = part(2), tailG = part(3);
   // turn it to face forward, scale to the car's length, stand it on the ground, centred
   g.rotateY(VAN.yaw); g.computeBoundingBox();
   let bb = g.boundingBox; g.scale(...Array(3).fill(VAN.length / (bb.max.z - bb.min.z))); g.computeBoundingBox(); bb = g.boundingBox;
   g.translate(-(bb.min.x + bb.max.x) / 2, -bb.min.y, -(bb.min.z + bb.max.z) / 2); g.computeBoundingSphere();
   if (!g.attributes.normal) g.computeVertexNormals();
+  for (const pg of [gg, headG, tailG]) if (pg) pg.computeBoundingSphere();   // (same points, already moved with the body)
   const tex = async (ti, srgb) => {
     if (ti === undefined) return null;
     const im = J.images[J.textures[ti].source], url = URL.createObjectURL(new Blob([bytes(im.bufferView)], { type: im.mimeType }));
@@ -393,12 +410,277 @@ async function readVanFile() {
   const m = J.materials[pr.material] || {}, pb = m.pbrMetallicRoughness || {};
   const map = await tex(pb.baseColorTexture && pb.baseColorTexture.index, true), mr = await tex(pb.metallicRoughnessTexture && pb.metallicRoughnessTexture.index, false);
   const nm = await tex(m.normalTexture && m.normalTexture.index, false);
-  const mat = new THREE.MeshStandardMaterial({ map, metalnessMap: mr, roughnessMap: mr, normalMap: nm, metalness: pb.metallicFactor ?? 1, roughness: pb.roughnessFactor ?? 1, side: THREE.DoubleSide });  return { g, mat };
+  const mat = new THREE.MeshStandardMaterial({ map, metalnessMap: mr, roughnessMap: mr, normalMap: nm, metalness: pb.metallicFactor ?? 1, roughness: pb.roughnessFactor ?? 1, side: THREE.DoubleSide });
+  // the shell seen from inside (through the windows / from the driver's seat): a dark lining, not the outside
+  // paint back to front
+  mat.onBeforeCompile = sh => { sh.fragmentShader = sh.fragmentShader.replace('#include <dithering_fragment>', '#include <dithering_fragment>\n  if (!gl_FrontFacing) gl_FragColor.rgb = vec3(0.045, 0.047, 0.052);'); };
+  return { g, mat, glassG: gg, headG, tailG };
+}
+// the van as one object: body, window glass and the cab inside (yours and other players' in multiplayer)
+// glass: tinted from outside, nearly clear from the driver's seat (set each frame, like the car's)
+const vanGlass = new THREE.MeshStandardMaterial({ color: 0x1a2530, roughness: 0.05, metalness: 0.6, transparent: true, opacity: 0.62, envMapIntensity: 1.5, side: THREE.DoubleSide, depthWrite: false });
+const vanGlassOthers = vanGlass.clone();                // (other players' vans: always the outside tint)
+function makeVanModel(a, others) {
+  const root = new THREE.Group();
+  const body = new THREE.Mesh(a.g, a.mat); body.castShadow = true; root.add(body);
+  const cab = makeVanCab(); root.add(cab.root);
+  let glass = null;
+  if (a.glassG) { glass = new THREE.Mesh(a.glassG, others ? vanGlassOthers : vanGlass); glass.renderOrder = 2; root.add(glass); }
+  // lamps: a glow laid over the lenses (headlights on at night; tail lights dim at night, bright when braking)
+  const glow = (geo, color) => { if (!geo) return null; const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2, toneMapped: false })); m.renderOrder = 3; m.visible = false; root.add(m); return m; };
+  const tail = glow(a.tailG, 0xff1a1a), head = makeVanHeadlamps(a, root);
+  const setLamps = (lightsOn, braking) => {
+    if (head) head.set(lightsOn);
+    if (tail) { const o = braking ? 0.95 : lightsOn ? 0.4 : 0; tail.visible = o > 0; tail.material.opacity = o; }
+  };
+  return Object.assign(cab, { root, body, glass, setLamps });
+}
+// ---------- the van's headlamps: a clean lamp laid over each scanned one ----------
+// The scanned lamp's triangles (van file part 2) give its shape: seen face-on, a smooth outline is fitted round them
+// (convex, pulled in a touch), filled with a fine mesh pressed onto the lamp's surface, and drawn with a picture:
+// an LED strip round the edge (on in daytime too, dimmer) and, at night, the lens lit with two projectors and a soft
+// glow halo in front. Shapes are worked out once per file and shared by every van.
+function makeVanHeadlamps(a, root) {
+  if (!a.headG) return null;
+  if (!a.lampParts) {
+    const pos = a.headG.attributes.position, idx = a.headG.index.array, probe = new THREE.Mesh(a.headG, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }));
+    const rc = new THREE.Raycaster(), parts = [];
+    for (const side of [-1, 1]) {
+      // this side's lamp: its points and average facing
+      const P = [], n = new THREE.Vector3(), A = new THREE.Vector3(), B = new THREE.Vector3(), C = new THREE.Vector3();
+      for (let t = 0; t < idx.length; t += 3) {
+        A.fromBufferAttribute(pos, idx[t]); B.fromBufferAttribute(pos, idx[t + 1]); C.fromBufferAttribute(pos, idx[t + 2]);
+        if ((A.x + B.x + C.x) * side < 0) continue;
+        P.push(A.clone(), B.clone(), C.clone());
+        n.add(new THREE.Vector3().subVectors(B, A).cross(new THREE.Vector3().subVectors(C, A)));
+      }
+      if (P.length < 9) continue;
+      n.normalize(); if (n.z > 0) n.negate();                          // (facing forward, out of the van)
+      const c = P.reduce((s, p) => s.add(p), new THREE.Vector3()).divideScalar(P.length);
+      const e1 = new THREE.Vector3(0, 1, 0).cross(n).normalize(), e2 = new THREE.Vector3().crossVectors(n, e1);
+      const flat = P.map(p => { const d = p.clone().sub(c); return [d.dot(e1), d.dot(e2)]; });
+      // convex outline (monotone chain), pulled 6% toward the middle
+      const pts = flat.slice().sort((p, q) => p[0] - q[0] || p[1] - q[1]), cr = (o, p, q) => (p[0] - o[0]) * (q[1] - o[1]) - (p[1] - o[1]) * (q[0] - o[0]);
+      const lo = [], hi = []; for (const p of pts) { while (lo.length > 1 && cr(lo[lo.length - 2], lo[lo.length - 1], p) <= 0) lo.pop(); lo.push(p); }
+      for (const p of pts.slice().reverse()) { while (hi.length > 1 && cr(hi[hi.length - 2], hi[hi.length - 1], p) <= 0) hi.pop(); hi.push(p); }
+      const hull = lo.slice(0, -1).concat(hi.slice(0, -1)), m = hull.reduce((s, p) => [s[0] + p[0] / hull.length, s[1] + p[1] / hull.length], [0, 0]);
+      const ring = hull.map(p => [m[0] + (p[0] - m[0]) * 0.94, m[1] + (p[1] - m[1]) * 0.94]);
+      const xs = ring.map(p => p[0]), ys = ring.map(p => p[1]), x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+      // a fan of triangles from the middle, each split into 64, every point pressed onto the lamp (6 mm proud of it)
+      const onLamp = (u, v) => { const o = c.clone().addScaledVector(e1, u).addScaledVector(e2, v); rc.set(o.clone().addScaledVector(n, 0.4), n.clone().negate()); const h = rc.intersectObject(probe, false)[0]; return (h ? h.point : o).addScaledVector(n, 0.006); };
+      const P3 = [], UV = [];
+      const tri = (p, q, r, depth) => {
+        if (depth) { const mid = (s, t) => [(s[0] + t[0]) / 2, (s[1] + t[1]) / 2], pq = mid(p, q), qr = mid(q, r), rp = mid(r, p); tri(p, pq, rp, depth - 1); tri(pq, q, qr, depth - 1); tri(rp, qr, r, depth - 1); tri(pq, qr, rp, depth - 1); return; }
+        for (const s of [p, q, r]) { P3.push(...onLamp(s[0], s[1]).toArray()); UV.push((s[0] - x0) / (x1 - x0), (s[1] - y0) / (y1 - y0)); }
+      };
+      for (let i = 0; i < ring.length; i++) tri(m, ring[i], ring[(i + 1) % ring.length], 3);
+      const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(P3, 3)); g.setAttribute('uv', new THREE.Float32BufferAttribute(UV, 2));
+      // the pictures: outline in the canvas's coordinates (u right, v up)
+      const W = 256, H = Math.max(64, Math.round(256 * (y1 - y0) / (x1 - x0))), path = (x, close = true) => { x.beginPath(); ring.forEach((p, i) => { const X = (p[0] - x0) / (x1 - x0) * W, Y = (1 - (p[1] - y0) / (y1 - y0)) * H; i ? x.lineTo(X, Y) : x.moveTo(X, Y); }); if (close) x.closePath(); };
+      const pic = full => {
+        const cv = document.createElement('canvas'); cv.width = W; cv.height = H; const x = cv.getContext('2d');
+        if (full) {
+          x.save(); path(x); x.clip();
+          const gr = x.createLinearGradient(0, 0, 0, H); gr.addColorStop(0, 'rgba(255,248,232,0.55)'); gr.addColorStop(1, 'rgba(255,240,215,0.28)'); x.fillStyle = gr; x.fillRect(0, 0, W, H);
+          for (const f of [0.36, 0.64]) {                                  // two projector lenses along the lamp
+            const cx = f * W, cy = H * 0.55, r = Math.min(H * 0.32, W * 0.13), rg = x.createRadialGradient(cx, cy, 0, cx, cy, r);
+            rg.addColorStop(0, 'rgba(255,255,255,1)'); rg.addColorStop(0.55, 'rgba(255,250,235,0.85)'); rg.addColorStop(1, 'rgba(255,245,225,0)'); x.fillStyle = rg; x.beginPath(); x.arc(cx, cy, r, 0, Math.PI * 2); x.fill();
+          }
+          x.restore();
+        }
+        x.save(); path(x); x.clip(); path(x); x.lineWidth = 10; x.lineJoin = 'round'; x.strokeStyle = 'rgba(255,255,255,1)'; x.stroke(); x.restore();   // LED strip round the edge
+        const t = new THREE.CanvasTexture(cv); t.encoding = THREE.sRGBEncoding; return t;
+      };
+      g.computeBoundingBox(); const bb = g.boundingBox;                 // (halo: in front of the lamp's most forward point, so the body never hides it)
+      parts.push({ g, drl: pic(false), full: pic(true), at: new THREE.Vector3((bb.min.x + bb.max.x) / 2, (bb.min.y + bb.max.y) / 2, bb.min.z - 0.08), size: Math.max(x1 - x0, y1 - y0) * 1.5 });   // (just in front of the lamp: glare on it, not a ball floating beside the van)
+    }
+    if (!VAN_HALO.tex) {                                                // soft round glow for the halo
+      const cv = document.createElement('canvas'); cv.width = cv.height = 128; const x = cv.getContext('2d'), rg = x.createRadialGradient(64, 64, 0, 64, 64, 64);
+      rg.addColorStop(0, 'rgba(255,246,226,0.85)'); rg.addColorStop(0.25, 'rgba(255,240,215,0.35)'); rg.addColorStop(1, 'rgba(255,235,205,0)'); x.fillStyle = rg; x.fillRect(0, 0, 128, 128);
+      VAN_HALO.tex = new THREE.CanvasTexture(cv); VAN_HALO.tex.encoding = THREE.sRGBEncoding;
+    }
+    a.lampParts = parts;
+  }
+  const lens = (map, o) => new THREE.MeshBasicMaterial({ map, transparent: true, opacity: o, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
+  const lamps = a.lampParts.map(p => {
+    const drl = new THREE.Mesh(p.g, lens(p.drl, 0.6)), full = new THREE.Mesh(p.g, lens(p.full, 1)); drl.renderOrder = full.renderOrder = 3;
+    const halo = new THREE.Sprite(new THREE.SpriteMaterial({ map: VAN_HALO.tex, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true, toneMapped: false }));
+    halo.position.copy(p.at); halo.scale.setScalar(p.size); halo.renderOrder = 4;
+    root.add(drl, full, halo); return { drl, full, halo };
+  });
+  // lights on (night): the whole lamp lit + halo; off (day): just the LED strip
+  return { set(on) { for (const l of lamps) { l.drl.visible = !on; l.full.visible = on; l.halo.visible = on; } } };
+}
+const VAN_HALO = {};
+// ---------- the van's cab: low-poly interior in the game's style (flat-shaded, few sides) ----------
+// Sized to the van's shell (glass 1.24-1.9 m up, cab 1.76 m wide, door pillar 0.26 m behind the centre):
+// floor, dash with the live speed display in front of the driver, a big van steering wheel (turns with yours),
+// driver's seat, a two-seat passenger bench, door panels, sun visors and the wall behind the seats.
+// Coordinates: x across, y up, z backward (the van's centre is 0; its nose is at z = -2.4).
+const VAN_EYE = { x: 0.45, y: 1.64, f: 0.36 };          // driver's eye: 0.45 m off centre, 1.64 m up, 0.36 m ahead of the van's centre
+const VAN_CAB_GEO = {};                                 // (shapes built once, shared by every van)
+function makeVanCab() {
+  const std = (color, roughness, metalness = 0) => new THREE.MeshStandardMaterial({ color, roughness, metalness, flatShading: true });
+  const M = VAN_CAB_GEO.mats || (VAN_CAB_GEO.mats = { dash: std(0x1a1c20, 0.85), dash2: std(0x24272d, 0.8), trim: std(0x3c424b, 0.4, 0.5), seat: std(0x26292f, 0.95),
+    seat2: std(0x1b1d22, 0.95), floor: std(0x121316, 0.95), wall: std(0x2b2e34, 0.9), gloss: std(0x0d0e11, 0.35, 0.3) });
+  const root = new THREE.Group();
+  const add = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, parent = root) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); parent.add(m); return m; };
+  const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+  // floor (the front wheel arches come up under the dash: a raised footwell between them)
+  add(box(1.6, 0.04, 0.96), M.floor, 0, 0.58, -0.63);
+  add(box(0.84, 0.04, 0.4), M.floor, 0, 0.86, -1.31);
+  add(box(1.0, 0.26, 0.04), M.floor, 0, 0.73, -1.11);
+  // dash: one faceted piece across the cab (a side profile pushed out sideways), under the windscreen
+  if (!VAN_CAB_GEO.dash) {
+    const prof = new THREE.Shape([[1.16, 0.88], [1.16, 1.02], [1.22, 1.16], [1.34, 1.245], [1.6, 1.29], [1.72, 1.29], [1.72, 0.88]].map(([a, b]) => new THREE.Vector2(a, b)));
+    const g = new THREE.ExtrudeGeometry(prof, { depth: 1.64, bevelEnabled: false });
+    VAN_CAB_GEO.dash = g.applyMatrix4(new THREE.Matrix4().set(0, 0, 1, -0.82, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 0, 1));   // profile (forward, up) -> van (x, y, z)
+    const p = g.attributes.position;                                              // narrower toward the nose (follows the van's front corners)
+    for (let i = 0; i < p.count; i++) p.setX(i, p.getX(i) * (1 - 0.13 * U.clamp((-p.getZ(i) - 1.3) / 0.42, 0, 1)));
+    g.computeVertexNormals();
+  }
+  add(VAN_CAB_GEO.dash, M.dash, 0, 0, 0);
+  add(box(1.6, 0.012, 0.012), M.trim, 0, 1.02, -1.165);                                 // trim line along the dash face
+  for (const x of [-0.16, 0.16]) add(box(0.14, 0.05, 0.02), M.gloss, x, 0.96, -1.163);   // centre air vents
+  add(box(0.24, 0.15, 0.02), M.gloss, 0, 1.13, -1.205, -0.55);                          // centre screen
+  // the driver's side (moved across for right-hand drive): gauge pod, steering wheel, seat
+  const drv = new THREE.Group(); root.add(drv);
+  // (up above the steering wheel's rim, tilted toward the driver, so the speed is always in view)
+  const pod = new THREE.Group(); pod.position.set(0, 1.43, -1.25); pod.rotation.x = -0.23; drv.add(pod);
+  add(box(0.4, 0.13, 0.15), M.dash2, 0, 0, 0, 0, 0, 0, pod);
+  add(box(0.42, 0.018, 0.19), M.dash2, 0, 0.072, 0.02, 0, 0, 0, pod);                   // hood over the display
+  add(box(0.362, 0.112, 0.004), M.gloss, 0, -0.004, 0.0755, 0, 0, 0, pod);
+  const screen = add(new THREE.PlaneGeometry(0.35, 0.1), new THREE.MeshBasicMaterial({ map: MIRRORS.gaugeTex, toneMapped: false }), 0, -0.004, 0.078, 0, 0, 0, pod);
+  // steering wheel: big and flatter than a car's, on a column into the dash
+  const col = new THREE.Group(); col.position.set(0, 1.22, -0.9); col.rotation.x = -0.62; drv.add(col);   // (faces up toward the driver, top leaning forward)
+  const wheel = new THREE.Group(); col.add(wheel);
+  add(new THREE.TorusGeometry(0.2, 0.026, 5, 24), M.gloss, 0, 0, 0, 0, 0, 0, wheel);
+  add(new THREE.CylinderGeometry(0.055, 0.06, 0.05, 8), M.dash2, 0, 0, 0.01, Math.PI / 2, 0, 0, wheel);
+  for (const [ang, len] of [[0, 0.15], [Math.PI, 0.15], [-Math.PI / 2, 0.15]]) add(box(len, 0.035, 0.022), M.trim, Math.cos(ang) * 0.11, Math.sin(ang) * 0.11, 0, 0, 0, ang, wheel);
+  add(new THREE.CylinderGeometry(0.035, 0.045, 0.34, 6), M.dash2, 0, 0, -0.19, Math.PI / 2, 0, 0, col);   // column
+  const seat = (parent, w, x) => {
+    add(box(w * 0.86, 0.36, 0.42), M.seat2, x, 0.79, -0.46, 0, 0, 0, parent);           // base
+    add(box(w, 0.13, 0.52), M.seat, x, 1.03, -0.46, 0, 0, 0, parent);                    // cushion
+    add(box(w, 0.66, 0.13), M.seat, x, 1.4, -0.17, -0.12, 0, 0, parent);                 // backrest
+    for (const s of [-1, 1]) add(box(0.06, 0.56, 0.16), M.seat, x + s * (w / 2 - 0.03), 1.38, -0.15, -0.12, 0, 0, parent);   // bolsters
+  };
+  seat(drv, 0.5, 0);
+  add(box(0.28, 0.18, 0.11), M.seat, 0, 1.83, -0.1, -0.12, 0, 0, drv);                  // headrest
+  const pas = new THREE.Group(); root.add(pas);
+  seat(pas, 0.74, 0);
+  for (const x of [-0.18, 0.18]) add(box(0.25, 0.17, 0.11), M.seat, x, 1.82, -0.1, -0.12, 0, 0, pas);
+  // doors: panel below the glass (stopping short of the wheel arch), armrest, trim along the window line
+  for (const s of [-1, 1]) {
+    add(box(0.04, 0.6, 0.84), M.dash, s * 0.86, 0.92, -0.68);
+    add(box(0.08, 0.05, 0.42), M.trim, s * 0.83, 1.08, -0.7);
+    add(box(0.06, 0.04, 0.84), M.dash2, s * 0.85, 1.22, -0.68);
+    add(box(0.42, 0.012, 0.18), M.dash2, s * 0.44, 1.89, -0.7, 0.25);                   // sun visor
+  }
+  // trim over the edges of the glass (the scanned shell's window edges are ragged): a curved strip along the top
+  // of the windscreen, the front pillars (from the windscreen's edge back to the door glass), and strips along the
+  // top and back of the door windows. (Measured from the van file: windscreen plane z = -1.31 + 1.44 (y - 1.6).)
+  if (!VAN_CAB_GEO.trim) {
+    const wsZ = y => -1.31 + 1.4386 * (y - 1.6), inY = -0.0205, inZ = 0.014;     // (on the windscreen, nudged 2.5 cm into the cab)
+    const top = [[0, 1.902], [0.2, 1.897], [0.4, 1.89], [0.6, 1.845], [0.8, 1.769], [0.88, 1.72]];
+    const ytop = ax => { for (let i = 1; i < top.length; i++) if (ax <= top[i][0]) { const [x0, y0] = top[i - 1], [x1, y1] = top[i]; return y0 + (y1 - y0) * (ax - x0) / (x1 - x0); } return top[top.length - 1][1]; };
+    const pos = [], push = (...v) => pos.push(...v);
+    for (let x = -0.68; x < 0.679; x += 0.08) {                                     // header strip: 3.5 cm over the glass, 6 cm above it
+      const x2 = x + 0.08, q = [[x, ytop(Math.abs(x)) - 0.035], [x2, ytop(Math.abs(x2)) - 0.035], [x2, ytop(Math.abs(x2)) + 0.06], [x, ytop(Math.abs(x)) + 0.06]].map(([a, y]) => [a, y + inY, wsZ(y) + inZ]);
+      push(...q[0], ...q[1], ...q[2], ...q[0], ...q[2], ...q[3]);
+    }
+    for (const s of [-1, 1]) {                                                    // front pillars (a four-sided panel each side)
+      // (the windscreen curves back at its edges: the pillar's windscreen side sits 5 cm in from the flat plane)
+      const q = [[0.82, 1.32 - 0.041, wsZ(1.32) + 0.029], [0.55, 1.87 - 0.066, wsZ(1.87) + 0.046], [0.72, 1.88, -0.69], [0.83, 1.25, -1.19]].map(([x, y, z]) => [s * (x - 0.03), y, z]);
+      if (s < 0) push(...q[0], ...q[1], ...q[2], ...q[0], ...q[2], ...q[3]); else push(...q[0], ...q[2], ...q[1], ...q[0], ...q[3], ...q[2]);
+    }
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.computeVertexNormals();
+    VAN_CAB_GEO.trim = g;
+    VAN_CAB_GEO.trimMat = Object.assign(M.dash.clone(), { side: THREE.DoubleSide });
+  }
+  const edge = new THREE.Group(); root.add(edge);                                 // (only seen from outside, through the glass)
+  add(VAN_CAB_GEO.trim, VAN_CAB_GEO.trimMat, 0, 0, 0, 0, 0, 0, edge);
+  for (const s of [-1, 1]) {
+    add(box(0.02, 0.08, 0.48), M.dash, s * 0.64, 1.84, -0.54, 0, 0, 0, edge);        // along the top of the door glass
+    add(box(0.02, 0.56, 0.1), M.dash, s * 0.69, 1.55, -0.24, 0, 0, 0, edge);         // the pillar behind the door glass
+  }
+  // the wall behind the seats (the shell is wider low down than at the roof)
+  if (!VAN_CAB_GEO.wall) VAN_CAB_GEO.wall = new THREE.ShapeGeometry(new THREE.Shape([[-0.86, 0.58], [0.86, 0.58], [0.84, 1.4], [0.74, 1.8], [0.6, 1.98], [-0.6, 1.98], [-0.74, 1.8], [-0.84, 1.4]].map(([a, b]) => new THREE.Vector2(a, b))));
+  const wall = add(VAN_CAB_GEO.wall, M.wall, 0, 0, -0.03); wall.material = M.wall.clone(); wall.material.side = THREE.DoubleSide;
+  // which side you drive from
+  const setSide = rhd => { const s = rhd ? 1 : -1; drv.position.x = s * VAN_EYE.x; pas.position.x = -s * 0.4; };
+  setSide(Settings.rhd);
+  return { root, wheel, setSide, screen, edge };
+}
+// ---------- the van seen from the driver's seat: its own clean cab shell (like the car's cockpit) ----------
+// The scanned body's window edges are too ragged to look out through, so in first person it's hidden and this
+// stands in for it: slim front pillars, header and roof lining, door tops and rear pillars, the window line, the
+// blue bonnet with its wipers, and the door mirrors with live glass (same as the car's). Same measurements as
+// the van file (windscreen 1.34 - 1.90 m up, mirrors at x 1.0 - 1.16, 1.28 - 1.50 m up).
+function makeVanCockpit() {
+  const std = (color, roughness, metalness = 0) => new THREE.MeshStandardMaterial({ color, roughness, metalness, flatShading: true });
+  const M = { pillar: std(0x2a2d33, 0.85), liner: std(0x4b5058, 0.95), trim: std(0x1d1f24, 0.8), paint: std(0x3cc4e6, 0.45, 0.1), black: std(0x15171a, 0.6), panel: std(0x1a1c20, 0.85) };
+  M.blackDS = Object.assign(M.black.clone(), { side: THREE.DoubleSide });
+  const root = new THREE.Group(), heads = [];
+  const add = (geo, mat, x, y, z, rx = 0, ry = 0, rz = 0, parent = root) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.rotation.set(rx, ry, rz); parent.add(m); return m; };
+  const box = (w, h, d) => new THREE.BoxGeometry(w, h, d);
+  // a straight six-sided bar from a to b (pillars, rails)
+  const beam = (a, b, r, mat, parent = root) => {
+    const A = new THREE.Vector3(...a), B = new THREE.Vector3(...b), d = B.clone().sub(A);
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, d.length(), 6), mat);
+    m.position.copy(A).add(B).multiplyScalar(0.5); m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize()); parent.add(m); return m;
+  };
+  add(box(1.66, 0.03, 0.92), M.liner, 0, 1.975, -0.4);                                   // roof lining
+  beam([-0.8, 1.93, -0.86], [0.8, 1.93, -0.86], 0.05, M.pillar);                          // header over the windscreen
+  for (const s of [-1, 1]) {
+    beam([s * 0.9, 1.3, -1.72], [s * 0.79, 1.93, -0.86], 0.05, M.pillar);                 // front pillar
+    beam([s * 0.8, 1.93, -0.86], [s * 0.8, 1.93, -0.18], 0.04, M.pillar);                 // top of the door window
+    add(box(0.07, 0.76, 0.14), M.pillar, s * 0.8, 1.58, -0.18);                           // rear pillar
+    add(box(0.08, 0.05, 1.54), M.trim, s * 0.86, 1.27, -0.94);                            // window line
+    add(box(0.04, 0.64, 0.64), M.panel, s * 0.86, 0.95, -1.4);                            // front of the door
+    add(box(0.14, 0.42, 0.58), M.panel, s * 0.79, 1.08, -1.45);                           // dash end
+    // door mirror, outside the door: a black corner panel at the front of the door window (its mount), two arms
+    // out to a rounded housing, and the live glass on its back, turned toward the driver (see setSide)
+    {
+      const tri = [[0.9, 1.29, -1.71], [0.885, 1.29, -1.2], [0.848, 1.6, -1.3]].map(([x, y, z]) => [s * x, y, z]);
+      const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute(tri.flat(), 3)); g.computeVertexNormals();
+      add(g, M.blackDS, 0, 0, 0);
+    }
+    beam([s * 0.89, 1.31, -1.32], [s * 1.0, 1.32, -1.2], 0.016, M.black);
+    beam([s * 0.87, 1.45, -1.3], [s * 1.0, 1.49, -1.19], 0.014, M.black);
+    const head = new THREE.Group(); head.position.set(s * 1.08, 1.41, -1.16); root.add(head);
+    add(VAN_MIRROR_GEO(), M.black, 0, 0, 0, 0, 0, 0, head);
+    const gl = new THREE.Group(); gl.position.set(0, 0, 0.002); head.add(gl);
+    MIRRORS.addMirror(s < 0 ? 'vanLeft' : 'vanRight', 0.15, 0.24, 0.03, gl, new THREE.Vector3(s * 1.09, 1.41, -1.12), new THREE.Vector3(s * 0.16, -0.03, 1), 24);
+    heads.push(head);
+  }
+  // bonnet: from under the windscreen down to the nose, in the van's blue, with the wipers resting on it
+  {
+    const p = [[-0.88, 1.31, -1.73], [0.88, 1.31, -1.73], [0.8, 1.05, -2.32], [-0.8, 1.05, -2.32]];
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute([...p[0], ...p[2], ...p[1], ...p[0], ...p[3], ...p[2]], 3)); g.computeVertexNormals();
+    add(g, M.paint, 0, 0, 0);
+    for (const x of [-0.42, 0.18]) add(box(0.6, 0.015, 0.02), M.black, x, 1.325, -1.76, 0, 0, 0.06);
+  }
+  // the mirrors turn most of the way toward wherever the driver sits (left- / right-hand drive)
+  const setSide = rhd => { const ex = (rhd ? 1 : -1) * VAN_EYE.x, ez = -VAN_EYE.f; for (const h of heads) h.rotation.y = Math.atan2(ex - h.position.x, ez - h.position.z) * 0.75; };
+  setSide(Settings.rhd);
+  return { root, setSide };
+}
+// the van's mirror housing: a rounded-off block (cut corners, bevelled edges), its back face (the glass side) at z = 0
+let _vanMirrorGeo = null;
+function VAN_MIRROR_GEO() {
+  if (_vanMirrorGeo) return _vanMirrorGeo;
+  const w = 0.17, h = 0.27, c = 0.04, s = new THREE.Shape(), x = w / 2, y = h / 2;
+  s.moveTo(-x + c, -y); s.lineTo(x - c, -y); s.lineTo(x, -y + c); s.lineTo(x, y - c); s.lineTo(x - c, y); s.lineTo(-x + c, y); s.lineTo(-x, y - c); s.lineTo(-x, -y + c); s.closePath();
+  const g = new THREE.ExtrudeGeometry(s, { depth: 0.06, bevelEnabled: true, bevelThickness: 0.018, bevelSize: 0.012, bevelSegments: 1 });
+  g.translate(0, 0, -0.06 - 0.018 - 0.001);                    // (back face just behind the glass)
+  return (_vanMirrorGeo = g);
 }
 async function loadVan() {
   const a = await getVanAsset();
-  ownerVan = new THREE.Mesh(a.g, a.mat); ownerVan.castShadow = true; ownerVan.visible = false;
-  playerVis.root.add(ownerVan);
+  ownerVan = makeVanModel(a); ownerVan.root.visible = false;
+  const vc = makeVanCockpit(); ownerVan.cockpit = vc.root; ownerVan.cockpitSide = vc.setSide;
+  ownerVan.cockpit.visible = false; ownerVan.root.add(ownerVan.cockpit);
+  playerVis.root.add(ownerVan.root);
 }
 function showVan(on) {
   vanOn = on;
@@ -406,7 +688,7 @@ function showVan(on) {
     if (!vanLoading) { vanLoading = true; loadVan().then(() => { vanLoading = false; showVan(vanOn); }, e => { vanLoading = false; vanAsset = null; console.warn('van model', e); }); }
     return;
   }
-  if (ownerVan) ownerVan.visible = on;
+  if (ownerVan) ownerVan.root.visible = on;
   playerVis.body.visible = !on;
   for (const w of playerVis.wheels) w.pivot.visible = !on;
   if (on) playerVis.indL.visible = playerVis.indR.visible = playerVis.brake.visible = false;
@@ -734,13 +1016,15 @@ function updateCamera(dt) {
     const bike = vehicle === 'bike', lean = bike ? (camS.body && camS.body.lean) || 0 : 0;
     // (motorcycle: the rider's helmet, tucked over the tank, tipping with the bike; car: the driver's seat)
     const f1 = playerF1.root.visible;                  // (racing: sat low in the middle of the F1 car)
-    const lx = bike ? Math.sin(lean) * -1.25 : f1 ? -U.clamp(car.ay, -30, 30) * 0.002 : (Settings.rhd ? 0.37 : -0.37) - U.clamp(car.ay, -12, 12) * 0.004;
+    const van = vanOn && ownerVan && !f1 && !bike;      // (the van: up high in its cab)
+    const side = van ? VAN_EYE.x : 0.37;
+    const lx = bike ? Math.sin(lean) * -1.25 : f1 ? -U.clamp(car.ay, -30, 30) * 0.002 : (Settings.rhd ? side : -side) - U.clamp(car.ay, -12, 12) * 0.004;
     const seat = PLAYER_CARS[carKey];                  // (where the driver sits in the car you picked)
-    const lf = (bike ? 0.2 : f1 ? playerF1.eye.f : seat.eyeF - CG_F) - U.clamp(car.ax, -15, 12) * 0.006; // head pitches forward under braking
-    const y = (bike ? 1.3 * Math.cos(lean) : f1 ? playerF1.eye.y : seat.eyeY) + Math.sin(time * 31) * Math.min(spd / 80, 1) * (bike ? 0.003 : 0.0015);
+    const lf = (bike ? 0.2 : f1 ? playerF1.eye.f : van ? VAN_EYE.f - CG_F : seat.eyeF - CG_F) - U.clamp(car.ax, -15, 12) * 0.006; // head pitches forward under braking
+    const y = (bike ? 1.3 * Math.cos(lean) : f1 ? playerF1.eye.y : van ? VAN_EYE.y : seat.eyeY) + Math.sin(time * 31) * Math.min(spd / 80, 1) * (bike ? 0.003 : 0.0015);
     camera.position.set(car.x + lf * sy + lx * cy, y, car.z - lf * cy + lx * sy);
     camera.rotation.order = 'YXZ';
-    camera.rotation.set(bike ? -0.09 : -0.045, -car.visYaw, lean * 0.7);   // car: level, no tilt from braking / cornering
+    camera.rotation.set(bike ? -0.09 : van ? -0.11 : -0.045, -car.visYaw, lean * 0.7);   // car: level, no tilt from braking / cornering (van: up high, looking down over the dash a little)
     camS.fov = U.damp(camS.fov, 70 + U.clamp((spd - 20) / 60, 0, 1) * 5, 3, dt);
   }
   // near plane: far enough out in the chase view for good depth precision (no z-fighting
@@ -851,12 +1135,18 @@ bindRange('sens', 'sens', v => v / 100, v => (v / 100).toFixed(2) + '×');      
 bindRange('kbSens', 'kbSens', v => v / 100, v => (v / 100).toFixed(2) + '×');   // keyboard
 setKbStyle(KB_STYLE);   // keyboard steering preset (physics.js KB_STYLE: 'snappy'; 'control' and 'classic' are kept to switch back)
 bindRange('vol', 'vol', v => v / 100, v => v + '%');
-bindRange('chatSize', 'chatSize', v => v / 100, v => v + '%');   // multiplayer chat size (style.css --chat)
-{ const applyChat = () => document.documentElement.style.setProperty('--chat', Settings.chatSize); $id('chatSize').addEventListener('input', applyChat); applyChat(); }
+// chat size (servers and races; style.css --chat). The slider reads 50% at the original size (1.2), 75% (1.8) is
+// the default, 100% is twice the original; the setting keeps the real size
+{
+  const CHAT_PCT = 1.2 / 50, sl = $id('chatSize'), lab = $id('chatSizeV');
+  sl.value = Math.round(Settings.chatSize / CHAT_PCT);
+  const upd = () => { Settings.chatSize = +sl.value * CHAT_PCT; lab.textContent = sl.value + '%'; document.documentElement.style.setProperty('--chat', Settings.chatSize); saveSettings(); };
+  sl.addEventListener('input', upd); upd();
+}
 { // drop-downs: mirror quality, speed units, driver side
   const pick = (id, get, set) => { const el = $id(id); el.value = get(); el.addEventListener('change', () => { set(el.value); saveSettings(); }); };
   pick('mirrorQ', () => Settings.mirrors, v => { Settings.mirrors = v; MIRRORS.setQuality(v); });
-  pick('units', () => Settings.units, v => { Settings.units = v; });  pick('rhd', () => (Settings.rhd ? 'right' : 'left'), v => { Settings.rhd = v === 'right'; MIRRORS.setSide(Settings.rhd); });
+  pick('units', () => Settings.units, v => { Settings.units = v; });  pick('rhd', () => (Settings.rhd ? 'right' : 'left'), v => { Settings.rhd = v === 'right'; MIRRORS.setSide(Settings.rhd); if (ownerVan) { ownerVan.setSide(Settings.rhd); ownerVan.cockpitSide(Settings.rhd); } });
   // car or motorcycle (the row only shows for the accounts allowed the bike: see setVehicle)
   pick('vehSel', () => Settings.vehicle || 'car', v => { Settings.vehicle = v; setVehicle(v); });
 }
@@ -874,7 +1164,7 @@ mmEl.addEventListener('change', () => { Settings.minimap = mmEl.checked; saveSet
 const ghEl = $id('ghostOn');                            // (racing: a see-through car on your best lap in time trials - race.js ghostShow)
 ghEl.checked = Settings.ghost !== false;               // (on by default)
 ghEl.addEventListener('change', () => { Settings.ghost = ghEl.checked; saveSettings(); });
-const upEl = $id('updatePopupOn');                      // (the "Version 1.1 is here" popup on every launch - Welcome; not the sign-in one)
+const upEl = $id('updatePopupOn');                      // (the "Version 1.2 is here" popup on every launch - Welcome; not the sign-in one)
 upEl.checked = Settings.updatePopup !== false;
 upEl.addEventListener('change', () => { Settings.updatePopup = upEl.checked; saveSettings(); });
 // (paint, wheels and the rest of the car's looks are in the Garage: js/garage.js)
@@ -965,7 +1255,7 @@ Account.onChange = () => {
 };
 Account.onMsg = t => { acctMsg = t; renderAccount(); };
 // ---------- launch popup (index.html #welcome): "Sign in with Google" every launch while you're not signed in
-// (where sign-in exists: not on CrazyGames), then "Version 1.1 is here" every launch unless switched off in
+// (where sign-in exists: not on CrazyGames), then "Version 1.2 is here" every launch unless switched off in
 // Settings > Gameplay (Settings.updatePopup; that setting doesn't touch the sign-in slide). Signing in from the
 // popup moves on to the next slide.
 const Welcome = {
@@ -1004,7 +1294,9 @@ const Welcome = {
 };
 $id('wcNext').onclick = () => Welcome.next();
 // "Open Racing Garage" on the update slide: close the popup and go there (through the racing hub, so Back leads to it)
-$id('wcGarage').onclick = () => { $id('welcome').classList.add('hidden'); show('scrRaceHub'); show('scrGarage'); };
+// the update slide's button: the Bang Bus quests (CrazyGames has no sign-in, so no event: the box isn't shown there)
+$id('wcEvent').onclick = () => { $id('welcome').classList.add('hidden'); BusEvent.open('scrTitle'); };
+if (CG) $id('wcEventBox').classList.add('hidden');
 Account.onNeedName = () => { $id('acctName').value = ''; $id('acctNameErr').textContent = ''; if (!menuOpen) openMenu('scrName'); else show('scrName'); };
 $id('acctNameSave').onclick = async () => {
   const err = await Account.setName($id('acctName').value);
@@ -1046,7 +1338,7 @@ function takeToken(mode) {
   if (mode === 'mp') { const t = Net.runToken; Net.runToken = null; Net.send({ t: 'runtoken' }); return t; }
   const t = spToken; fetchSpToken(); return t;
 }
-const runBody = (mode, token, run) => JSON.stringify({ session: Account.session, token, mode, score: run.score, dur: run.dur, dist: run.dist || 0, log: run.log, veh: vehicle });
+const runBody = (mode, token, run) => JSON.stringify({ session: Account.session, token, mode, score: run.score, dur: run.dur, dist: run.dist || 0, log: run.log, veh: vanOn ? 'van' : vehicle });   // (veh: the server turns away motorcycle / Bang Bus runs)
 // time played (profile): reported about once a minute while you're driving, signed in, in any mode
 let playT = 0;
 function playBeat(dt) {
@@ -1243,7 +1535,7 @@ function drawBoard(list, rows, view, o) {
     for (const e of rest) {
       const row = el('div', 'lbRow' + (e.name === me ? ' me' : ''));
       const nm = nameCell('nm', e), rw = rwFor(e.rank);
-      if (rw) nm.append(rw);                           // (4th / 5th: the Contender title)
+      if (rw) nm.append(rw);                           // (4th / 5th: the Podium title)
       row.append(el('span', 'rk', String(e.rank)), nm, el('span', 'sc', fmtScore(e.score)), el('span', 'tm', time(e.t)));
       tbl.appendChild(row);
     }
@@ -1415,11 +1707,11 @@ segPicker('spWorld', 'world', () => { if (game.mode === 'menu') setWorld(Setting
 segPicker('spTod', 'tod', () => { if (game.mode === 'menu') setWorld(Settings.world, Settings.tod); });
 // hosting: name, public (listed + code) or private (code only), world, time of day
 const WORLD_NAMES = { grass: 'Grassy', desert: 'Desert', snow: 'Snowy' }, TOD_NAMES = { day: 'Day', sunset: 'Evening', night: 'Night' };
-segPicker('hostVis', 'hostVis'); segPicker('hostWorld', 'hostWorld'); segPicker('hostTod', 'hostTod');
+segPicker('hostVis', 'hostVis'); segPicker('hostWorld', 'hostWorld'); segPicker('hostTod', 'hostTod'); segPicker('hostVeh', 'hostVeh');   // (hostVeh: all vehicles / cars only)
 $id('hostName').value = Settings.hostName || '';
 $id('hostName').addEventListener('input', e => { Settings.hostName = e.target.value; saveSettings(); });
 const hostOpts = extra => Object.assign({ listed: Settings.hostVis !== 'private', roomName: ($id('hostName').value || '').trim() || `${myName()}'s server`,
-  theme: Settings.hostWorld, tod: Settings.hostTod }, extra);
+  theme: Settings.hostWorld, tod: Settings.hostTod, vehicles: Settings.hostVeh }, extra);
 mpEl('mpHostScored').onclick = () => Net.host(myName(), Settings.color, hostOpts({ scored: true }));
 mpEl('mpHostFree').onclick = () => Net.host(myName(), Settings.color, hostOpts({ scored: false, density: Settings.mpDensity }));
 // server list tabs
@@ -1442,7 +1734,7 @@ Net.onList = j => {
     row.className = 'mpSrv' + (here ? ' here' : '');
     row.innerHTML = '<span class="nmBox"><span class="nm"></span><span class="sub"></span></span><span class="ct"></span>';
     row.querySelector('.nm').textContent = s.name;                       // (names as text, never HTML)
-    row.querySelector('.sub').textContent = [s.scored ? 'Scored' : 'Free drive', (WORLD_NAMES[s.theme] || 'Grassy') + ' world', TOD_NAMES[s.tod] || 'Day'].join(' · ');
+    row.querySelector('.sub').textContent = [s.scored ? 'Scored' : 'Free drive', (WORLD_NAMES[s.theme] || 'Grassy') + ' world', TOD_NAMES[s.tod] || 'Day', s.carsOnly ? 'Cars only' : ''].filter(Boolean).join(' · ');
     row.querySelector('.ct').textContent = `${s.players}/${s.max} players`;
     const b = document.createElement('button');
     b.textContent = here ? 'JOINED' : s.players >= s.max ? 'FULL' : 'JOIN';
@@ -1589,9 +1881,12 @@ Net.onJoined = (room, slot) => {
   }
   if (Race.active) Race.exit();
   game.mode = 'mp'; game.scored = !!room.scored; game.density = room.density;
+  const swapped = room.carsOnly && (Settings.vehicle || 'car') !== 'car' && (vehicle !== 'car' || vanOn);
+  if (room.carsOnly) setVehicle('car');               // (cars-only server: in your car while you're here)
   enterServer(slot, room);
   closeMenu();
   hud.message(room.official ? 'JOINED ' + room.name.toUpperCase() : room.name.toUpperCase() + ' · ' + room.code);
+  if (swapped) setTimeout(() => hud.message('CARS ONLY SERVER · YOU\'RE IN YOUR CAR HERE'), 1600);
   if (room.scored && Account.clientId && !Account.signedIn) setTimeout(() => hud.message('NOT SIGNED IN · RUNS WON\'T BE SAVED'), 1800);
 };
 // left the server (or lost it): endless road again, back to the menu
@@ -1622,6 +1917,7 @@ Net.onLeft = () => {
   Race.exit();
   exitServer();
   game.mode = 'menu'; game.scored = false; game.density = SCORED_DENSITY;
+  setVehicle(Settings.vehicle);                        // (back from a cars-only server: whatever you drive normally)
   if (!quitting) openMenu(racing ? 'scrRace' : 'scrMP');
 };
 Net.onRace = m => Race.onState(m);
@@ -1658,11 +1954,11 @@ function netState() {
 // bonus grows with speed: almost nothing at 60 km/h, half at ~105, the full amount from 160 km/h.
 const PROX_CURVE = mcurve([[0.3, 10], [1, 8.6], [2, 7.2], [3, 6.1], [4.8, 5], [7, 3.8], [10, 2.7], [14, 1.9], [19, 1.35], [25, 1]]);
 function proximity(kmh) {
-  if (game.mode !== 'mp' || kmh < 50) return 1;
+  if (game.mode !== 'mp' || kmh < 50 || vanOn) return 1;  // (driving the Bang Bus: no bonus, it's just for fun)
   const len = M4_EXT.front - M4_EXT.rear;
   let best = 1;
   for (const p of Net.players.values()) {
-    const n = p.now; if (!n || Math.abs(n.s - car.s) > 40 || p.veh === 'bike') continue;   // (a motorcycle gives no bonus: just for fun)
+    const n = p.now; if (!n || Math.abs(n.s - car.s) > 40 || p.veh === 'bike' || p.veh === 'van') continue;   // (a motorcycle or the Bang Bus gives no bonus: just for fun)
     const gs =Math.max(0, Math.abs(n.s - car.s) - len);             // gap along the road
     const gd = Math.max(0, Math.abs(n.d - car.d) - 2 * M4_EXT.hw);   // gap across it
     const gap = Math.hypot(gs, gd);
@@ -1781,9 +2077,11 @@ function updatePause() {
     ? `${r ? r.name : 'Server'} · ${game.scored ? 'Scored' : 'Free drive'} · ${Math.round(game.density * 100)}% traffic`
     : game.scored ? 'Singleplayer · Scored · 60% traffic' : `Singleplayer · Free drive · ${Math.round(game.density * 100)}% traffic`;
 }
+// bottom-left key hints, from the player's own key bindings (an action with no key isn't listed)
 function hintText() {
-  const k = a => keyLabel(Input.binds[a][0]);
-  return `${k('camera')} camera · ${k('style')} style · ${k('reset')} restart` + (game.mode === 'sp' && !game.scored ? ' · [ ] traffic' : '') + ' · Esc menu';
+  const parts = [['camera', 'camera'], ['style', 'Shaders'], ['gearbox', 'manual']]
+    .filter(([a]) => Input.binds[a] && Input.binds[a][0]).map(([a, n]) => `${keyLabel(Input.binds[a][0])} ${n}`);
+  return parts.join(' · ');
 }
 
 function openMenu(id = 'scrPause') {
@@ -1835,8 +2133,19 @@ function updatePlayerVisual(dt) {
   // cockpit camera: the detailed interior + mirrors replace the simple one (which is only seen through the glass)
   const inCockpit = camMode === 1 && !menuOpen;
   const bike = vehicle === 'bike';
-  cockpit.visible = cockpitWheel.visible = inCockpit && !bike; interior.visible = swMesh.visible = !inCockpit && !vanOn;
+  const vanShown = vanOn && !!ownerVan;                // (the van has its own cab: the car's cockpit stays hidden)
+  cockpit.visible = cockpitWheel.visible = inCockpit && !bike && !vanShown; interior.visible = swMesh.visible = !inCockpit && !vanOn;
   cockpitWheel.rotation.z = swMesh.rotation.z;
+  if (ownerVan) {
+    ownerVan.wheel.rotation.z = swMesh.rotation.z; vanGlass.opacity = 0.62;
+    // first person: the clean cab shell instead of the scanned body (its window edges are too rough to look out through)
+    const inCab = inCockpit && vanShown;
+    ownerVan.body.visible = !inCab; if (ownerVan.glass) ownerVan.glass.visible = !inCab; ownerVan.edge.visible = !inCab;
+    if (ownerVan.cockpit) ownerVan.cockpit.visible = inCab;
+    ownerVan.setLamps(lightsAreOn(), car.brakeOn && car.gear >= 0);
+  }
+  // the night headlight beams come from whichever front you're driving (the van's lamps sit higher and further forward)
+  for (const l of headlights) { const s = Math.sign(l.position.x); l.position.set(s * (vanShown ? 0.72 : 0.62), vanShown ? 0.92 : 0.75, (vanShown ? -2.38 : -2.2) + CG_F); }
   if (inCockpit && !bike) MIRRORS.drawGauge(dt);
   playerVis.brake.visible = !vanOn && car.brakeOn && car.gear >= 0;
   playerGlass.opacity = camMode === 1 && !menuOpen ? 0.14 : glassOut;   // (outside: the Garage window tint)
@@ -1964,6 +2273,7 @@ const TOD = {
   sunset: { sky: ['#c4683c', '#ee9a52', '#ffcf8c'], fog: 0xf6c38c, sun: 0xffa452, sunI: 1.08, hemi: 0xffc896, hemiI: 0.58, off: [-120, 30, 70], cloud: 0xffd0a2, dark: 0.3 },
   night: { sky: ['#050a1a', '#0d1a36', '#1a2948'], fog: 0x15223b, sun: 0x9fb8ff, sunI: 0.42, hemi: 0x5d78b0, hemiI: 0.45, off: [40, 90, -30], cloud: 0x4f5b75, dark: 1 },
 };
+function lightsAreOn() { return (TOD[look.tod] || TOD.day).dark > 0.5; }   // (night: headlights on - the van's lamps, other players' vans)
 const THEME_LOOK = { grass: { ground: 0x7b9a5c, haze: null }, desert: { ground: 0xc4a274, haze: 0xead8b4 }, snow: { ground: 0xdde5ec, haze: 0xe4eef6 } };
 const look = { theme: 'grass', tod: 'day', realistic: false };
 const headlights = (() => {
@@ -2231,11 +2541,6 @@ function frame(now) {
   if (Input.tap('camera') || ctl.camBtn) camMode ^= 1;   // chase <-> cockpit
   if (Input.tap('style')) setFx((FX.mode + 1) % 3);   // normal -> toon -> realistic -> normal
   if (Input.tap('reset') || ctl.reset) { if (Race.active) Race.reset(); else resetCar(); }
-  if (game.mode === 'sp' && !game.scored && (Input.hit('BracketLeft') || Input.hit('BracketRight'))) { // [ ] traffic (free drive only)
-    game.density = U.clamp(Math.round(game.density * 10 + (Input.hit('BracketRight') ? 1 : -1)) / 10, 0, 1);
-    const el = $id('fdDens'); el.value = Math.round(game.density * 100); el.dispatchEvent(new Event('input'));
-    hud.message(`TRAFFIC ${Math.round(game.density * 100)}%`);   // (shown briefly when you change it)
-  }
   if (Input.tap('gearbox') || ctl.gearbox) { car.manual = Settings.manual = !car.manual; manEl.checked = car.manual; saveSettings(); hud.message(car.manual ? 'MANUAL' : 'AUTO'); }
   if (Input.tap('map') && (game.mode === 'mp' || game.mode === 'race')) bigMap = !bigMap;
   if (Input.tap('shiftUp') || ctl.up) { if (!car.manual) { car.manual = Settings.manual = true; manEl.checked = true; } car.shift(1); }

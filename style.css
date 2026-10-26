@@ -707,7 +707,7 @@ button.big:hover { background: #ffe37a; }
 #scrGarage { position: absolute; inset: 0; display: flex; align-items: stretch; padding: 16px; cursor: grab; }
 #scrGarage.hidden { display: none; }
 .garagePanel { width: min(380px, 46vw); max-height: 100%; overflow: auto; background: var(--panel); border-radius: 12px; padding: 22px 24px; box-shadow: 0 20px 60px rgba(0,0,0,.4); cursor: default; scrollbar-width: thin; }
-.gCars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+.gCars { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }   /* (equal columns: every car tile, and the Bang Bus, the same size) */
 .gCar { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 10px 6px; }
 .gCar small { font-size: 10px; letter-spacing: 1.5px; opacity: .65; }
 .gCar b { font-size: 13px; letter-spacing: 1px; }
@@ -750,6 +750,78 @@ button.big:hover { background: #ffe37a; }
 .ltmSub { font-size: clamp(11px, 1vw, 14px); opacity: .7; letter-spacing: .5px; }
 .ltmGo { font-size: clamp(13px, 1.2vw, 17px); font-weight: 900; letter-spacing: 2px; padding: 10px 18px; border-radius: 10px; background: var(--accent); color: #1a1f28; z-index: 1; }
 .ltmPill { font-size: 11px; letter-spacing: 2px; padding: 4px 9px; border-radius: 6px; background: rgba(255,216,74,.1); border: 1px solid rgba(255,216,74,.35); color: var(--yellow); vertical-align: middle; margin-left: 8px; }
+/* ---------- updates board (main menu, top right) ---------- */
+#updatesBtn { position: fixed; top: 22px; right: 24px; z-index: 2; display: flex; align-items: center; gap: 8px; padding: 10px 16px; border-radius: 26px;
+  background: var(--panel); border: 2px solid rgba(255,255,255,.1); box-shadow: 0 8px 24px rgba(0,0,0,.3); font-weight: 900; letter-spacing: 2px; font-size: 13px; }
+#updatesBtn svg { width: 22px; height: 22px; }
+#updatesBtn:hover { border-color: var(--accent); color: var(--accent); }
+#updatesBtn .updDot { display: none; position: absolute; top: -3px; right: -3px; width: 13px; height: 13px; border-radius: 50%; background: #ff4d5a; box-shadow: 0 0 0 2px #161b24; }
+#updatesBtn.fresh .updDot { display: block; }
+.updList { display: flex; flex-direction: column; gap: 12px; max-height: 68vh; overflow-y: auto; padding-right: 4px; }
+.updCard { padding: 14px 16px; border-radius: 12px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.07); }
+.updCard.now { background: rgba(255,216,74,.06); border-color: rgba(255,216,74,.4); }
+.updHead { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; }
+.updHead b { font-size: 17px; letter-spacing: 1px; }
+.updV { font-size: 11px; font-weight: 900; letter-spacing: 1.5px; padding: 3px 8px; border-radius: 6px; background: rgba(255,255,255,.08); }
+.updCard.now .updV { background: var(--accent); color: #1a1f28; }
+.updWhen { font-size: 12px; opacity: .6; }
+.updNow { margin-left: auto; font-size: 10px; font-weight: 900; letter-spacing: 2px; color: var(--accent); }
+.updItems { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.updItems li { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 8px; font-size: 13.5px; line-height: 1.45; }
+.updItems li i { font-style: normal; font-size: 9.5px; font-weight: 900; letter-spacing: 1.5px; padding: 3px 0; border-radius: 5px; text-align: center; align-self: start; margin-top: 1px; background: rgba(91,212,122,.18); color: #8de0a4; }
+.updItems li.upd-fix i { background: rgba(60,160,255,.18); color: #9fd2ff; }
+.updItems li.upd-thanks i { background: rgba(255,216,74,.16); color: var(--accent); }
+/* the two limited-time cards side by side (racing + the Bang Bus event), as wide as the buttons above together */
+.ltmRow { margin-top: clamp(14px, 1.8vw, 22px); width: min(100%, calc(6 * clamp(118px, 13vw, 184px) + 5 * clamp(10px, 1.4vw, 18px))); display: flex; gap: clamp(10px, 1.4vw, 18px); }
+.ltmRow .ltmCard { flex: 1; width: auto; min-width: 0; margin-top: 0; gap: clamp(10px, 1.3vw, 16px); padding: clamp(10px, 1.2vw, 14px) clamp(12px, 1.5vw, 18px); }
+.ltmRow .ltmFlag svg { width: clamp(44px, 4.6vw, 62px); }
+.ltmRow .ltmText b { font-size: clamp(18px, 2vw, 26px); }
+.ltmRow .ltmSub { font-size: clamp(10px, .85vw, 12px); }
+.ltmRow .ltmGo { padding: 8px 12px; font-size: clamp(11px, 1vw, 14px); white-space: nowrap; }
+@media (max-width: 720px) { .ltmRow { flex-direction: column; } }
+
+/* ---------- the Bang Bus event (its own blue) ---------- */
+:root { --bus: #3cc4e6; }
+.evCard .ltmTag { color: var(--bus); }
+.evCard .ltmGo { background: var(--bus); }
+.evCard:hover { border-color: var(--bus); }
+.evCard:hover .ltmFlag .bg { fill: var(--bus); }
+.evPill { background: rgba(60,196,230,.1); border-color: rgba(60,196,230,.4); color: var(--bus); }
+.evGrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 22px; align-items: start; }
+.evBus { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 14px; border-radius: 14px; background: radial-gradient(ellipse at 50% 60%, rgba(60,196,230,.18), rgba(255,255,255,.02) 70%); border: 1px solid rgba(60,196,230,.18); }
+.evBus img { width: 100%; height: auto; display: block; }
+.evState { font-size: 13px; font-weight: 900; letter-spacing: 3px; padding: 6px 14px; border-radius: 8px; background: rgba(255,255,255,.06); color: rgba(255,255,255,.7); }
+.evState.on { background: rgba(60,196,230,.18); color: var(--bus); }
+.evFun { font-size: 11.5px; opacity: .7; text-align: center; }
+#evDrive { width: 100%; background: var(--bus); border-color: var(--bus); color: #10202a; }
+.evIntro { font-size: 14px; opacity: .85; margin-bottom: 12px; }
+.evQuest { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 11px 13px; margin-bottom: 8px; border-radius: 12px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.06); }
+.evQuest.click { cursor: pointer; } .evQuest.click:hover { border-color: var(--bus); }
+.evIco { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,.07); }
+.evIco svg { width: 20px; height: 20px; }
+.evQuest.done .evIco { background: rgba(60,196,230,.2); color: var(--bus); }
+.evMid { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.evMid b { font-size: 14px; letter-spacing: .5px; }
+.evBar { height: 6px; border-radius: 3px; background: rgba(255,255,255,.08); overflow: hidden; }
+.evBar i { display: block; height: 100%; border-radius: 3px; background: var(--bus); }
+.evProg { font-size: 11.5px; opacity: .65; font-variant-numeric: tabular-nums; }
+.evEnd { font-size: 22px; font-weight: 900; opacity: .7; }
+.evEnd svg { width: 24px; height: 24px; color: var(--bus); display: block; }
+.evQuest.done .evEnd { opacity: 1; }
+.evFine { font-size: 11px; opacity: .5; margin-top: 6px; line-height: 1.5; }
+@media (max-width: 760px) { .evGrid { grid-template-columns: 1fr; } }
+/* the Bang Bus in the Garage: a tile like the cars' (EVENT where the make goes), padlocked until it's unlocked */
+.gBus { position: relative; }
+.gBus .gLock { position: absolute; right: 7px; top: 7px; width: 13px; height: 13px; display: none; }
+.gBus .gLock svg { width: 100%; height: 100%; display: block; }
+.gBus.locked { opacity: .75; } .gBus.locked .gLock { display: block; }
+.gBus small { color: var(--bus); }
+.gBus.sel { background: var(--bus); border-color: var(--bus); }
+.gBus.sel small { color: #10202a; }
+.gNote.gBusNote { padding: 10px 12px; border-radius: 10px; background: rgba(60,196,230,.1); border: 1px solid rgba(60,196,230,.35); color: #bfefff; font-size: 13px; line-height: 1.45; }
+/* Refer 3 friends opens Friends with the invite link picked out */
+#frRef.flash { animation: refFlash 1.6s ease-out; }
+@keyframes refFlash { 0%, 30% { box-shadow: 0 0 0 2px var(--bus), 0 0 22px rgba(60,196,230,.5); } 100% { box-shadow: 0 0 0 0 transparent; } }
 /* racing screen */
 .raceGrid { display: grid; grid-template-columns: 1.25fr 1fr; gap: 26px; }
 @media (max-width: 820px) { .raceGrid { grid-template-columns: 1fr; } }

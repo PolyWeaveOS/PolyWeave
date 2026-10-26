@@ -47,9 +47,17 @@ const Garage = (() => {
     const b = document.createElement('button'); b.className = 'gCar'; b.dataset.k = k;
     const [make, ...model] = PLAYER_CARS[k].name.split(' ');
     b.innerHTML = `<small>${make.toUpperCase()}</small><b>${model.join(' ').toUpperCase()}</b>`;
-    b.onclick = () => { installCar(k); refresh(); };
+    b.onclick = () => { if (Settings.vehicle === 'van') { Settings.vehicle = 'car'; setVehicle('car'); } installCar(k); refresh(); };
     cars.appendChild(b);
   }
+  // the Bang Bus (the event's reward, js/event.js): locked until its quests are done - then a tap opens the quests
+  const bus = document.createElement('button'); bus.className = 'gCar gBus';
+  bus.innerHTML = '<small>EVENT</small><b>BANG BUS</b><i class="gLock"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></i>';
+  bus.onclick = () => {
+    if (!canVan()) { BusEvent.open('scrGarage'); return; }
+    Settings.vehicle = 'van'; saveSettings(); setVehicle('van'); refresh();
+  };
+  if (!CG) cars.appendChild(bus);                          // (CrazyGames: no sign-in, so no event)
   // ---- Racing Garage > Parts: tyres (soft / medium / hard), rear wing, and the stats they make (js/f1.js f1Stats)
   const tyres = $('gTyres');
   for (const [k, T] of Object.entries(F1_TYRES)) {
@@ -138,7 +146,10 @@ const Garage = (() => {
   pick.addEventListener('input', () => { setCfg({ color: pick.value }); refresh(); });
   function refresh() {
     const c = cfg();
-    for (const b of cars.children) b.classList.toggle('sel', b.dataset.k === carKey);
+    const onBus = !f1 && Settings.vehicle === 'van' && canVan();   // (driving the Bang Bus: its own paint, nothing to set up)
+    for (const b of cars.children) b.classList.toggle('sel', b === bus ? onBus : !onBus && b.dataset.k === carKey);
+    bus.classList.toggle('locked', !canVan());
+    bus.title = canVan() ? 'The Bang Bus' : 'Locked: finish the Bang Bus quests to unlock it';
     for (const b of tyres.children) b.classList.toggle('sel', b.dataset.k === f1Cfg().tyre);
     { // each part's description lines: the chosen one stands out
       const fc = f1Cfg(), cur = { tyre: fc.tyre, wing: fc.wing === false ? 'off' : 'on', fwing: fc.fwing, gear: fc.gear, bias: fc.bias };
@@ -157,7 +168,9 @@ const Garage = (() => {
     scr.querySelector('.gF1Pat').classList.toggle('hidden', !f1);
     $('gColLabel').textContent = f1 ? 'Colour 1' : 'Colour';
     for (const b of pats.children) b.classList.toggle('sel', b.dataset.k === f1Cfg().pattern);
-    note.textContent = '';
+    note.textContent = onBus ? 'Just for fun: the Bang Bus gives no leaderboard points and no proxy bonus (and nobody gets proxy from it). It comes in its own paint.' : '';
+    note.classList.toggle('gBusNote', onBus);
+    if (!racing) scr.querySelector('.gCustomize').classList.toggle('hidden', onBus);
     for (const m of marks) m();
     pick.value = c.color; pick2.value = f1Cfg().accent;
   }

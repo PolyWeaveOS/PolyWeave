@@ -82,7 +82,7 @@
   const runStatus = r => r.verified === -1 ? tag('REJECTED', 'bad') : r.removed ? tag('TAKEN OFF', 'dim') : r.verified === 0 ? tag('IMPORTED', 'dim') : tag('COUNTED', 'good');
 
   function open(k) {
-    tab = k; say('');
+    tab = k; say(''); clearTimeout(onlineTimer);
     tabs.querySelectorAll('[data-ad]').forEach(b => b.classList.toggle('sel', b.dataset.ad === k));
     body.innerHTML = '';
     ({ overview, players, runs, racing, log })[k]();
@@ -94,7 +94,7 @@
     const g = E('div', 'adTiles');
     const tiles = [
       [fmt(j.signedIn), 'signed in with Google (with a driver name)'], [fmt(j.accounts), 'Google accounts in total'],
-      [fmt(j.onlineNow), 'signed in and online now'], [fmt(j.inGame), 'players on a server right now'],
+      [fmt(j.onlineNow), 'signed in and online now', () => whoOnline()], [fmt(j.inGame), 'players on a server right now', () => whoOnline()],
       [fmt(j.runs24), 'verified runs, last 24 h'], [fmt(j.rejected24), 'rejected runs / laps / races, last 24 h', () => { Object.assign(runFilter, { name: '', mode: '', minScore: '', maxDur: '', minPps: '', status: 'rejected', days: '1' }); open('runs'); }],
       [fmt(j.held), 'racing times waiting for review', () => open('racing')], [fmt(j.laps24), 'time-trial laps, last 24 h'],
       [fmt(j.bannedPerm), 'permanent leaderboard bans'], [fmt(j.bannedTemp), 'temporary leaderboard bans'],
@@ -102,6 +102,44 @@
     ];
     for (const [v, k, fn] of tiles) { const d = E('div', 'adTile' + (fn ? ' click' : '')); d.append(E('b', '', v), E('span', '', k)); if (fn) d.onclick = fn; g.appendChild(d); }
     body.append(g, E('div', 'adHelp', 'Only your account can see or use this panel - the server checks every request.'));
+  }
+
+  // ---- WHO'S ONLINE (from the Overview's online tiles): every signed-in player online and what they're doing, plus
+  // guests on servers. Refreshes every 10 s while it's open.
+  const WORLDS = { grass: 'Grassy', desert: 'Desert', snow: 'Snowy' }, TODS = { day: 'Day', sunset: 'Evening', night: 'Night' };
+  const trackName = id => (Tracks.TRACK_BY_ID[id] || {}).name || id;
+  const RACE_ST = { lobby: 'waiting in the lobby', countdown: 'countdown', grid: 'on the grid', racing: 'racing', results: 'results' };
+  const ago = t => { const s = Math.max(0, Math.floor((Date.now() - t) / 1000)); return s >= 3600 ? `${Math.floor(s / 3600)}h ${Math.floor(s % 3600 / 60)}m` : s >= 60 ? `${Math.floor(s / 60)}m` : `${s}s`; };
+  const doing = a => {
+    if (!a) return ['Online', ''];
+    if (a.mode === 'sp') return [a.scored ? 'Singleplayer (scored run)' : 'Singleplayer (free drive)', `${WORLDS[a.theme] || a.theme} · ${TODS[a.tod] || a.tod}`];
+    if (a.mode === 'mp') return [{ official: 'Official server', public: 'Public server', private: 'Private server' }[a.kind] || 'Server',
+      `${a.roomName || '?'}${a.code ? ' (code ' + a.code + ')' : ''} · ${a.players} player${a.players === 1 ? '' : 's'} · ${WORLDS[a.theme] || a.theme} · ${TODS[a.tod] || a.tod}${a.scored ? ' · scored' : ''}`];
+    if (a.mode === 'race') return [`Race (${a.kind})`, `${trackName(a.track)} · ${RACE_ST[a.st] || a.st} · ${a.players} in the room`];
+    if (a.mode === 'tt') return ['Time trial', trackName(a.track)];
+    return ['In the menus', ''];
+  };
+  const carName = a => !a || !a.veh ? '' : a.veh === 'van' ? 'Bang Bus' : a.veh === 'bike' ? 'Motorcycle' : (PLAYER_CARS[a.model] || {}).name || a.model;
+  let onlineTimer = null;
+  async function whoOnline() {
+    clearTimeout(onlineTimer);
+    if (tab !== 'overview' || screen !== 'scrAdmin') return;
+    const j = await api('/api/admin/online'); if (j.error) { say(j.error); return; }
+    if (tab !== 'overview' || screen !== 'scrAdmin') return;
+    body.innerHTML = '';
+    const top = E('div', 'adRow'); top.append(button('← OVERVIEW', () => { clearTimeout(onlineTimer); overview(); }), E('b', '', `${j.list.length} signed in · ${j.guests.length} guest${j.guests.length === 1 ? '' : 's'} on servers`), E('span', 'adHelp', 'updates every 10 s'));
+    body.append(top);
+    const t = table(['DRIVER', 'DOING', 'WHERE', 'DRIVING', 'ONLINE FOR']);
+    for (const p of j.list.concat(j.guests)) {
+      const tr = E('tr', p.guest ? '' : 'link'), [what, where] = doing(p.act);
+      const nm = E('span', '', p.name); if (p.guest) nm.append(' ', tag('GUEST', 'dim')); if (p.banned) nm.append(' ', tag('BANNED', 'bad')); if (p.tabs > 1) nm.append(' ', tag(p.tabs + ' TABS', 'dim'));
+      cell(tr, nm); cell(tr, what); cell(tr, where); cell(tr, carName(p.act)); cell(tr, p.since ? ago(p.since) : '');
+      if (!p.guest) tr.onclick = () => { clearTimeout(onlineTimer); tab = 'players'; tabs.querySelectorAll('[data-ad]').forEach(b => b.classList.toggle('sel', b.dataset.ad === 'players')); player(p.name); };
+      t.appendChild(tr);
+    }
+    const sc = E('div', 'adScroll'); sc.appendChild(t); if (!j.list.length && !j.guests.length) sc.appendChild(E('div', 'adHelp', 'Nobody online right now.'));
+    body.append(sc, E('div', 'adHelp', 'Click a signed-in driver for their page (bans, titles, runs). Guests in menus or singleplayer aren\'t connected, so they don\'t show here.'));
+    onlineTimer = setTimeout(whoOnline, 10000);
   }
 
   // ---- PLAYERS

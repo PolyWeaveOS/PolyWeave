@@ -38,8 +38,9 @@ const TITLES = [
   { id: 'verified',    name: 'Verified',               rarity: 'common',    how: 'grant', desc: 'Signed in with Google' },
   // Season 1 rewards: sent at the end of the season to the top 5 of the singleplayer and multiplayer leaderboards
   { id: 's1champ',     name: 'S1 Champion',            rarity: 'divine',    how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 1st place on a leaderboard' },
-  { id: 's1podium',    name: 'S1 Podium',              rarity: 'legendary', how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 2nd or 3rd place on a leaderboard' },
-  { id: 's1contender', name: 'S1 Contender',           rarity: 'mythic',    how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 4th or 5th place on a leaderboard' },
+  // (named like the racing ones: 2nd-3rd Finalist, 4th-5th Podium; the ids stay as they were)
+  { id: 's1podium',    name: 'S1 Finalist',            rarity: 'legendary', how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 2nd or 3rd place on a leaderboard' },
+  { id: 's1contender', name: 'S1 Podium',              rarity: 'mythic',    how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 4th or 5th place on a leaderboard' },
   // ...and the racing leaderboards (1st / 2nd / 3rd on every track's board): time trials (Track) and races (Race)
   { id: 's1trackchamp',  name: 'S1 Track Champion',    rarity: 'divine',    how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 1st place on a time-trial leaderboard' },
   { id: 's1trackfinal',  name: 'S1 Track Finalist',    rarity: 'legendary', how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 2nd place on a time-trial leaderboard' },

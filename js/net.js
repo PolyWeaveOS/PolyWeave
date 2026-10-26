@@ -120,7 +120,7 @@ const Net = {
   // opts.scored: leaderboard server (60% traffic); otherwise free drive with opts.density traffic
   host(name, color, opts = {}) {
     return this.request({ t: 'create', name, color, ext: this.ext, bin: 1, veh: this.veh, model: this.model, scored: !!opts.scored, density: opts.density,
-      listed: !!opts.listed, roomName: opts.roomName, theme: opts.theme, tod: opts.tod }, opts.listed ? 'Creating your public server…' : 'Creating your private server…');
+      listed: !!opts.listed, roomName: opts.roomName, theme: opts.theme, tod: opts.tod, vehicles: opts.vehicles === 'cars' ? 'cars' : 'all' }, opts.listed ? 'Creating your public server…' : 'Creating your private server…');
   },
   // racing: queue for a track (its public lobby) / host a race (opts: track, listed, roomName, theme, tod)
   raceQueue(track, name, color) { return this.request({ t: 'raceq', track, name, color, ext: this.ext, bin: 1, veh: this.veh, model: this.model }, 'Joining the queue…'); },
@@ -174,7 +174,8 @@ const Net = {
       this.room = { id: m.room, name: m.name, pub: !!(m.official ?? m.pub), official: !!(m.official ?? m.pub), listed: !!m.listed, code: m.code || '',
         scored: !!m.scored, density: Number.isFinite(m.density) ? m.density : 0.6, theme: m.theme || 'grass', tod: m.tod || 'day',
         bin: !!m.bin,                                  // (this server reads binary positions; one from before the update doesn't)
-        race: m.race && typeof Tracks !== 'undefined' && Tracks.TRACK_BY_ID[m.race.track] ? m.race : null };   // (a race room: track, laps)
+        race: m.race && typeof Tracks !== 'undefined' && Tracks.TRACK_BY_ID[m.race.track] ? m.race : null,   // (a race room: track, laps)
+        carsOnly: !!m.carsOnly };                      // (the host allowed cars only: no motorcycle, no Bang Bus)
       this.myBest = m.best || 0;
       this.status(this.room.official ? `Connected to ${m.name}` : `Connected to ${m.name} · code ${m.code}`, 'ok');
       this.changed();
@@ -248,7 +249,7 @@ const Net = {
         p.visLite.root.visible = false; p.visLite = p.vis;
         if (typeof getVanAsset === 'function') getVanAsset().then(a => {
           if (p.veh !== 'van' || !p.vis || p.vanMesh) return;
-          p.vanMesh = new THREE.Mesh(a.g, a.mat); p.vanMesh.castShadow = true; p.vis.root.add(p.vanMesh);
+          p.vanModel = makeVanModel(a, true); p.vanMesh = p.vanModel.root; p.vis.root.add(p.vanMesh);   // (body, glass, cab and lamps: js/main.js)
           p.vis.body.visible = false; for (const w of p.vis.wheels) w.pivot.visible = false;
         }, () => {});
       }
@@ -291,7 +292,7 @@ const Net = {
   },
   removeVis(p) {
     if (!p.g) return;
-    p.vanMesh = null;
+    p.vanMesh = null; p.vanModel = null;
     this.scene.remove(p.g);
     p.g.traverse(o => { if (o.isSprite) { o.material.map.dispose(); o.material.dispose(); } });   // (the name tag; car meshes are shared)
     p.g = null; p.vis = p.visFull = p.visLite = null; p.sm = null;
@@ -415,6 +416,7 @@ const Net = {
       const ad = Math.abs(s.s - myS), lite = p.vis === p.visLite ? ad > 40 : ad > 50;
       if (p.visLite !== p.visFull && lite !== (p.vis === p.visLite)) { p.vis.root.visible = false; p.vis = lite ? p.visLite : p.visFull; p.vis.root.visible = true; p.vis.spin = (lite ? p.visFull : p.visLite).spin; }
       p.vis.brake.visible = !!s.brake && !p.vanMesh;
+      if (p.vanModel) p.vanModel.setLamps(lightsAreOn(), !!s.brake);   // (their van: headlights at night, brake lights)
       if (p.veh === 'bike' && p.vis.lean) {
         // lean into the turn they're making: sideways acceleration from their speed and steering (2.8 m wheelbase physics)
         const v = s.v || 0, ay = v * v * Math.tan(U.clamp(s.steer || 0, -0.6, 0.6)) / 2.8;

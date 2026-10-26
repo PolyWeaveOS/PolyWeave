@@ -57,7 +57,7 @@ const Account = {
       const j = await r.json();
       if (!r.ok) { this.msg(j.error || 'Sign-in failed.'); return; }
       try { localStorage.removeItem('pw_ref'); } catch (e) { /* ignore */ }   // (only a brand-new account counts, and only once)
-      this.session = j.session; this.user = { name: j.name, title: j.title || null, banned: !!j.banned, banUntil: j.banUntil || null, admin: !!j.admin };
+      this.session = j.session; this.user = { name: j.name, title: j.title || null, banned: !!j.banned, banUntil: j.banUntil || null, admin: !!j.admin, bus: !!j.bus };   // (bus: the Bang Bus is unlocked)
       try { localStorage.setItem('pw_session', j.session); } catch (e) { /* ignore */ }
       this.changed();
       if (!j.name && this.onNeedName) this.onNeedName();      // first time: pick a driver name

@@ -181,6 +181,9 @@ const Social = {
     const a = p.act, w = (WORLD_NAMES[a.theme] || 'Grassy') + ' · ' + (TOD_NAMES[a.tod] || 'Day');
     if (a.mode === 'sp') return 'Singleplayer · ' + w;
     if (a.mode === 'mp') return (a.kind === 'private' ? 'Private server' : 'Public') + ' · ' + w;
+    const track = a.track && Tracks.TRACK_BY_ID[a.track] ? Tracks.TRACK_BY_ID[a.track].name : 'a track';
+    if (a.mode === 'race') return 'Racing · ' + track;
+    if (a.mode === 'tt') return 'Time trial · ' + track;
     return 'In Menus';
   },
   // the little message under "Add a friend": shows, then fades away after 3 s
@@ -275,7 +278,8 @@ const Social = {
   // what I'm doing, for friends (servers are known to the server; this covers menus / singleplayer)
   reportActivity() {
     if (!Account.signedIn || !Net.ws || game.mode === 'mp') return;
-    const a = game.mode === 'sp' ? { mode: 'sp', theme: Settings.world, tod: Settings.tod, scored: game.scored } : { mode: 'menu' };
+    const a = game.mode === 'sp' ? { mode: 'sp', theme: Settings.world, tod: Settings.tod, scored: game.scored }
+      : game.mode === 'race' && typeof Race !== 'undefined' && Race.active && Race.kind === 'tt' ? { mode: 'tt', track: Race.track } : { mode: 'menu' };   // (race rooms: the server knows)
     const k = JSON.stringify(a);
     if (k !== this.actKey) { this.actKey = k; Net.send({ t: 'activity', a }); }
   },
@@ -379,9 +383,9 @@ const MpChat = {
 Net.onChat = m => MpChat.onNet(m);
 MpChat.form.onsubmit = e => { e.preventDefault(); MpChat.send(); };
 MpChat.input.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); MpChat.input.value = ''; MpChat.show(false); } });
-// Enter while driving on a server: open the chat (not while a menu or another text box is in use)
+// Enter while driving on a server or in a race: open the chat (not while a menu or another text box is in use)
 addEventListener('keydown', e => {
-  if (e.key !== 'Enter' || MpChat.open || menuOpen || game.mode !== 'mp' || !Net.active()) return;
+  if (e.key !== 'Enter' || MpChat.open || menuOpen || (game.mode !== 'mp' && game.mode !== 'race') || !Net.active()) return;
   if (e.target && e.target.tagName === 'INPUT') return;
   e.preventDefault(); MpChat.show(true);
 });
