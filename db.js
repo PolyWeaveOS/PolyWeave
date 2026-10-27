@@ -54,6 +54,13 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT, from_uid TEXT NOT NULL, to_uid TEXT NOT NULL, body TEXT NOT NULL, t INTEGER NOT NULL, read INTEGER NOT NULL DEFAULT 0);
   CREATE INDEX IF NOT EXISTS msg_pair ON messages (from_uid, to_uid, t);
   CREATE INDEX IF NOT EXISTS msg_unread ON messages (to_uid, read);
+  -- group chats: the group (its maker can rename it / add / remove people), who's in it (last_read: the last message
+  -- they've seen) and its messages (from_uid '' = a line from the game: "X added Y", "X left")
+  CREATE TABLE IF NOT EXISTS chat_groups (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, owner TEXT NOT NULL, t INTEGER NOT NULL);
+  CREATE TABLE IF NOT EXISTS group_members (gid INTEGER NOT NULL, uid TEXT NOT NULL, t INTEGER, last_read INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (gid, uid));
+  CREATE INDEX IF NOT EXISTS gm_uid ON group_members (uid);
+  CREATE TABLE IF NOT EXISTS group_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, gid INTEGER NOT NULL, from_uid TEXT NOT NULL, body TEXT NOT NULL, t INTEGER NOT NULL);
+  CREATE INDEX IF NOT EXISTS gmsg_gid ON group_messages (gid, id);
   CREATE TABLE IF NOT EXISTS laps (
     id INTEGER PRIMARY KEY AUTOINCREMENT, uid TEXT NOT NULL, track TEXT NOT NULL, ms INTEGER NOT NULL, season INTEGER NOT NULL, t INTEGER NOT NULL,
     removed INTEGER NOT NULL DEFAULT 0);
@@ -63,6 +70,9 @@ db.exec(`
     ms INTEGER, season INTEGER NOT NULL, t INTEGER NOT NULL, removed INTEGER NOT NULL DEFAULT 0);
   CREATE INDEX IF NOT EXISTS race_board ON race_results (season, removed, uid);
   CREATE TABLE IF NOT EXISTS admin_log (id INTEGER PRIMARY KEY AUTOINCREMENT, t INTEGER NOT NULL, action TEXT NOT NULL, target TEXT, detail TEXT);
+  -- what an admin (Admin title) asked for, waiting for PolyWeave: status 0 waiting, 1 accepted, 2 declined, 3 accepted but it couldn't be done
+  CREATE TABLE IF NOT EXISTS admin_requests (id INTEGER PRIMARY KEY AUTOINCREMENT, t INTEGER NOT NULL, uid TEXT NOT NULL, name TEXT, payload TEXT NOT NULL,
+    summary TEXT, status INTEGER NOT NULL DEFAULT 0, decided INTEGER, note TEXT, result TEXT);
   CREATE TABLE IF NOT EXISTS referrals (uid TEXT PRIMARY KEY, by_uid TEXT NOT NULL, t INTEGER NOT NULL);   -- uid = the new player, by_uid = who invited them
   CREATE INDEX IF NOT EXISTS referrals_by ON referrals (by_uid);
 `);
@@ -72,7 +82,8 @@ db.exec(`
   const have = new Set(db.prepare('PRAGMA table_info(users)').all().map(c => c.name));
   for (const [col, def] of [['best_rank_sp', 'INTEGER'], ['best_rank_mp', 'INTEGER'],
     ['allow_requests', 'INTEGER NOT NULL DEFAULT 1'], ['hide_activity', 'INTEGER NOT NULL DEFAULT 0'], ['best_team', 'REAL NOT NULL DEFAULT 0'],
-    ['ban_until', 'INTEGER'], ['ev_play_s', 'REAL NOT NULL DEFAULT 0'], ['bus', 'INTEGER NOT NULL DEFAULT 0']]) if (!have.has(col)) db.exec(`ALTER TABLE users ADD COLUMN ${col} ${def}`);
+    ['ban_until', 'INTEGER'], ['ev_play_s', 'REAL NOT NULL DEFAULT 0'], ['bus', 'INTEGER NOT NULL DEFAULT 0'], ['no_groups', 'INTEGER NOT NULL DEFAULT 0']]) if (!have.has(col)) db.exec(`ALTER TABLE users ADD COLUMN ${col} ${def}`);
+  // (no_groups: 1 = nobody can add them to a group chat - Friends > settings, off to start)
   // (ev_play_s: time played since the Bang Bus event started; bus: 1 = Bang Bus unlocked, for good)
   const haveR = new Set(db.prepare('PRAGMA table_info(runs)').all().map(c => c.name));
   if (!haveR.has('dist')) db.exec('ALTER TABLE runs ADD COLUMN dist REAL');
@@ -107,7 +118,7 @@ const inboxOf = uid => db.prepare('SELECT id, kind, item, t, claimed, note FROM 
   .filter(r => r.kind !== 'title' || Titles.TITLE_BY_ID[r.item]);
 const pendingOf = uid => db.prepare("SELECT item FROM inbox WHERE uid = ? AND kind = 'title' AND claimed IS NULL").all(uid).map(r => r.item).filter(id => Titles.TITLE_BY_ID[id]);   // (waiting in the inbox)
 // (only titles that still exist: a removed title left in someone's inbox doesn't count)
-const unclaimed = uid => db.prepare('SELECT item FROM inbox WHERE uid = ? AND claimed IS NULL').all(uid).filter(r => Titles.TITLE_BY_ID[r.item]).length;
+const unclaimed = uid => db.prepare('SELECT kind, item FROM inbox WHERE uid = ? AND claimed IS NULL').all(uid).filter(r => r.kind === 'note' || Titles.TITLE_BY_ID[r.item]).length;   // (notes too)
 // claim one: the title becomes theirs. Returns the item, or null
 function claim(uid, id) {
   const r = db.prepare('SELECT * FROM inbox WHERE id = ? AND uid = ? AND claimed IS NULL').get(id, uid);
@@ -464,13 +475,14 @@ const requestsIn = uid => db.prepare('SELECT from_uid AS uid FROM friend_request
 const requestsOut = uid => db.prepare('SELECT to_uid AS uid FROM friend_requests WHERE from_uid = ? ORDER BY t DESC').all(uid).map(r => r.uid);
 function socialSettings(uid) {
   ensureUser(uid);
-  const r = db.prepare('SELECT allow_requests, hide_activity FROM users WHERE uid = ?').get(uid);
-  return { allowRequests: !!r.allow_requests, hideActivity: !!r.hide_activity };
+  const r = db.prepare('SELECT allow_requests, hide_activity, no_groups FROM users WHERE uid = ?').get(uid);
+  return { allowRequests: !!r.allow_requests, hideActivity: !!r.hide_activity, noGroups: !!r.no_groups };
 }
 function setSocialSettings(uid, s) {
   ensureUser(uid);
   if (typeof s.allowRequests === 'boolean') db.prepare('UPDATE users SET allow_requests = ? WHERE uid = ?').run(s.allowRequests ? 1 : 0, uid);
   if (typeof s.hideActivity === 'boolean') db.prepare('UPDATE users SET hide_activity = ? WHERE uid = ?').run(s.hideActivity ? 1 : 0, uid);
+  if (typeof s.noGroups === 'boolean') db.prepare('UPDATE users SET no_groups = ? WHERE uid = ?').run(s.noGroups ? 1 : 0, uid);
 }
 function befriend(a, b) {
   const t = Date.now();
@@ -511,6 +523,39 @@ const chatWith = (a, b, n = 100) => db.prepare(`SELECT id, from_uid, body, t FRO
 const markRead = (uid, from) => db.prepare('UPDATE messages SET read = 1 WHERE to_uid = ? AND from_uid = ? AND read = 0').run(uid, from);
 // unread messages to uid, by sender
 const unreadBy = uid => Object.fromEntries(db.prepare('SELECT from_uid, COUNT(*) AS n FROM messages WHERE to_uid = ? AND read = 0 GROUP BY from_uid').all(uid).map(r => [r.from_uid, r.n]));
+
+// ---------------------------------------------------------------- group chats (server.js /api/group/*)
+const GROUP_MAX = 10;                                  // people in a group, its maker included
+const groupOf = gid => db.prepare('SELECT id, name, owner, t FROM chat_groups WHERE id = ?').get(gid);
+const groupMembers = gid => db.prepare('SELECT uid FROM group_members WHERE gid = ? ORDER BY t, rowid').all(gid).map(r => r.uid);
+const inGroup = (gid, uid) => !!db.prepare('SELECT 1 FROM group_members WHERE gid = ? AND uid = ?').get(gid, uid);
+// a line in the group (from '' = from the game itself); returns { id, t }
+function groupSay(gid, from, body) {
+  const t = Date.now(), id = Number(db.prepare('INSERT INTO group_messages (gid, from_uid, body, t) VALUES (?, ?, ?, ?)').run(gid, from, String(body).slice(0, 300), t).lastInsertRowid);
+  if (from) db.prepare('UPDATE group_members SET last_read = ? WHERE gid = ? AND uid = ?').run(id, gid, from);   // (your own message: read)
+  return { id, t };
+}
+function createGroup(owner, name, uids) {
+  const t = Date.now(), gid = Number(db.prepare('INSERT INTO chat_groups (name, owner, t) VALUES (?, ?, ?)').run(name, owner, t).lastInsertRowid);
+  const add = db.prepare('INSERT OR IGNORE INTO group_members (gid, uid, t) VALUES (?, ?, ?)');
+  [owner, ...uids].forEach((uid, i) => add.run(gid, uid, t + i));
+  return gid;
+}
+const addToGroup = (gid, uid) => db.prepare('INSERT OR IGNORE INTO group_members (gid, uid, t, last_read) VALUES (?, ?, ?, (SELECT COALESCE(MAX(id), 0) FROM group_messages WHERE gid = ?))').run(gid, uid, Date.now(), gid).changes > 0;
+// someone out of a group (left / kicked). The leader can only leave last (server.js), so nobody left = it's gone
+function removeFromGroup(gid, uid) {
+  db.prepare('DELETE FROM group_members WHERE gid = ? AND uid = ?').run(gid, uid);
+  if (!groupMembers(gid).length) { db.prepare('DELETE FROM group_messages WHERE gid = ?').run(gid); db.prepare('DELETE FROM chat_groups WHERE id = ?').run(gid); return null; }
+  return groupOf(gid);
+}
+const renameGroup = (gid, name) => db.prepare('UPDATE chat_groups SET name = ? WHERE id = ?').run(name, gid);
+const groupMessages = (gid, n = 100) => db.prepare('SELECT id, from_uid, body, t FROM group_messages WHERE gid = ? ORDER BY id DESC LIMIT ?').all(gid, n).reverse();
+const markGroupRead = (gid, uid) => db.prepare('UPDATE group_members SET last_read = (SELECT COALESCE(MAX(id), 0) FROM group_messages WHERE gid = ?) WHERE gid = ? AND uid = ?').run(gid, gid, uid);
+// uid's groups, newest message first, with how many they haven't read (others' messages after their last_read)
+const groupsOf = uid => db.prepare(`SELECT g.id, g.name, g.owner,
+    (SELECT COUNT(*) FROM group_messages m WHERE m.gid = g.id AND m.id > gm.last_read AND m.from_uid != ? AND m.from_uid != '') AS unread,   -- (the game's own lines don't count)
+    (SELECT COALESCE(MAX(t), g.t) FROM group_messages m WHERE m.gid = g.id) AS last
+  FROM group_members gm JOIN chat_groups g ON g.id = gm.gid WHERE gm.uid = ? ORDER BY last DESC`).all(uid, uid).map(g => Object.assign(g, { members: groupMembers(g.id) }));
 
 // ---------------------------------------------------------------- admin (admin.js)
 // Leaderboard bans: permanent (ban_until empty) or until a time (a temporary ban). While banned, runs aren't saved and
@@ -569,6 +614,14 @@ if (!getMeta('admin_uid')) { const a = Object.values(readAccounts()).find(x => x
 const adminUid = () => getMeta('admin_uid');
 const adminLog = (action, target, detail) => db.prepare('INSERT INTO admin_log (t, action, target, detail) VALUES (?, ?, ?, ?)').run(Date.now(), action, target || null, detail || null);
 const adminLogList = (n = 200) => db.prepare('SELECT * FROM admin_log ORDER BY id DESC LIMIT ?').all(n);
+// admins' requests (server.js: an admin's action waits here until PolyWeave accepts or declines it)
+const addRequest = (uid, name, payload, summary) => db.prepare('INSERT INTO admin_requests (t, uid, name, payload, summary) VALUES (?, ?, ?, ?, ?)').run(Date.now(), uid, name, JSON.stringify(payload), summary).lastInsertRowid;
+const getRequest = id => { const r = db.prepare('SELECT * FROM admin_requests WHERE id = ?').get(id); if (r) r.payload = JSON.parse(r.payload); return r; };
+const decideRequest = (id, status, note, result) => db.prepare('UPDATE admin_requests SET status = ?, decided = ?, note = ?, result = ? WHERE id = ? AND status = 0').run(status, Date.now(), note || null, result || null, id).changes > 0;
+const requestList = (uid, n = 150) => db.prepare(`SELECT id, t, uid, name, summary, status, decided, note, result FROM admin_requests ${uid ? 'WHERE uid = ?' : ''} ORDER BY status = 0 DESC, id DESC LIMIT ?`).all(...(uid ? [uid, n] : [n]));
+const waitingRequests = () => db.prepare('SELECT COUNT(*) AS n FROM admin_requests WHERE status = 0').get().n;
+// a message in someone's inbox (kind 'note': read it, then OK), e.g. PolyWeave's answer to an admin's request
+const sendNote = (uid, text) => { ensureUser(uid); db.prepare("INSERT INTO inbox (uid, kind, item, t, note) VALUES (?, 'note', 'admin', ?, ?)").run(uid, Date.now(), String(text).slice(0, 700)); };
 // runs with filters: { uid, mode ('sp'|'mp'|'lap'|'race'), status ('verified'|'rejected'|'removed'|'counted'), minScore,
 // maxScore, minDur, maxDur, minPps (points per second), since (ms), limit }
 function adminRuns(f = {}) {
@@ -693,7 +746,7 @@ function seasonRewards(season) {
 
 module.exports = {
   db, SEASON, SEASONS, SECRET, lapTop, lapAround, addLap, addRace, raceTop, raceAround, seasonRewards, ensureUser, grant, gift, inboxOf, unclaimed, claim, top, around, rankOf, bestOf, addRun, spendToken, profile, addPlayTime,
-  titlesOf, ownerCounts, alphaOpen, setAlphaOpen, betaOpen, setBetaOpen, resetTitles, statTitles, statsOf, pendingOf, equipped, equip, isBanned, banUntil, setBanned, sweepBans, flagRacing, adminUid, adminLog, adminLogList, adminRuns, adminLaps, adminRaces, setLapStatus, adminOverview, userRow, readAccounts, setRemoved, removeAbove, runsOf, runLog, recentRejected,
+  titlesOf, ownerCounts, alphaOpen, setAlphaOpen, betaOpen, setBetaOpen, resetTitles, statTitles, statsOf, pendingOf, equipped, equip, isBanned, banUntil, setBanned, sweepBans, flagRacing, adminUid, adminLog, adminLogList, owns, addRequest, getRequest, decideRequest, requestList, waitingRequests, sendNote, adminRuns, adminLaps, adminRaces, setLapStatus, adminOverview, userRow, readAccounts, setRemoved, removeAbove, runsOf, runLog, recentRejected,
   areFriends, friendsOf, requestsIn, requestsOut, socialSettings, setSocialSettings, sendRequest, respond, cancelRequest, unfriend,
-  sendMessage, chatWith, markRead, unreadBy, OWNER_NAMES, BIKE_NAMES, addReferral, referralStats, referredBy, busProgress, hasBus,
+  sendMessage, chatWith, markRead, unreadBy, GROUP_MAX, groupOf, groupMembers, inGroup, groupSay, createGroup, addToGroup, removeFromGroup, renameGroup, groupMessages, markGroupRead, groupsOf, OWNER_NAMES, BIKE_NAMES, addReferral, referralStats, referredBy, busProgress, hasBus,
 };

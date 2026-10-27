@@ -42,6 +42,13 @@ const Social = {
     // background, while driving, or while the connection was down): load them in, which also marks them read
     const f = this.data && this.chatVisible(this.chat) && this.data.friends.find(x => x.name === this.chat);
     if (f && f.unread) { f.unread = 0; this.openChat(f.name, true); }
+    // the same for an open group chat; taken out of it (kicked / it's gone): the chat closes
+    if (this.data && this.group) {
+      const g = (this.data.groups || []).find(x => x.id === this.group);
+      if (!g) { this.closeChat(); this.note('You\'re no longer in that group chat.', 'err'); }
+      else if (g.unread && this.groupVisible(g.id)) { g.unread = 0; this.openGroup(g.id, true); }
+      else if (screen === 'scrFriends' && this._gKey !== g.name + '|' + g.members.join(',')) this.openGroup(g.id, true);   // (renamed / people added or kicked: redrawn)
+    }
     this.badges();
     this.render();
   },
@@ -55,7 +62,7 @@ const Social = {
       if (n) requestAnimationFrame(() => b.classList.remove('hidden'));   // (pops in again when the count changes)
     };
     set('inboxBadge', this.items.filter(i => !i.claimed).length);
-    set('friendsBadge', d ? d.incoming.length + d.friends.reduce((n, f) => n + (f.unread || 0), 0) : 0);
+    set('friendsBadge', d ? d.incoming.length + d.friends.reduce((n, f) => n + (f.unread || 0), 0) + (d.groups || []).reduce((n, g) => n + (g.unread || 0), 0) : 0);   // (group chats too)
   },
 
   // ---------------------------------------------------------------- the two screens
@@ -82,6 +89,15 @@ const Social = {
     const box = $id('ibInbox'); box.innerHTML = '';
     if (!this.items.length) { box.append(el('div', 'ibEmpty', 'Nothing here yet. Titles you earn show up here.')); return; }
     for (const it of this.items) {
+      if (it.kind === 'note') {                                      // a message from PolyWeave (e.g. the answer to an admin request): read, then OK
+        const row = el('div', 'ibItem ibNote' + (it.claimed ? ' done' : '')), what = el('div', 'what');
+        what.append(el('small', '', 'Message from PolyWeave'), el('div', 'note', String(it.note || '')));
+        const ico = el('div', 'ico'); ico.append(icon('tag'));
+        row.append(ico, what);
+        if (it.claimed) row.append(el('span', 'got', 'READ ✓'));
+        else { const b = el('button', 'go', 'OK'); b.onclick = () => this.claim(it, b); row.append(b); }
+        box.appendChild(row); continue;
+      }
       const t = it.kind === 'title' && Titles.TITLE_BY_ID[it.item]; if (!t) continue;
       const row = el('div', 'ibItem' + (it.claimed ? ' done' : ''));
       const what = el('div', 'what'); what.append(el('small', '', it.claimed ? 'Title claimed' : 'New title'), titleEl(t.id), el('span', 'd', Titles.desc(t, Settings.units)));
@@ -99,8 +115,10 @@ const Social = {
     try { r = await this.api('/api/inbox/claim', { id: it.id }); } catch (e) { btn.disabled = false; return; }
     if (r.error) { btn.disabled = false; return; }
     it.claimed = true; this.badges(); this.renderInbox();
+    if (it.kind === 'note') return;                                // (a message: nothing to reveal)
     if (profData && profData.self && !profData.owned.includes(it.item)) profData.owned.push(it.item);
     this.reveal(it.item);
+    if (typeof titleUnlocks === 'function') titleUnlocks(it.item);  // (Content Creator: the recorder; Admin: the admin panel)
   },
   // the reveal (style.css "claiming a title"): glow + ring in the title's colour, the title settles in, EQUIP / LATER.
   // Showing it (display: none -> shown) restarts every animation in it.
@@ -131,6 +149,8 @@ const Social = {
     $id('frAllow').checked = d.settings.allowRequests;
     $id('frHide').checked = d.settings.hideActivity;
     $id('frPopups').checked = Settings.msgPopups !== false;
+    $id('frNoGroups').checked = !!d.settings.noGroups;
+    this.renderGroups();
     // requests
     const rq = $id('frRequests'); rq.innerHTML = '';
     if (d.incoming.length) {
@@ -203,12 +223,98 @@ const Social = {
     this.refresh();
   },
   async saveSettings() {
-    try { const r = await this.api('/api/social/settings', { allowRequests: $id('frAllow').checked, hideActivity: $id('frHide').checked }); if (!r.error && this.data) this.data.settings = r; } catch (e) { /* offline */ }
+    try { const r = await this.api('/api/social/settings', { allowRequests: $id('frAllow').checked, hideActivity: $id('frHide').checked, noGroups: $id('frNoGroups').checked }); if (!r.error && this.data) this.data.settings = r; } catch (e) { /* offline */ }
   },
+
+  // ---------------------------------------------------------------- group chats
+  // your groups (newest message first) with an unread count; + NEW: a name and friends to put in it
+  renderGroups() {
+    const d = this.data, list = $id('grList'); list.innerHTML = '';
+    const groups = d.groups || [];
+    if (!groups.length && $id('grNewBox').classList.contains('hidden')) list.append(el('div', 'frEmpty', 'No group chats yet. Press + NEW to make one with your friends.'));
+    for (const g of groups) {
+      const row = el('div', 'frRow' + (this.group === g.id ? ' chatting' : '')), nm = el('div', 'nm');
+      nm.append(el('b', '', g.name), el('span', '', `${g.members.length} people · ${g.members.join(', ')}`));
+      const c = el('button', '', 'CHAT'); c.onclick = () => this.openGroup(g.id);
+      if (g.unread) c.append(el('span', 'badge', String(g.unread)));
+      row.append(nm, c); list.appendChild(row);
+    }
+  },
+  newGroup() {
+    const box = $id('grNewBox');
+    if (!box.classList.contains('hidden')) { box.classList.add('hidden'); this.renderGroups(); return; }
+    const friends = (this.data && this.data.friends) || [];
+    box.innerHTML = '';
+    const name = el('input'); name.type = 'text'; name.maxLength = 24; name.placeholder = 'Group name'; name.spellcheck = false;
+    const pick = el('div', 'grPick'), msg = el('div', 'grMsg');
+    if (!friends.length) pick.append(el('span', 'frEmpty', 'Add some friends first.'));
+    for (const f of friends) { const l = el('label', 'chk'), cb = el('input'); cb.type = 'checkbox'; cb.value = f.name; l.append(cb, ' ' + f.name); pick.appendChild(l); }
+    const make = el('button', 'go', 'CREATE'), cancel = el('button', '', 'CANCEL'), btns = el('div', 'grBtns');
+    cancel.onclick = () => { box.classList.add('hidden'); this.renderGroups(); };
+    make.onclick = async () => {
+      const members = [...pick.querySelectorAll('input:checked')].map(c => c.value);
+      if (!members.length) { msg.textContent = 'Pick at least one friend.'; return; }
+      make.disabled = true;
+      let r; try { r = await this.api('/api/group/create', { name: name.value, members }); } catch (e) { r = { error: 'Could not reach the server.' }; }
+      make.disabled = false;
+      if (r.error) { msg.textContent = r.error; return; }
+      box.classList.add('hidden'); await this.refresh(); this.openGroup(r.id);
+    };
+    btns.append(make, cancel); box.append(name, pick, msg, btns);
+    box.classList.remove('hidden'); this.renderGroups(); name.focus();
+  },
+  // a group chat in the chat pane: name, who's in it (the leader in yellow), and for the leader RENAME / ADD /
+  // a kick button on each person; everyone gets LEAVE (the leader once they're the last one in it)
+  async openGroup(gid, quiet) {
+    this.group = gid; this.chat = null;
+    $id('chatEmpty').classList.add('hidden');
+    for (const id of ['chatHead', 'chatLog', 'chatForm']) $id(id).classList.remove('hidden');
+    let r;
+    try { r = await this.api('/api/group?id=' + gid); } catch (e) { return; }
+    if (this.group !== gid) return;
+    if (r.error) { this.closeChat(); this.note(r.error, 'err'); return; }
+    const head = $id('chatHead'); head.innerHTML = ''; head.classList.add('grChat');
+    const tools = el('div', 'grTools');
+    if (r.mine) {
+      const ren = el('button', '', 'RENAME'); ren.onclick = () => { const n = prompt('New group name', r.name); if (n !== null) this.groupCall('rename', { id: gid, name: n }); };
+      const add = el('select'); add.append(el('option', '', '+ ADD'));
+      for (const f of (this.data && this.data.friends) || []) if (!r.members.includes(f.name)) { const o = el('option', '', f.name); o.value = f.name; add.appendChild(o); }
+      add.onchange = () => { if (add.value && add.selectedIndex > 0) this.groupCall('add', { id: gid, name: add.value }); };
+      tools.append(ren, add);
+    }
+    const leave = el('button', 'x', 'LEAVE');
+    leave.onclick = () => {
+      if (r.mine && r.members.length > 1) { this.note('You lead this group: kick everyone else first, then you can leave.', 'err'); return; }
+      if (confirm(`Leave "${r.name}"?`)) this.groupCall('leave', { id: gid });
+    };
+    tools.append(leave);
+    const members = el('div', 'grMembers');
+    for (const n of r.members) {
+      const i = el('i', n === r.leader ? 'lead' : '', n === r.leader ? n + ' (leader)' : n);
+      if (r.mine && n !== r.leader) { const k = el('button', '', '✕'); k.title = 'Kick ' + n; k.onclick = () => { if (confirm(`Kick ${n} from "${r.name}"?`)) this.groupCall('kick', { id: gid, name: n }); }; i.append(k); }
+      members.appendChild(i);
+    }
+    head.append(el('b', '', r.name), tools, members);
+    this._gKey = r.name + '|' + r.members.join(',');                 // (what's shown: refresh() redraws when it changes)
+    const log = $id('chatLog'); log.innerHTML = '';
+    for (const m of r.messages) m.from === null ? this.sysLine(m.body) : this.bubble(m.me, m.body, m.t, m.me ? null : m.from);
+    log.scrollTop = log.scrollHeight;
+    const g = this.data && (this.data.groups || []).find(x => x.id === gid); if (g) g.unread = 0;   // (read now)
+    this.badges(); this.renderGroups();
+    if (!quiet) $id('chatText').focus();
+  },
+  async groupCall(what, extra) {
+    let r; try { r = await this.api('/api/group/' + what, extra); } catch (e) { this.note('Could not reach the server.', 'err'); return; }
+    if (r.error) { this.note(r.error, 'err'); return; }
+    if (what === 'leave') this.closeChat();
+    await this.refresh();
+  },
+  groupVisible(gid) { return menuOpen && screen === 'scrFriends' && this.group === gid && document.visibilityState === 'visible'; },
+  sysLine(text) { const log = $id('chatLog'); log.appendChild(el('div', 'bubSys', text)); },
 
   // ---------------------------------------------------------------- chats
   async openChat(name, quiet) {          // (quiet: reloading the chat already open - doesn't move the cursor)
-    this.chat = name;
+    this.chat = name; this.group = null; $id('chatHead').classList.remove('grChat');
     $id('chatEmpty').classList.add('hidden');
     for (const id of ['chatHead', 'chatLog', 'chatForm']) $id(id).classList.remove('hidden');
     const f = this.data && this.data.friends.find(x => x.name === name);
@@ -228,19 +334,27 @@ const Social = {
     if (!quiet) $id('chatText').focus();
   },
   closeChat() {
-    this.chat = null;
+    this.chat = null; this.group = null;
     $id('chatEmpty').classList.remove('hidden');
     for (const id of ['chatHead', 'chatLog', 'chatForm']) $id(id).classList.add('hidden');
   },
-  bubble(me, body, t) {
-    const log = $id('chatLog'), b = el('div', 'bub' + (me ? ' me' : ''), body);
+  bubble(me, body, t, from) {            // (from: who sent it, shown above it in a group chat)
+    const log = $id('chatLog'), b = el('div', 'bub' + (me ? ' me' : ''));
+    if (from) b.append(el('span', 'from', from));
+    b.append(body);
     b.append(el('time', '', new Date(t).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })));
     const atEnd = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
     log.appendChild(b);
     if (atEnd || me) log.scrollTop = log.scrollHeight;
   },
   async send(text) {
-    const to = this.chat; text = text.trim(); if (!to || !text) return;
+    text = text.trim();
+    if (this.group && text) {                                    // a group chat
+      this.bubble(true, text, Date.now());
+      try { const r = await this.api('/api/group/send', { id: this.group, body: text }); if (r.error) this.bubble(false, '⚠ ' + r.error, Date.now()); } catch (e) { this.bubble(false, '⚠ Not sent: no connection', Date.now()); }
+      return;
+    }
+    const to = this.chat; if (!to || !text) return;
     this.bubble(true, text, Date.now());
     try { const r = await this.api('/api/chat/send', { to, body: text }); if (r.error) this.bubble(false, '⚠ ' + r.error, Date.now()); } catch (e) { this.bubble(false, '⚠ Not sent: no connection', Date.now()); }
   },
@@ -254,6 +368,12 @@ const Social = {
       if (f) f.unread = (f.unread || 0) + 1; else this.refresh();
       this.badges(); if (screen === 'scrFriends') this.renderFriends();
       if (Settings.msgPopups !== false) this.toast(m.from, m.body, () => this.open('friends', m.from));
+    } else if (m.t === 'gmsg') {                                  // a group chat message
+      if (this.groupVisible(m.gid)) { this.bubble(false, m.body, m.at, m.from); this.api('/api/group/read', { id: m.gid }).catch(() => {}); return; }
+      const g = this.data && (this.data.groups || []).find(x => x.id === m.gid);
+      if (g) g.unread = (g.unread || 0) + 1; else this.refresh();
+      this.badges(); if (screen === 'scrFriends') this.renderGroups();
+      if (Settings.msgPopups !== false) this.toast(`${m.from} · ${m.group}`, m.body, () => { this.open('friends'); this.openGroup(m.gid); });
     } else if (m.t === 'presence') {
       const f = this.data && this.data.friends.find(x => x.name === m.name);
       if (f) { f.p = m.p; if (screen === 'scrFriends') { this.renderFriends(); if (this.chat === m.name) this.openChatHead(f); } }
@@ -398,7 +518,8 @@ $id('inboxBtn').onclick = () => Social.open('inbox');
 $id('friendsBtn').onclick = () => Social.open('friends');
 $id('frSend').onclick = () => { const n = $id('frName').value.trim(); if (n) { Social.friendCall('request', n); $id('frName').value = ''; } };
 $id('frName').addEventListener('keydown', e => { if (e.key === 'Enter') $id('frSend').click(); });
-$id('frAllow').onchange = $id('frHide').onchange = () => Social.saveSettings();
+$id('frAllow').onchange = $id('frHide').onchange = $id('frNoGroups').onchange = () => Social.saveSettings();
+$id('grNew').onclick = () => Social.newGroup();
 $id('frPopups').onchange = () => { Settings.msgPopups = $id('frPopups').checked; saveSettings(); };
 $id('chatForm').onsubmit = e => { e.preventDefault(); const i = $id('chatText'); Social.send(i.value); i.value = ''; };
 Net.onSocial = m => Social.onLive(m);

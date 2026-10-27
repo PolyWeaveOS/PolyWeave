@@ -105,9 +105,12 @@ function raceTrace(R, p, st) {
 }
 // ---------------------------------------------------------------- admin panel API (see the /api/admin/ gate below)
 const Titles = require('./js/titles');
-const isAdmin = u => !!(u && u.id && DB.adminUid() && u.id === DB.adminUid());
+const isAdmin = u => !!(u && u.id && DB.adminUid() && u.id === DB.adminUid());   // PolyWeave: the only one whose changes happen
+// an admin: has the Admin title (claimed) and isn't banned - sees the panel, but every change is a request to PolyWeave
+const isStaff = u => isAdmin(u) || !!(u && u.id && u.name && DB.owns(u.id, 'admin') && !DB.isBanned(u.id));
 const fmtN = n => Math.round(n).toLocaleString('en-US');
-function adminApi(route, url, req, json, body) {
+// u: who's asking (PolyWeave or an admin); boss: it's PolyWeave
+function adminApi(route, url, req, json, body, u, boss) {
   const q = k => url.searchParams.get(k);
   const nameOf = uid => Accounts.nameOf(uid) || '?';
   const userInfo = uid => { const r = DB.userRow(uid) || {}; return { uid, name: nameOf(uid), banned: !!r.banned && DB.isBanned(uid), banUntil: DB.banUntil(uid), playS: Math.round(r.play_s || 0),
@@ -116,7 +119,7 @@ function adminApi(route, url, req, json, body) {
   if (route === '/api/admin/overview') {
     const users = Accounts.all();
     let inGame = 0; for (const r of rooms.values()) inGame += r.players.size;
-    json(200, Object.assign({ accounts: users.length, signedIn: users.filter(x => x.name).length, onlineNow: online.size, inGame }, DB.adminOverview()));
+    json(200, Object.assign({ accounts: users.length, signedIn: users.filter(x => x.name).length, onlineNow: online.size, inGame, requests: DB.waitingRequests(), boss }, DB.adminOverview()));
     return;
   }
   if (route === '/api/admin/players') {               // ?q=part of a name (empty: newest first)
@@ -162,57 +165,106 @@ function adminApi(route, url, req, json, body) {
     json(200, { now, list: list.sort((a, b) => a.name.localeCompare(b.name)), guests });
     return;
   }
+  // a change: PolyWeave's happens straight away; an admin's (Admin title) is checked, then waits for PolyWeave
   if (route === '/api/admin/action' && req.method === 'POST') {
     body(m => {
-      const who = () => { const a = Accounts.byName(m.name); if (!a) throw new Error('No player called "' + m.name + '".'); return a; };
-      let msg;
       try {
-        switch (m.action) {
-          case 'ban': {                                  // days 0 / empty = permanent
-            const a = who(), days = Math.max(0, Math.min(3650, Math.floor(+m.days || 0)));
-            if (isAdmin(a)) throw new Error('That\'s the admin account.');
-            DB.setBanned(a.id, true, days); msg = `${a.name} leaderboard banned ${days ? 'for ' + days + ' days (scores + stats reset when it ends)' : 'permanently'}.`;
-            DB.adminLog('ban', a.name, days ? days + ' days' : 'permanent'); break;
-          }
-          case 'unban': { const a = who(); DB.setBanned(a.id, false); msg = `${a.name} unbanned.`; DB.adminLog('unban', a.name); break; }
-          case 'grant': {
-            const a = who(); if (!Titles.TITLE_BY_ID[m.title]) throw new Error('Unknown title.');
-            const note = m.note ? String(m.note).slice(0, 300) : null;
-            msg = DB.gift(a.id, m.title, note) ? `"${Titles.TITLE_BY_ID[m.title].name}" sent to ${a.name}'s inbox.` : `${a.name} already has "${Titles.TITLE_BY_ID[m.title].name}" (or it's waiting in their inbox).`;
-            DB.adminLog('grant', a.name, m.title + (note ? ' - ' + note : '')); break;
-          }
-          case 'revoke': {
-            const a = who(); if (!Titles.TITLE_BY_ID[m.title]) throw new Error('Unknown title.');
-            DB.db.prepare('DELETE FROM user_titles WHERE uid = ? AND title = ?').run(a.id, m.title);
-            DB.db.prepare("DELETE FROM inbox WHERE uid = ? AND kind = 'title' AND item = ? AND claimed IS NULL").run(a.id, m.title);
-            if (DB.equipped(a.id) === m.title) DB.equip(a.id, null);
-            msg = `${a.name} lost "${Titles.TITLE_BY_ID[m.title].name}".`; DB.adminLog('revoke', a.name, m.title); break;
-          }
-          case 'removeRun': case 'restoreRun': {
-            const id = Math.floor(+m.id), on = m.action === 'removeRun', row = DB.db.prepare('SELECT verified FROM runs WHERE id = ?').get(id);
-            if (!row) throw new Error('No run #' + id + '.');
-            if (!on && row.verified < 0) throw new Error('Run #' + id + ' failed the checks - it can\'t be put on the leaderboard.');   // (a rejected run never goes on)
-            DB.setRemoved(id, on);
-            msg = `Run #${id} ${on ? 'taken off the leaderboard' : 'restored'}.`; DB.adminLog(m.action, '#' + id); break;
-          }
-          case 'trim': {                                 // every run of a player above a score off the board
-            const a = who(), mode = m.mode === 'mp' ? 'mp' : 'sp', max = +m.max;
-            if (!Number.isFinite(max)) throw new Error('Give a score.');
-            msg = `${a.name}: ${DB.removeAbove(a.id, mode, max)} ${mode} runs above ${fmtN(max)} removed.`; DB.adminLog('trim', a.name, `${mode} > ${max}`); break;
-          }
-          case 'lap': case 'race': {                     // status: 0 = counted (approve / restore), 1 = removed, 2 = held
-            const st = [0, 1, 2].includes(+m.status) ? +m.status : 1, id = Math.floor(+m.id);
-            if (!DB.setLapStatus(m.action === 'lap' ? 'laps' : 'race_results', id, st)) throw new Error('Nothing with id ' + id + '.');
-            msg = `${m.action === 'lap' ? 'Lap' : 'Race result'} #${id} ${['approved / counted', 'removed', 'held'][st]}.`; DB.adminLog(m.action + ' ' + ['count', 'remove', 'hold'][st], '#' + id); break;
-          }
-          default: throw new Error('Unknown action.');
-        }
-      } catch (e) { json(400, { error: e.message }); return; }
-      json(200, { ok: true, msg });
+        if (boss) { json(200, { ok: true, msg: runAction(m, null) }); return; }
+        const summary = checkRequest(m), payload = requestPayload(m);
+        DB.addRequest(u.id, u.name, payload, summary);
+        json(200, { ok: true, queued: true, msg: `Sent to PolyWeave to accept: ${summary}` });
+      } catch (e) { json(400, { error: e.message }); }
+    });
+    return;
+  }
+  // admins' requests: PolyWeave sees them all (waiting first), an admin sees their own
+  if (route === '/api/admin/requests') { json(200, { boss, list: DB.requestList(boss ? null : u.id) }); return; }
+  // PolyWeave accepts (it's done, checked again first) or declines a request; either way the admin gets a note
+  if (route === '/api/admin/decide' && req.method === 'POST') {
+    if (!boss) { json(404, { error: 'Not found' }); return; }
+    body(m => {
+      const r = DB.getRequest(Math.floor(+m.id));
+      if (!r || r.status !== 0) { json(400, { error: 'That request was already answered.' }); return; }
+      const note = m.note ? cleanText(m.note).slice(0, 300) : '';
+      let status = 2, result = '';
+      if (m.accept) { try { checkRequest(r.payload); result = runAction(r.payload, r.name); status = 1; } catch (e) { result = e.message; status = 3; } }
+      else DB.adminLog('declined', r.name, r.summary + (note ? ' - ' + note : ''));
+      DB.decideRequest(r.id, status, note, result);
+      DB.sendNote(r.uid, `Your admin request "${r.summary}" was ${status === 1 ? 'accepted' : status === 2 ? 'declined' : 'accepted, but it couldn\'t be done: ' + result}.` + (note ? `\nNote from PolyWeave: ${note}` : ''));
+      json(200, { ok: true, msg: status === 1 ? `Accepted: ${result}` : status === 2 ? `Declined: ${r.summary}` : `Couldn't be done: ${result}` });
     });
     return;
   }
   json(404, { error: 'Not found' });
+}
+// the Admin and Owner tags: only PolyWeave gives or takes them (an admin can't even ask)
+const BOSS_ONLY_TITLES = ['admin', 'owner'];
+const ADMIN_ACTIONS = ['ban', 'unban', 'grant', 'revoke', 'removeRun', 'restoreRun', 'trim', 'lap', 'race'];
+// an admin's request: only the fields an action uses
+const requestPayload = m => { const p = { action: String(m.action) }; for (const k of ['name', 'days', 'title', 'note', 'id', 'mode', 'max', 'status']) if (m[k] !== undefined && m[k] !== null && m[k] !== '') p[k] = typeof m[k] === 'string' ? m[k].slice(0, 300) : m[k]; return p; };
+// may an admin ask for this? Throws why not; returns what it is in words (shown to PolyWeave). Checked again on accept.
+function checkRequest(m) {
+  if (!ADMIN_ACTIONS.includes(m.action)) throw new Error('Unknown action.');
+  const who = () => { const a = Accounts.byName(m.name); if (!a || !a.name) throw new Error('No player called "' + m.name + '".'); if (isAdmin(a)) throw new Error('Requests can\'t be about PolyWeave.'); return a; };
+  const title = () => { const t = Titles.TITLE_BY_ID[m.title]; if (!t) throw new Error('Unknown title.'); if (BOSS_ONLY_TITLES.includes(m.title)) throw new Error('Only PolyWeave can give or take the Admin and Owner tags.'); return t; };
+  switch (m.action) {
+    case 'ban': { const a = who(), d = Math.max(0, Math.min(3650, Math.floor(+m.days || 0))); return `Leaderboard ban ${a.name} ${d ? 'for ' + d + ' days' : 'permanently'}`; }
+    case 'unban': return `Unban ${who().name}`;
+    case 'grant': { const a = who(), t = title(); return `Give "${t.name}" to ${a.name}` + (m.note ? ` (message: ${String(m.note).slice(0, 120)})` : ''); }
+    case 'revoke': { const a = who(), t = title(); return `Take "${t.name}" from ${a.name}`; }
+    case 'removeRun': case 'restoreRun': {
+      const id = Math.floor(+m.id), row = DB.db.prepare('SELECT uid, score, mode FROM runs WHERE id = ?').get(id); if (!row) throw new Error('No run #' + id + '.');
+      if (row.uid === DB.adminUid()) throw new Error('Requests can\'t be about PolyWeave.');
+      return `${m.action === 'removeRun' ? 'Take off' : 'Put back'} run #${id} (${Accounts.nameOf(row.uid) || '?'}, ${row.mode} ${fmtN(row.score)})`;
+    }
+    case 'trim': { const a = who(), max = +m.max; if (!Number.isFinite(max)) throw new Error('Give a score.'); return `Take off ${a.name}'s ${m.mode === 'mp' ? 'mp' : 'sp'} runs above ${fmtN(max)}`; }
+    case 'lap': case 'race': { const st = [0, 1, 2].includes(+m.status) ? +m.status : 1; return `${['Approve', 'Remove', 'Hold'][st]} ${m.action === 'lap' ? 'lap' : 'race result'} #${Math.floor(+m.id)}`; }
+  }
+  throw new Error('Unknown action.');
+}
+// do an admin action; by: the admin who asked for it (written in the log), null when it's PolyWeave's own. Returns what happened.
+function runAction(m, by) {
+  const who = () => { const a = Accounts.byName(m.name); if (!a) throw new Error('No player called "' + m.name + '".'); return a; };
+  const log = (action, target, detail) => DB.adminLog(action, target, (detail || '') + (by ? `${detail ? ' ' : ''}(asked by ${by})` : ''));
+  switch (m.action) {
+    case 'ban': {                                        // days 0 / empty = permanent
+      const a = who(), days = Math.max(0, Math.min(3650, Math.floor(+m.days || 0)));
+      if (isAdmin(a)) throw new Error('That\'s the admin account.');
+      DB.setBanned(a.id, true, days); log('ban', a.name, days ? days + ' days' : 'permanent');
+      return `${a.name} leaderboard banned ${days ? 'for ' + days + ' days (scores + stats reset when it ends)' : 'permanently'}.`;
+    }
+    case 'unban': { const a = who(); DB.setBanned(a.id, false); log('unban', a.name); return `${a.name} unbanned.`; }
+    case 'grant': {
+      const a = who(); if (!Titles.TITLE_BY_ID[m.title]) throw new Error('Unknown title.');
+      const note = m.note ? String(m.note).slice(0, 300) : null, name = Titles.TITLE_BY_ID[m.title].name;
+      const sent = DB.gift(a.id, m.title, note); log('grant', a.name, m.title + (note ? ' - ' + note : ''));
+      return sent ? `"${name}" sent to ${a.name}'s inbox.` : `${a.name} already has "${name}" (or it's waiting in their inbox).`;
+    }
+    case 'revoke': {
+      const a = who(); if (!Titles.TITLE_BY_ID[m.title]) throw new Error('Unknown title.');
+      DB.db.prepare('DELETE FROM user_titles WHERE uid = ? AND title = ?').run(a.id, m.title);
+      DB.db.prepare("DELETE FROM inbox WHERE uid = ? AND kind = 'title' AND item = ? AND claimed IS NULL").run(a.id, m.title);
+      if (DB.equipped(a.id) === m.title) DB.equip(a.id, null);
+      log('revoke', a.name, m.title); return `${a.name} lost "${Titles.TITLE_BY_ID[m.title].name}".`;
+    }
+    case 'removeRun': case 'restoreRun': {
+      const id = Math.floor(+m.id), on = m.action === 'removeRun', row = DB.db.prepare('SELECT verified FROM runs WHERE id = ?').get(id);
+      if (!row) throw new Error('No run #' + id + '.');
+      if (!on && row.verified < 0) throw new Error('Run #' + id + ' failed the checks - it can\'t be put on the leaderboard.');   // (a rejected run never goes on)
+      DB.setRemoved(id, on); log(m.action, '#' + id); return `Run #${id} ${on ? 'taken off the leaderboard' : 'restored'}.`;
+    }
+    case 'trim': {                                       // every run of a player above a score off the board
+      const a = who(), mode = m.mode === 'mp' ? 'mp' : 'sp', max = +m.max;
+      if (!Number.isFinite(max)) throw new Error('Give a score.');
+      const n = DB.removeAbove(a.id, mode, max); log('trim', a.name, `${mode} > ${max}`); return `${a.name}: ${n} ${mode} runs above ${fmtN(max)} removed.`;
+    }
+    case 'lap': case 'race': {                           // status: 0 = counted (approve / restore), 1 = removed, 2 = held
+      const st = [0, 1, 2].includes(+m.status) ? +m.status : 1, id = Math.floor(+m.id);
+      if (!DB.setLapStatus(m.action === 'lap' ? 'laps' : 'race_results', id, st)) throw new Error('Nothing with id ' + id + '.');
+      log(m.action + ' ' + ['count', 'remove', 'hold'][st], '#' + id); return `${m.action === 'lap' ? 'Lap' : 'Race result'} #${id} ${['approved / counted', 'removed', 'held'][st]}.`;
+    }
+  }
+  throw new Error('Unknown action.');
 }
 
 // a refused race lap / finish of a signed-in driver: recorded once per race (admin panel + the auto-ban count)
@@ -376,8 +428,13 @@ function socialFor(u) {
   const friends = DB.friendsOf(u.id).map(fid => ({ name: Accounts.nameOf(fid), title: DB.equipped(fid), unread: unread[fid] || 0, p: presenceOf(fid) }))
     .filter(f => f.name);
   const names = ids => ids.map(id => Accounts.nameOf(id)).filter(Boolean);
-  return { friends, incoming: names(DB.requestsIn(u.id)), outgoing: names(DB.requestsOut(u.id)), settings: DB.socialSettings(u.id), inbox: DB.unclaimed(u.id) };
+  return { friends, incoming: names(DB.requestsIn(u.id)), outgoing: names(DB.requestsOut(u.id)), settings: DB.socialSettings(u.id), inbox: DB.unclaimed(u.id), groups: groupsFor(u) };
 }
+// your group chats: name, who's in it (the leader first), unread
+const groupsFor = u => DB.groupsOf(u.id).map(g => ({ id: g.id, name: g.name, leader: Accounts.nameOf(g.owner) || '?', mine: g.owner === u.id, unread: g.unread,
+  members: g.members.map(id => Accounts.nameOf(id)).filter(Boolean) }));
+// a group changed (made, renamed, someone added / kicked / left): everyone in it (and anyone just taken out) refreshes
+const groupChanged = (gid, also = []) => { for (const uid of new Set([...DB.groupMembers(gid), ...also])) pushTo(uid, { t: 'social' }); };
 
 const CODE_ABC = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';   // no 0/O or 1/I/L, easy to read out loud
 function newCode() {
@@ -521,7 +578,7 @@ const server = http.createServer((req, res) => {
         if (isNew && DB.betaOpen()) DB.gift(user.id, 'beta');     // (new players get Beta Tester until it's switched off)
         DB.gift(user.id, 'verified');                           // (signed in with Google; only sent once)
         if (isNew && m.ref) { const by = Accounts.byName(String(m.ref).slice(0, 16)); if (by) DB.addReferral(user.id, by.id); }   // (made from someone's invite link)
-        json(200, Object.assign({ session: token, name: user.name, title: DB.equipped(user.id), banned: DB.isBanned(user.id), banUntil: DB.banUntil(user.id), bus: DB.hasBus(user.id, user.name) }, isAdmin(user) ? { admin: true } : {}));
+        json(200, Object.assign({ session: token, name: user.name, title: DB.equipped(user.id), banned: DB.isBanned(user.id), banUntil: DB.banUntil(user.id), bus: DB.hasBus(user.id, user.name) }, isAdmin(user) ? { admin: true } : isStaff(user) ? { staff: true } : {}));
       })
         .catch(e => json(401, { error: e.message }));
     });
@@ -530,7 +587,7 @@ const server = http.createServer((req, res) => {
   const bearer = () => Accounts.bySession(String(req.headers.authorization || '').replace(/^Bearer /, ''));
   if (route === '/api/account') {                       // who am I? (Authorization: Bearer <session>)
     const u = bearer();
-    json(u ? 200 : 401, u ? Object.assign({ name: u.name, title: DB.equipped(u.id), banned: DB.isBanned(u.id), banUntil: DB.banUntil(u.id), bus: DB.hasBus(u.id, u.name) }, isAdmin(u) ? { admin: true } : {}) : { error: 'not signed in' });   // (banned: leaderboard banned - the launch popup tells them; banUntil: when a temporary ban ends; bus: Bang Bus unlocked)
+    json(u ? 200 : 401, u ? Object.assign({ name: u.name, title: DB.equipped(u.id), banned: DB.isBanned(u.id), banUntil: DB.banUntil(u.id), bus: DB.hasBus(u.id, u.name) }, isAdmin(u) ? { admin: true } : isStaff(u) ? { staff: true } : {}) : { error: 'not signed in' });   // (staff: has the Admin title)   // (banned: leaderboard banned - the launch popup tells them; banUntil: when a temporary ban ends; bus: Bang Bus unlocked)
     return;
   }
   // the Bang Bus event: GET /api/event (Bearer) -> each quest's progress and whether the bus is unlocked
@@ -540,11 +597,11 @@ const server = http.createServer((req, res) => {
     json(200, Object.assign(DB.busProgress(u.id), { owner: DB.BIKE_NAMES.includes(u.name.toLowerCase()) }));
     return;
   }
-  // owner tools: the video recorder (tools/recorder.js) is only handed to the owners' accounts (Bearer).
-  // Everyone else gets a plain 404, as if it didn't exist; tools/ is never served as a static folder.
+  // the video recorder (tools/recorder.js): only handed to the owners' accounts and anyone with the Content Creator
+  // title (claimed) (Bearer). Everyone else gets a plain 404, as if it didn't exist; tools/ is never served as a static folder.
   if (route === '/api/tools/recorder') {
     const u = bearer();
-    if (!u || !u.name || !DB.OWNER_NAMES.includes(u.name.toLowerCase())) { res.writeHead(404); res.end('Not found'); return; }
+    if (!u || !u.name || !(DB.OWNER_NAMES.includes(u.name.toLowerCase()) || DB.owns(u.id, 'creator'))) { res.writeHead(404); res.end('Not found'); return; }
     fs.readFile(path.join(ROOT, 'tools', 'recorder.js'), (err, data) => {
       if (err) { res.writeHead(404); res.end('Not found'); return; }
       res.writeHead(200, { 'Content-Type': TYPES['.js'], 'Cache-Control': 'no-store' });
@@ -552,12 +609,13 @@ const server = http.createServer((req, res) => {
     });
     return;
   }
-  // ---- ADMIN (the PolyWeave account only - checked here on every request against its locked Google id, db.js
-  // adminUid; anyone else gets a plain 404 as if none of this existed). The panel's code (admin/panel.js, never served
-  // as a static file) is only handed to the admin. Every change is written to the admin log.
+  // ---- ADMIN: PolyWeave (its locked Google id, db.js adminUid) and admins (the Admin title, claimed, not banned) -
+  // checked here on every request; anyone else gets a plain 404 as if none of this existed. The panel's code
+  // (admin/panel.js, never served as a static file) is only handed to them. Only PolyWeave's changes happen: an admin's
+  // become requests PolyWeave accepts or declines. Every change is written to the admin log.
   if (route === '/api/tools/admin' || route.startsWith('/api/admin/')) {
     const u = bearer();
-    if (!isAdmin(u)) { res.writeHead(404); res.end('Not found'); return; }
+    if (!isStaff(u)) { res.writeHead(404); res.end('Not found'); return; }
     if (route === '/api/tools/admin') {
       fs.readFile(path.join(ROOT, 'admin', 'panel.js'), (err, data) => {
         if (err) { res.writeHead(404); res.end('Not found'); return; }
@@ -565,7 +623,7 @@ const server = http.createServer((req, res) => {
       });
       return;
     }
-    try { adminApi(route, url, req, json, body); } catch (e) { console.log('admin error:', e.message); json(500, { error: e.message }); }
+    try { adminApi(route, url, req, json, body, u, isAdmin(u)); } catch (e) { console.log('admin error:', e.message); json(500, { error: e.message }); }
     return;
   }
   // profiles: GET /api/profile?name=<driver> (anyone's), GET /api/profile (Bearer: your own, with your titles)
@@ -647,7 +705,7 @@ const server = http.createServer((req, res) => {
   if (route === '/api/social/settings' && req.method === 'POST') {
     body(m => {
       const u = Accounts.bySession(m.session); if (!u) { json(401, { error: 'Not signed in.' }); return; }
-      DB.setSocialSettings(u.id, { allowRequests: m.allowRequests, hideActivity: m.hideActivity });
+      DB.setSocialSettings(u.id, { allowRequests: m.allowRequests, hideActivity: m.hideActivity, noGroups: m.noGroups });   // (noGroups: nobody can add them to a group chat)
       presenceChanged(u.id);
       json(200, DB.socialSettings(u.id));
     });
@@ -680,6 +738,80 @@ const server = http.createServer((req, res) => {
       const u = Accounts.bySession(m.session), o = Accounts.byName(cleanText(m.with));
       if (u && o) DB.markRead(u.id, o.id);
       json(200, { ok: true });
+    });
+    return;
+  }
+  // ---- group chats. GET /api/group?id= (Bearer): who's in it + the last 100 messages (marks them read)
+  if (route === '/api/group') {
+    const u = bearer(); if (!u || !u.name) { json(401, { error: 'Not signed in.' }); return; }
+    const gid = Math.floor(+url.searchParams.get('id')), g = DB.groupOf(gid);
+    if (!g || !DB.inGroup(gid, u.id)) { json(404, { error: 'You\'re not in that group.' }); return; }
+    DB.markGroupRead(gid, u.id);
+    json(200, { id: gid, name: g.name, leader: Accounts.nameOf(g.owner) || '?', mine: g.owner === u.id, members: DB.groupMembers(gid).map(id => Accounts.nameOf(id)).filter(Boolean),
+      messages: DB.groupMessages(gid).map(r => ({ id: r.id, me: r.from_uid === u.id, from: r.from_uid ? Accounts.nameOf(r.from_uid) || '?' : null, body: r.body, t: r.t })) });
+    return;
+  }
+  // POST /api/group/{create|send|add|kick|rename|leave|read} {session, ...}
+  if (route.startsWith('/api/group/') && req.method === 'POST') {
+    body(m => {
+      const u = Accounts.bySession(m.session); if (!u || !u.name) { json(401, { error: 'Not signed in.' }); return; }
+      const what = route.slice('/api/group/'.length), fail = (code, error) => json(code, { error });
+      const cleanName = s => String(s || '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 24);
+      // someone you can put in a group: your friend, who allows it
+      const addable = name => {
+        const o = Accounts.byName(cleanText(name));
+        if (!o || !o.name || !DB.areFriends(u.id, o.id)) throw new Error(`${cleanText(name)} isn't your friend.`);
+        if (DB.socialSettings(o.id).noGroups) throw new Error(`${o.name} doesn't allow being added to group chats.`);
+        return o;
+      };
+      try {
+        if (what === 'create') {                         // a new group: you lead it, with friends you pick
+          const names = [...new Set((Array.isArray(m.members) ? m.members : []).map(String))].slice(0, DB.GROUP_MAX);
+          const others = names.map(addable).filter(o => o.id !== u.id);
+          if (!others.length) return fail(400, 'Pick at least one friend.');
+          if (others.length + 1 > DB.GROUP_MAX) return fail(400, `A group can have up to ${DB.GROUP_MAX} people.`);
+          if (tooFast('gcreate:' + u.id, 5000)) return fail(429, 'Wait a few seconds before making another group.');   // (only groups that would be made count)
+          const gid = DB.createGroup(u.id, cleanName(m.name) || `${u.name}'s group`, others.map(o => o.id));
+          DB.groupSay(gid, '', `${u.name} made the group`);
+          groupChanged(gid); json(200, { ok: true, id: gid }); return;
+        }
+        const gid = Math.floor(+m.id), g = DB.groupOf(gid);
+        if (!g || !DB.inGroup(gid, u.id)) return fail(404, 'You\'re not in that group.');
+        const leader = g.owner === u.id;
+        if (what === 'send') {
+          const text = cleanText(m.body); if (!text) return fail(400, 'Empty message.');
+          if (tooFast('chat:' + u.id, 300)) return fail(429, 'You\'re sending messages too fast.');
+          const r = DB.groupSay(gid, u.id, text);
+          for (const uid of DB.groupMembers(gid)) if (uid !== u.id) pushTo(uid, { t: 'gmsg', gid, group: g.name, id: r.id, from: u.name, body: text, at: r.t });
+          json(200, { id: r.id, t: r.t }); return;
+        }
+        if (what === 'read') { DB.markGroupRead(gid, u.id); json(200, { ok: true }); return; }
+        if (what === 'add') {                            // the leader adds a friend
+          if (!leader) return fail(403, 'Only the group leader can add people.');
+          const o = addable(m.name);
+          if (DB.groupMembers(gid).length >= DB.GROUP_MAX) return fail(400, `A group can have up to ${DB.GROUP_MAX} people.`);
+          if (!DB.addToGroup(gid, o.id)) return fail(400, `${o.name} is already in the group.`);
+          DB.groupSay(gid, '', `${u.name} added ${o.name}`); groupChanged(gid); json(200, { ok: true }); return;
+        }
+        if (what === 'kick') {                           // the leader takes someone out
+          if (!leader) return fail(403, 'Only the group leader can kick people.');
+          const o = Accounts.byName(cleanText(m.name)); if (!o || !DB.inGroup(gid, o.id)) return fail(400, 'They\'re not in the group.');
+          if (o.id === u.id) return fail(400, 'You can\'t kick yourself.');
+          DB.removeFromGroup(gid, o.id); DB.groupSay(gid, '', `${u.name} kicked ${o.name}`); groupChanged(gid, [o.id]); json(200, { ok: true }); return;
+        }
+        if (what === 'rename') {                         // the leader renames it
+          if (!leader) return fail(403, 'Only the group leader can rename the group.');
+          const name = cleanName(m.name); if (!name) return fail(400, 'Give the group a name.');
+          DB.renameGroup(gid, name); DB.groupSay(gid, '', `${u.name} renamed the group to "${name}"`); groupChanged(gid); json(200, { ok: true }); return;
+        }
+        if (what === 'leave') {                          // anyone can leave - the leader only once they're the last one in it
+          if (leader && DB.groupMembers(gid).length > 1) return fail(400, 'You lead this group: kick everyone else first, then you can leave.');
+          const still = DB.removeFromGroup(gid, u.id);
+          if (still) { DB.groupSay(gid, '', `${u.name} left`); groupChanged(gid, [u.id]); } else pushTo(u.id, { t: 'social' });
+          json(200, { ok: true }); return;
+        }
+        fail(404, 'Not found');
+      } catch (e) { fail(400, e.message); }
     });
     return;
   }

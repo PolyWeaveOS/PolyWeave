@@ -47,7 +47,8 @@
   #scrAdmin h3 { font-size: 13px; letter-spacing: 2px; margin: 16px 0 4px; opacity: .85; }
   #scrAdmin .chip { display: inline-flex; gap: 6px; align-items: center; padding: 4px 8px; border-radius: 8px; background: rgba(255,255,255,.07); margin: 0 6px 6px 0; font-size: 12px; }
   #scrAdmin .chip button { padding: 0 6px; font-size: 11px; line-height: 18px; }
-  #scrAdmin .adHelp { font-size: 12px; opacity: .6; margin: 4px 0; }`;
+  #scrAdmin .adHelp { font-size: 12px; opacity: .6; margin: 4px 0; }
+  #scrAdmin .adRole { font-size: 12px; font-weight: 700; color: #ffd84a; margin-left: 12px; opacity: .85; }`;
   document.head.appendChild(css);
 
   // ---- the button (next to Friends / Inbox)
@@ -59,21 +60,25 @@
   // ---- the screen
   const scr = E('div', 'screen panel wide hidden'); scr.id = 'scrAdmin';
   const hdr = E('div', 'hdr'), back = E('button', 'back', '← BACK'); back.onclick = () => show('scrTitle');
-  hdr.append(back, E('h1', '', 'ADMIN'));
+  // PolyWeave (boss): changes happen. An admin (Admin title): sees everything, every change is sent to PolyWeave
+  const boss = () => !!(Account.user && Account.user.admin);
+  const BOSS_ONLY = ['admin', 'owner'];                  // (only PolyWeave gives or takes these; the server refuses them from admins)
+  const roleNote = E('span', 'adRole');
+  hdr.append(back, E('h1', '', 'ADMIN'), roleNote);
   const tabs = E('div', 'tabs adTabs'), msg = E('div', 'adMsg'), body = E('div');
-  const TABS = [['overview', 'OVERVIEW'], ['players', 'PLAYERS'], ['runs', 'RUNS'], ['racing', 'RACING'], ['log', 'LOG']];
+  const TABS = [['overview', 'OVERVIEW'], ['players', 'PLAYERS'], ['runs', 'RUNS'], ['racing', 'RACING'], ['requests', 'REQUESTS'], ['log', 'LOG']];
   let tab = 'overview';
   for (const [k, n] of TABS) { const b = E('button', 'tab', n); b.dataset.ad = k; b.onclick = () => open(k); tabs.appendChild(b); }
   scr.append(hdr, tabs, msg, body);
   document.getElementById('menu').appendChild(scr);
   btn.onclick = () => { show('scrAdmin'); open(tab); };
   const say = (t, ok) => { msg.textContent = t || ''; msg.className = 'adMsg' + (t ? (ok ? ' ok' : ' err') : ''); };
-  // run an action, report it, then redraw what's on screen
+  // run an action (an admin's goes to PolyWeave to accept), report it, then redraw what's on screen
   async function act(body, confirmText, redraw) {
-    if (confirmText && !confirm(confirmText)) return;
+    if (confirmText && !confirm(boss() ? confirmText : confirmText + '\n\n(This is sent to PolyWeave to accept.)')) return;
     const j = await api('/api/admin/action', body);
     if (j.error) say(j.error); else say(j.msg, true);
-    if (!j.error && redraw) redraw();
+    if (!j.error && !j.queued && redraw) redraw();
   }
   const button = (txt, fn, cls = '') => { const b = E('button', 'small ' + cls, txt); b.onclick = e => { e.stopPropagation(); fn(); }; return b; };
   const table = (heads) => { const t = E('table', 'adTable'), tr = E('tr'); for (const h of heads) tr.appendChild(E('th', '', h)); t.appendChild(tr); return t; };
@@ -85,7 +90,7 @@
     tab = k; say(''); clearTimeout(onlineTimer);
     tabs.querySelectorAll('[data-ad]').forEach(b => b.classList.toggle('sel', b.dataset.ad === k));
     body.innerHTML = '';
-    ({ overview, players, runs, racing, log })[k]();
+    ({ overview, players, runs, racing, requests, log })[k]();
   }
 
   // ---- OVERVIEW
@@ -100,8 +105,36 @@
       [fmt(j.bannedPerm), 'permanent leaderboard bans'], [fmt(j.bannedTemp), 'temporary leaderboard bans'],
       [fmt(j.runsTotal), 'verified runs in total'], [String(j.playHours || 0), 'hours played in total'],
     ];
+    if (boss()) tiles.unshift([fmt(j.requests), 'admin requests waiting for you', () => open('requests')]);
     for (const [v, k, fn] of tiles) { const d = E('div', 'adTile' + (fn ? ' click' : '')); d.append(E('b', '', v), E('span', '', k)); if (fn) d.onclick = fn; g.appendChild(d); }
-    body.append(g, E('div', 'adHelp', 'Only your account can see or use this panel - the server checks every request.'));
+    body.append(g, E('div', 'adHelp', boss() ? 'Only your account and admins (the Admin title) can open this panel, and only your changes happen - an admin\'s come to you in Requests. The server checks every request.'
+      : 'You\'re an admin: every change you make is sent to PolyWeave to accept or decline. You\'ll get the answer in your inbox and in Requests.'));
+  }
+
+  // ---- REQUESTS: PolyWeave accepts (it happens) or declines what admins asked for, with a note to them;
+  // an admin sees their own requests and the answers
+  async function requests() {
+    const j = await api('/api/admin/requests'); if (j.error) { say(j.error); return; }
+    body.innerHTML = '';
+    const STATUS = [['WAITING', 'hold'], ['ACCEPTED', 'good'], ['DECLINED', 'bad'], ['COULDN\'T BE DONE', 'bad']];
+    const t = table(boss() ? ['WHEN', 'ADMIN', 'ASKED FOR', 'STATUS', ''] : ['WHEN', 'ASKED FOR', 'STATUS', 'NOTE FROM POLYWEAVE']);
+    for (const r of j.list) {
+      const tr = E('tr'); cell(tr, day(r.t)); if (boss()) cell(tr, r.name || '?');
+      const what = cell(tr, r.summary || ''); if (r.result && r.status !== 0) what.appendChild(E('div', 'note', r.result));
+      cell(tr, tag(STATUS[r.status][0], STATUS[r.status][1]));
+      if (!boss()) cell(tr, r.note || '');
+      else if (r.status === 0) {
+        const td = E('td'), note = E('input', 'wide'); note.placeholder = 'Note to them (optional)'; note.maxLength = 300;
+        const row = E('div', 'adRow'); row.style.margin = '0';
+        const decide = async accept => { const k = await api('/api/admin/decide', { id: r.id, accept, note: note.value }); if (k.error) say(k.error); else say(k.msg, true); requests(); };
+        row.append(note, button('ACCEPT', () => decide(true)), button('DECLINE', () => decide(false), 'red'));
+        td.appendChild(row); tr.appendChild(td);
+      } else cell(tr, r.note ? 'Note: ' + r.note : '');
+      t.appendChild(tr);
+    }
+    const sc = E('div', 'adScroll'); sc.appendChild(t); if (!j.list.length) sc.appendChild(E('div', 'adHelp', boss() ? 'No requests from admins yet.' : 'You haven\'t asked for anything yet.'));
+    body.append(E('div', 'adHelp', boss() ? 'Accept: it happens (checked again first). Decline: nothing changes. Either way the admin gets a note in their inbox, with yours if you write one.'
+      : 'Everything you do in the panel comes here first; PolyWeave accepts or declines it.'), sc);
   }
 
   // ---- WHO'S ONLINE (from the Overview's online tiles): every signed-in player online and what they're doing, plus
@@ -176,10 +209,14 @@
     // titles
     body.append(E('h3', '', 'TITLES'));
     const owned = E('div');
-    for (const id of j.owned) { const t = Titles.TITLE_BY_ID[id]; const c = E('span', 'chip'); c.append(E('span', '', t ? t.name : id), button('✕', () => act({ action: 'revoke', name: j.name, title: id }, `Take "${t ? t.name : id}" away from ${j.name}?`, redraw))); owned.appendChild(c); }
+    for (const id of j.owned) {
+      const t = Titles.TITLE_BY_ID[id], c = E('span', 'chip'); c.append(E('span', '', t ? t.name : id));
+      if (boss() || !BOSS_ONLY.includes(id)) c.append(button('✕', () => act({ action: 'revoke', name: j.name, title: id }, `Take "${t ? t.name : id}" away from ${j.name}?`, redraw)));   // (Admin / Owner: only PolyWeave)
+      owned.appendChild(c);
+    }
     if (!j.owned.length) owned.appendChild(E('div', 'adHelp', 'No titles yet.'));
     const g = E('div', 'adRow'), sel = E('select'), note = E('input', 'wide'); note.placeholder = 'Message with it (optional)';
-    for (const t of Titles.TITLES) { const o = E('option', '', `${t.name} (${Titles.RARITIES[t.rarity].name})`); o.value = t.id; sel.appendChild(o); }
+    for (const t of Titles.TITLES) { if (!boss() && BOSS_ONLY.includes(t.id)) continue; const o = E('option', '', `${t.name} (${Titles.RARITIES[t.rarity].name})`); o.value = t.id; sel.appendChild(o); }   // (Admin / Owner: only PolyWeave can give them)
     g.append(sel, note, button('GIVE TITLE', () => act({ action: 'grant', name: j.name, title: sel.value, note: note.value }, null, redraw)));
     body.append(owned, g);
     // runs
@@ -257,8 +294,9 @@
   // signed out / switched account: the button and screen go away
   window.AdminPanel = {
     account() {
-      const on = Account.signedIn && Account.user && Account.user.admin;
+      const on = Account.signedIn && Account.user && (Account.user.admin || Account.user.staff);   // (PolyWeave, or an admin)
       btn.classList.toggle('hidden', !on);
+      roleNote.textContent = on && !boss() ? 'Changes are sent to PolyWeave to accept' : '';
       if (!on && screen === 'scrAdmin') show('scrTitle');
     },
   };

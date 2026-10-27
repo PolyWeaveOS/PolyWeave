@@ -2567,8 +2567,13 @@ function frame(now) {
   if (window.Recorder) Recorder.capture(dt);       // (owners: keeps the last minute for clips)
   renderFrame();
 }
-// Owner tools: the server only sends the recorder to the owners' signed-in accounts (anyone else gets a 404)
+// The recorder: the server only sends it to the owners' accounts and Content Creators (anyone else gets a 404)
 let toolsFor = null;
+// a title that unlocks something was just claimed (Content Creator: the recorder; Admin: the admin panel) - no reload needed
+function titleUnlocks(id) {
+  if (id === 'creator') { toolsFor = null; loadOwnerTools(); }
+  if (id === 'admin' && Account.user && !Account.user.admin) { Account.user.staff = true; adminFor = null; loadAdmin(); if (window.AdminPanel) AdminPanel.account(); }
+}
 function loadOwnerTools() {
   if (!Account.signedIn || !Account.session || toolsFor === Account.session || window.Recorder) return;
   toolsFor = Account.session;
@@ -2586,7 +2591,7 @@ function loadOwnerTools() {
 // handing it over (admin/panel.js; everyone else gets a 404). The panel adds its own button + screen.
 let adminFor = null;
 function loadAdmin() {
-  if (!Account.signedIn || !Account.user.admin || !Account.session || adminFor === Account.session || window.AdminPanel) return;
+  if (!Account.signedIn || !(Account.user.admin || Account.user.staff) || !Account.session || adminFor === Account.session || window.AdminPanel) return;   // (staff: the Admin title - the server checks every request)
   adminFor = Account.session;
   fetch((Account.base || '') + '/api/tools/admin', { headers: { Authorization: 'Bearer ' + Account.session }, cache: 'no-store' })
     .then(r => (r.ok ? r.text() : null))

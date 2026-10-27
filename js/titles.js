@@ -32,6 +32,10 @@ const MILE = 1609.344;
 const distGoal = (km, mi) => Math.min(km * 1000, mi * MILE);
 const TITLES = [
   { id: 'owner',       name: 'Owner',                  rarity: 'divine',    how: 'grant', desc: 'Made PolyWeave' },
+  // (having Admin opens the admin panel; what an admin does there goes to PolyWeave to accept or decline - server.js)
+  { id: 'admin',       name: 'Admin',                  rarity: 'divine',    how: 'grant', desc: 'A PolyWeave admin' },
+  // (having Content Creator unlocks the video recorder: F9 saves the last minute, F10 opens the editor - server.js)
+  { id: 'creator',     name: 'Content Creator',        rarity: 'divine',    how: 'grant', desc: 'Makes PolyWeave videos' },
   { id: 'bughunter',   name: 'Bug Hunter',             rarity: 'legendary', how: 'grant', show: true, desc: 'First to report a new bug (it has to be an original find)' },
   { id: 'alpha',       name: 'Alpha Tester',           rarity: 'exotic',    how: 'grant', desc: 'Played PolyWeave during the alpha' },
   { id: 'beta',        name: 'Beta Tester',            rarity: 'epic',      how: 'grant', desc: 'Played PolyWeave during the beta' },

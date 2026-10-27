@@ -495,12 +495,17 @@
           </div>
           <div id="frMsg" class="frMsg"></div>
           <div id="frRequests"></div>
+          <!-- group chats (js/social.js): + NEW makes one from your friends -->
+          <div class="frHead grHead">Group chats <button id="grNew">+ NEW</button></div>
+          <div id="grNewBox" class="grNewBox hidden"></div>
+          <div id="grList"></div>
           <div class="frHead">Friends</div>
           <div id="frList"></div>
           <div class="frSettings">
             <label class="chk"><input type="checkbox" id="frAllow"> Allow friend requests</label>
             <label class="chk"><input type="checkbox" id="frHide"> Hide my activity</label>
             <label class="chk"><input type="checkbox" id="frPopups"> Message pop-ups</label>
+            <label class="chk"><input type="checkbox" id="frNoGroups"> Don't let people add me to group chats</label>
           </div>
           <!-- invite friends: same as on your profile -->
           <div id="frRef" class="profRef hidden">
