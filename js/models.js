@@ -616,6 +616,156 @@ CATALOG.m4 = () => {
   };
 };
 
+// --------- Nissan Silvia S15 (the owners' drift car: js/drift.js) ---------
+// Built like the M4: a loftBody shell with the details set flush into it. Real proportions (4.445 m long,
+// 1.695 m wide, 1.285 m tall, 2.525 m wheelbase), dropped ~3 cm on drift wheels. Signature parts: the swept
+// headlights wrapping up over the front corners (laid ON the body surface, not stuck on), the wide centre
+// mouth, the long tail lights across the rear corners, the trunk wing, one big exhaust.
+const S15_MIRROR = Object.assign({}, M4_MIRROR, { x: 0.875, y: 0.905, z: -0.70, yaw: 0.08 });
+CATALOG.s15 = () => {
+  const L = 4.445, h = L / 2, W = 0.8475, aF = 1.3425, aR = -1.1825, r = 0.32;
+  const sp = {
+    L, W, r, axles: [aF, aR], crown: 0.05, midK: 0.40, shoulder: 0.962,
+    top: [[h, 0.52], [h - 0.05, 0.60], [2.05, 0.665], [1.75, 0.70], [1.3, 0.745], [0.92, 0.80], [0.70, 0.90], [0.35, 1.08], [0.05, 1.235], [-0.30, 1.268], [-0.72, 1.245],
+      [-1.05, 1.15], [-1.35, 1.04], [-1.58, 0.985], [-1.9, 0.975], [-2.12, 0.975], [-2.18, 0.955], [-h, 0.90]],
+    belt: [[h, 0.48], [2.05, 0.62], [1.6, 0.73], [0.92, 0.80], [0.3, 0.83], [-0.6, 0.86], [-1.3, 0.895], [-1.9, 0.905], [-2.15, 0.87], [-h, 0.82]],
+    bot: [[h, 0.16], [2.05, 0.115], [1.7, 0.12], [-1.7, 0.13], [-2.0, 0.18], [-h, 0.26]],
+    low: [[h, 0.20], [2.0, 0.19], [1.0, 0.205], [-1.0, 0.205], [-2.0, 0.26], [-h, 0.31]],
+    hw: [[h, 0.70], [h - 0.04, 0.82], [2.05, 0.915], [1.85, 0.965], [1.55, 0.995], [1.34, 1.0], [0.9, 0.985], [0.2, 0.975], [-0.6, 0.98], [-1.0, 0.995], [-1.2, 1.0],
+      [-1.75, 0.99], [-2.0, 0.955], [-2.15, 0.91], [-h, 0.84]],
+    roofIn: [[h, 0.80], [1.2, 0.84], [0.85, 0.83], [0.4, 0.77], [0.0, 0.73], [-0.6, 0.72], [-1.05, 0.745], [-1.4, 0.80], [-1.65, 0.86], [-h, 0.87]],
+    gTop: [[0.88, 0.07], [-0.80, -1.54]],
+    gSide: [[-1.02, 0.80]], bPillar: [[-0.36, -0.30]], extraSt: [-0.36, -0.30],
+  };
+  const gb = new GB();
+  const F = loftBody(gb, sp);
+  const ov = { ind: [], brake: [] };
+  const zf = -h, zr = h;
+  // ---- points ON the body surface (same cross-section as loftBody): t runs round the section 0 (belly
+  //      middle) .. 8 (roof middle); used to lay lights and panels flush on the shell ----
+  const AR = r + 0.075;
+  const ring = f => {
+    const Wf = W * F.hw(f), yb = F.bot(f), yt = F.top(f), ybl = Math.min(F.belt(f), yt - 0.015);
+    let yl = F.low(f);
+    for (const fw of sp.axles) { const dz = Math.abs(f - fw); if (dz < AR) yl = Math.max(yl, r + Math.sqrt(AR * AR - dz * dz) * 0.97); }
+    yl = Math.min(yl, ybl - 0.05);
+    const ym = yl + (ybl - yl) * sp.midK, ri = F.ri(f), ce = sp.crown, y5 = Math.max(yt - ce, ybl + 0.01), y6 = Math.max(y5 + 0.004, yt - ce * 0.62);
+    return [[0, yb], [Wf * 0.86, yb], [Wf * 0.975, yl], [Wf, ym], [Wf * sp.shoulder, ybl], [Wf * ri, y5], [Wf * ri * 0.9, y6], [Wf * ri * 0.5, yt - ce * 0.2], [0, yt]];
+  };
+  const onSurf = (f, t, lift = 0.004) => {                 // [x, y] on the right side at station f, raised `lift` off the paint
+    const R = ring(f), k = U.clamp(Math.floor(t), 0, 7), u = t - k, a = R[k], b = R[k + 1];
+    const x = a[0] + (b[0] - a[0]) * u, y = a[1] + (b[1] - a[1]) * u, nx = b[1] - a[1], ny = -(b[0] - a[0]), nl = Math.hypot(nx, ny) || 1;
+    return [x + nx / nl * lift, y + ny / nl * lift];
+  };
+  // a patch on the surface: stations f0..f1 (n steps), section param from t0(f) to t1(f) (m steps, so it bends
+  // with the shell instead of cutting corners under the paint); both sides
+  const patch = (f0, f1, t0, t1, slot, lift = 0.004, n = 6, m = 4) => {
+    for (let i = 0; i < n; i++) for (let j = 0; j < m; j++) {
+      const fa = f0 + (f1 - f0) * i / n, fb = f0 + (f1 - f0) * (i + 1) / n;
+      const ta = f => t0(f) + (t1(f) - t0(f)) * j / m, tb = f => t0(f) + (t1(f) - t0(f)) * (j + 1) / m;
+      const p = onSurf(fa, ta(fa), lift), q = onSurf(fa, tb(fa), lift), s = onSurf(fb, tb(fb), lift), o = onSurf(fb, ta(fb), lift);
+      for (const sg of [1, -1]) {
+        const A = [sg * p[0], p[1], -fa], B = [sg * q[0], q[1], -fa], C = [sg * s[0], s[1], -fb], D = [sg * o[0], o[1], -fb];
+        if ((sg > 0) === (f1 < f0)) gb.quad(A, B, C, D, slot); else gb.quad(A, D, C, B, slot);
+      }
+    }
+  };
+  // --- headlights: swept lenses lying on the sloping nose, wide at the front, tapering back up the wing
+  //     (dark surround, then the lens; amber at the outer front corner) ---
+  patch(2.205, 1.86, f => 4.30 + (2.205 - f) * 0.9, f => 6.45 - (2.205 - f) * 4.2, SLOT.DARK, 0.004, 6, 5);
+  patch(2.19, 1.89, f => 4.40 + (2.19 - f) * 0.9, f => 6.30 - (2.19 - f) * 4.2, SLOT.HEAD, 0.009, 6, 5);
+  patch(2.19, 2.07, f => 4.40 + (2.19 - f) * 0.9, f => 4.85 + (2.19 - f) * 0.9, SLOT.AMBER, 0.013, 2, 2);
+  // --- front bumper: the wide centre mouth, small side openings + fog lamps, splitter ---
+  const mouth = new THREE.Shape();
+  mouth.moveTo(-0.36, -0.085); mouth.lineTo(0.36, -0.085); mouth.quadraticCurveTo(0.42, -0.085, 0.43, -0.03); mouth.lineTo(0.40, 0.07);
+  mouth.quadraticCurveTo(0.39, 0.095, 0.35, 0.095); mouth.lineTo(-0.35, 0.095); mouth.quadraticCurveTo(-0.39, 0.095, -0.40, 0.07); mouth.lineTo(-0.43, -0.03);
+  mouth.quadraticCurveTo(-0.42, -0.085, -0.36, -0.085);
+  gb.geom(new THREE.ExtrudeGeometry(mouth, { depth: 0.03, bevelEnabled: false, curveSegments: 3 }), gb.xf(0, 0.33, zf - 0.006), SLOT.DARK);
+  for (let i = 0; i < 3; i++) gb.box(0, 0.30 + i * 0.05, zf - 0.04, 0.76, 0.012, 0.02, SLOT.TRIM);   // mesh bars
+  gb.box2(0.64, 0.30, zf + 0.07, 0.16, 0.07, 0.03, SLOT.DARK, 0, -0.42, 0);
+  gb.box2(0.64, 0.30, zf + 0.06, 0.10, 0.04, 0.03, SLOT.HEAD, 0, -0.42, 0);                         // fog lamps
+  gb.box(0, 0.125, zf + 0.06, 1.52, 0.022, 0.14, SLOT.CARBON);                                       // splitter lip
+  gb.box(0, 0.47, zf - 0.006, 0.18, 0.05, 0.02, SLOT.DARK);                                          // small upper grille slot
+  gb.box(0, 0.47, zf - 0.02, 0.05, 0.035, 0.01, SLOT.CHROME);                                        // badge
+  // --- hood: a flush vent pair (drift-car carbon) ---
+  for (const sg of [1, -1]) { const f = 1.55, y = F.top(f); gb.box(sg * 0.24, y + 0.003, -f, 0.22, 0.01, 0.30, SLOT.CARBON, -0.08, 0, 0); }
+  // --- sides: door seam + handle (flush), side skirts, front fender vent ---
+  for (const f of [0.86, -0.92]) {
+    const R = ring(f), x = R[3][0] * 0.999, y0 = R[2][1] + 0.06, y1 = R[4][1] - 0.03;
+    gb.box2(x, (y0 + y1) / 2, -f, 0.01, y1 - y0, 0.01, SLOT.DARK);
+  }
+  { const p = onSurf(-0.55, 3.8, 0.006); gb.box2(p[0], p[1], 0.55, 0.012, 0.022, 0.14, SLOT.TRIM); }
+  gb.box2(W * 0.955, 0.17, -(aF + aR) / 2, 0.05, 0.1, (aF - aR) - 2 * (r + 0.13), SLOT.TRIM);
+  { const p = onSurf(0.98, 3.3, 0.004); gb.box2(p[0], p[1], -0.98, 0.012, 0.05, 0.16, SLOT.DARK); }
+  // --- mirrors (shaped heads like the M4's, on a short arm from the door) ---
+  for (const sg of [-1, 1]) {
+    const M = S15_MIRROR, at = gb.xf(sg * M.x, M.y, M.z, 0, sg * M.yaw, 0);
+    gb.geom(m4MirrorHousing(sg), at, SLOT.PAINT);
+    gb.geom(new THREE.ShapeGeometry(m4MirrorOutline(sg, 0.92)), gb.xf(sg * M.x, M.y, M.z, 0, sg * M.yaw, 0).multiply(new THREE.Matrix4().makeTranslation(0, 0, M.depth + 0.001)), SLOT.DARK);
+    // arm: from the door top (just under the window) out to the head
+    const R = ring(-M.z), base = [R[4][0] * 0.985, R[4][1] + 0.005];
+    const hx = sg * (M.x - M.w * 0.32), dx = hx - sg * base[0], dy = M.y - 0.02 - base[1];
+    gb.box((hx + sg * base[0]) / 2, (M.y - 0.02 + base[1]) / 2, M.z + 0.045, Math.hypot(dx, dy) + 0.03, 0.025, 0.06, SLOT.TRIM, 0, 0, Math.atan2(dy, dx));
+    gb.box(sg * base[0], base[1], M.z + 0.04, 0.03, 0.03, 0.11, SLOT.TRIM);                           // foot on the door
+  }
+  // --- rear: long tail lights across the corners (laid on the surface), trunk wing, bumper, exhaust ---
+  patch(-2.02, -h + 0.004, f => 3.3, f => 4.6, SLOT.TAIL, 0.005, 3, 3);                              // wrap round the corners
+  for (const sg of [1, -1]) {
+    gb.box(sg * 0.52, 0.83, zr + 0.002, 0.52, 0.10, 0.02, SLOT.TAIL);                                // across the back
+    gb.box(sg * 0.42, 0.83, zr + 0.009, 0.12, 0.05, 0.01, SLOT.DARK);
+    gb.cyl(sg * 0.66, 0.83, zr + 0.01, 0.034, 0.034, 0.01, 10, SLOT.WHITE, Math.PI / 2);              // round reverse lamp
+  }
+  ov.brake.push([0.53, 0.83, zr + 0.006, 0.47, 0.09, 0.03, 0]);
+  ov.third = [0, 1.11, zr - 0.62, 0.32, 0.02, 0.05];
+  gb.box(0, 0.60, zr + 0.003, 0.50, 0.12, 0.02, SLOT.PLATE);
+  gb.box(0, 0.60, zr - 0.004, 0.56, 0.16, 0.02, SLOT.TRIM);
+  gb.box(0, 0.25, zr - 0.04, 1.42, 0.12, 0.12, SLOT.TRIM);                                           // lower bumper
+  gb.box(0, 0.19, zr - 0.02, 0.9, 0.05, 0.14, SLOT.CARBON);                                          // diffuser lip
+  gb.cyl(-0.50, 0.24, zr + 0.02, 0.058, 0.058, 0.16, 12, SLOT.CHROME, Math.PI / 2);                   // one big exhaust
+  gb.cyl(-0.50, 0.24, zr + 0.10, 0.046, 0.046, 0.02, 12, SLOT.DARK, Math.PI / 2);
+  // wing: a blade on two stands at the back of the trunk lid
+  { const f = -2.0, y = F.top(f);
+    for (const sg of [1, -1]) gb.box(sg * 0.5, y + 0.07, -f, 0.025, 0.14, 0.12, SLOT.TRIM, -0.12, 0, 0);
+    gb.box(0, y + 0.15, -f + 0.02, 1.36, 0.022, 0.24, SLOT.PAINT, 0.1, 0, 0);
+    gb.box2(0.69, y + 0.13, -f + 0.02, 0.012, 0.09, 0.26, SLOT.TRIM); }
+  gb.box(0, 1.27, 0.55, 0.035, 0.03, 0.12, SLOT.TRIM);                                               // roof antenna base
+  // indicators (in the headlight corner + tail)
+  ov.ind.push([0.70, 0.62, zf + 0.10, 0.08, 0.04, 0.08, -0.5], [0.75, 0.80, zr - 0.10, 0.08, 0.05, 0.08, 0.5]);
+  // --- brakes: calipers + discs ---
+  const tx = 0.74;
+  for (const f of [aF, aR]) for (const sg of [1, -1]) {
+    gb.cyl(sg * (tx + 0.03), r, -f, 0.2, 0.2, 0.03, 16, SLOT.METAL, 0, 0, Math.PI / 2);
+    gb.box(sg * (tx + 0.06), r + 0.09, -f + (f > 0 ? 0.08 : -0.08), 0.06, 0.13, 0.18, SLOT.CALIPER, f > 0 ? 0.5 : -0.5, 0, 0);
+  }
+  // --- interior seen through the glass (bucket seats, roll cage hoop, dash) ---
+  const ib = new GB();
+  ib.box(0, 0.80, -0.66, 1.46, 0.16, 0.30, SLOT.INT, 0.18, 0, 0);
+  ib.box(0, 0.74, -0.52, 1.46, 0.10, 0.2, SLOT.INT);
+  ib.box(0, 0.56, -0.2, 0.22, 0.22, 0.8, SLOT.INT);
+  ib.box(-0.36, 0.89, -0.60, 0.28, 0.10, 0.02, SLOT.SCREEN, -0.25, 0, 0);
+  for (const sg of [-1, 1]) {
+    ib.box(sg * 0.36, 0.40, 0.22, 0.46, 0.13, 0.5, SLOT.INT);
+    ib.box(sg * 0.36, 0.76, 0.50, 0.46, 0.68, 0.12, SLOT.INT, -0.16, 0, 0);
+    ib.box(sg * 0.36, 1.08, 0.56, 0.24, 0.14, 0.1, SLOT.INT, -0.16, 0, 0);
+    ib.box(sg * 0.79, 0.74, -0.05, 0.05, 0.08, 1.1, SLOT.TRIM);
+    ib.box(sg * 0.58, 0.82, 0.78, 0.04, 0.7, 0.04, SLOT.METAL);                                       // cage hoop sides
+  }
+  ib.box(0, 1.16, 0.78, 1.2, 0.04, 0.04, SLOT.METAL);
+  const sw = new GB();                                                                                // deep-dish suede wheel
+  sw.geom(new THREE.TorusGeometry(0.175, 0.024, 6, 20), sw.xf(0, 0, -0.03), SLOT.INT);
+  for (const a of [0, Math.PI, -Math.PI / 2]) sw.box(Math.cos(a) * 0.09, Math.sin(a) * 0.09, -0.015, a === -Math.PI / 2 ? 0.03 : 0.17, a === -Math.PI / 2 ? 0.17 : 0.03, 0.025, SLOT.INT);
+  sw.box(0, 0, 0, 0.09, 0.07, 0.05, SLOT.INT);
+  sw.box(0, 0.173, -0.03, 0.022, 0.012, 0.05, SLOT.CALIPER);
+  return {
+    key: 's15', body: gb.build(), interior: ib.build(), wheelSW: sw.build(),
+    wheel: wheelGeometry(r, 0.255, 'five'), tw: 0.255,
+    wheels: [{ x: tx, f: aF, side: 1, front: true }, { x: -tx, f: aF, side: -1, front: true }, { x: tx, f: aR, side: 1 }, { x: -tx, f: aR, side: -1 }],
+    r, L, W, front: h, rear: -h,
+    indL: overlayGeom(ov.ind, -1), indR: overlayGeom(ov.ind, 1), brake: overlayGeom([...ov.brake, ov.third], 0),
+    hull: SAT.hull(0.85, h, -h, 0.28, 0.22),
+  };
+};
+
 // --------- Imported low-poly M4 (assets/m4_lowpoly.js, made by tools/convert-m4.html) ---------
 // Uses the real car's shape; falls back to the hand-built M4 above if the file isn't present.
 const CATALOG_M4_BUILT = CATALOG.m4;

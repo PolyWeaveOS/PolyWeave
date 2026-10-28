@@ -211,6 +211,11 @@
         <svg viewBox="0 0 96 64"><g transform="translate(30 0)"><circle class="bg" cx="32" cy="32" r="31"/><circle class="fg" cx="32" cy="25" r="11"/><path class="fg" d="M13 53C15 43 23 39 32 39S49 43 51 53C46 59 39 63 32 63S18 59 13 53Z"/></g><g><circle class="bg2" cx="32" cy="32" r="31"/><circle class="fg" cx="32" cy="25" r="11"/><path class="fg" d="M13 53C15 43 23 39 32 39S49 43 51 53C46 59 39 63 32 63S18 59 13 53Z"/></g></svg>
         <b>MULTIPLAYER</b>
       </button>
+      <!-- drift track: the owners only for now (js/drifttrack.js) -->
+      <button class="card hidden" id="playDrift">
+        <svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><path class="fg" d="M18 44c-6-10-1-24 12-27 9-2 18 3 20 11l5-2-4 11-10-5 5-2c-2-5-8-8-14-6-9 2-12 12-8 19z"/><circle class="fg" cx="34" cy="40" r="6"/></svg>
+        <b>DRIFT TRACK</b>
+      </button>
       <!-- race mode: hidden for now
       <button class="card soon" disabled title="Race mode is coming soon">
         <svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><path class="fg" d="M22 14h3v38h-3z"/><path class="fg" d="M25 15h20l-4 6.5 4 6.5H25z"/></svg>
@@ -414,6 +419,12 @@
           <button data-cal="brake">Calibrate brake</button>
         </div>
         <div id="calMsg"></div>
+        <h2>Force feedback</h2>
+        <label class="chk"><input type="checkbox" id="ffbOn"> Force feedback / rumble</label>
+        <label>Strength <b id="ffbStrV"></b><input type="range" id="ffbStr" min="0" max="100"></label>
+        <label class="chk"><input type="checkbox" id="ffbInv"> Invert force</label>
+        <div class="btns"><button id="ffbConnect">Connect wheel</button><button id="ffbTest">Test force</button></div>
+        <div id="ffbStatus" class="sub small">Click "Connect wheel" and pick your wheel (once - it's remembered). Controllers rumble without connecting.</div>
         <h2>Wheel buttons <button id="padReset" class="mini">RESET</button></h2>
         <div class="sub small">Click an action, then press the button (or D-pad direction) on your wheel. The menu button works like Esc, and the menu keys let you move around the menus with just the wheel.</div>
         <div id="padBinds"></div>
@@ -622,7 +633,7 @@
   // Remove names from this list to take a vehicle out of traffic; with none loaded the old traffic returns.
   const VEHICLES = ['camry', 'civic', 'model3', 'golf', 'mini', 'mustang', 'p911', 'prius', 'charger', 'gtr',
     'rav4', 'wrangler', 'tahoe', 'f150', 'transit', 'odyssey', 'vwbus', 'boxtruck', 'cascadia'];
-  const files = ['js/platform', 'js/core','js/zones', 'js/models', 'js/playercars', 'js/bike', 'js/lowpoly', 'js/toykit', ...VEHICLES.map(k => 'js/vehicles/' + k), 'js/world', 'js/physics', 'js/traffic', 'js/input', 'js/titles', 'js/hud', 'js/netcodec', 'js/net', 'js/account', 'js/tracks', 'js/f1', 'js/race', 'js/main', 'js/garage', 'js/social', 'js/event', 'js/updates', 'js/dropdown', 'js/touch', 'js/crazygames'];
+  const files = ['js/platform', 'js/core','js/zones', 'js/models', 'js/playercars', 'js/bike', 'js/lowpoly', 'js/toykit', ...VEHICLES.map(k => 'js/vehicles/' + k), 'js/world', 'js/physics', 'js/drift', 'js/traffic', 'js/input', 'js/titles', 'js/hud', 'js/netcodec', 'js/net', 'js/account', 'js/tracks', 'js/f1', 'js/race', 'js/main', 'js/drifttrack', 'js/ffb', 'js/garage', 'js/social', 'js/event', 'js/updates', 'js/dropdown', 'js/touch', 'js/crazygames'];
   for (const f of files) {
     const s = document.createElement('script');
     s.src = `${f}.js?v=${v}`; s.async = false;

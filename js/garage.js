@@ -148,6 +148,7 @@ const Garage = (() => {
     const c = cfg();
     const onBus = !f1 && Settings.vehicle === 'van' && canVan();   // (driving the Bang Bus: its own paint, nothing to set up)
     for (const b of cars.children) b.classList.toggle('sel', b === bus ? onBus : !onBus && b.dataset.k === carKey);
+    for (const b of cars.children) if (b.dataset.k && PLAYER_CARS[b.dataset.k].owners) b.classList.toggle('hidden', !canBike());   // (the owners' drift car)
     bus.classList.toggle('locked', !canVan());
     bus.title = canVan() ? 'The Bang Bus' : 'Locked: finish the Bang Bus quests to unlock it';
     for (const b of tyres.children) b.classList.toggle('sel', b.dataset.k === f1Cfg().tyre);
@@ -168,8 +169,10 @@ const Garage = (() => {
     scr.querySelector('.gF1Pat').classList.toggle('hidden', !f1);
     $('gColLabel').textContent = f1 ? 'Colour 1' : 'Colour';
     for (const b of pats.children) b.classList.toggle('sel', b.dataset.k === f1Cfg().pattern);
-    note.textContent = onBus ? 'Just for fun: the Bang Bus gives no leaderboard points and no proxy bonus (and nobody gets proxy from it). It comes in its own paint.' : '';
-    note.classList.toggle('gBusNote', onBus);
+    const onDrift = !f1 && !onBus && carKey === 's15';
+    note.textContent = onBus ? 'Just for fun: the Bang Bus gives no leaderboard points and no proxy bonus (and nobody gets proxy from it). It comes in its own paint.'
+      : onDrift ? `Drift car (owners only): throttle + a turn kicks the rear out. While drifting, the throttle sets the angle and steering sets the line; steer the other way (on the throttle or off it) to swing into a drift the other way; let go of everything to straighten up. Just for fun: no leaderboard points.` : '';
+    note.classList.toggle('gBusNote', onBus || onDrift);
     if (!racing) scr.querySelector('.gCustomize').classList.toggle('hidden', onBus);
     for (const m of marks) m();
     pick.value = c.color; pick2.value = f1Cfg().accent;

@@ -119,6 +119,7 @@ else { swTilt.position.set(-0.37, 0.90, -0.40); swTilt.rotation.x = 0.36; }
 const swMesh = new THREE.Mesh(playerVis.M.wheelSW, importedM4 ? playerVis.body.material : playerVis.mats);
 swTilt.add(swMesh); playerVis.root.add(swTilt);
 scene.add(playerRoot);
+DriftFx.init(scene);                                   // (the drift car's tyre smoke + skid marks - js/drift.js)
 
 // ---------- first-person cockpit (only drawn in the cockpit camera) ----------
 // Low-poly interior in the game's style (flat-shaded, few sides): a faceted dash with the gauge cluster set
@@ -256,7 +257,7 @@ const MIRRORS = (() => {
   let gT = 0;
   const drawGauge = dt => {
     if ((gT -= dt) > 0) return; gT = 0.08;
-    const g = gauge.getContext('2d'), mph = Settings.units !== 'kmh', spd = Math.round(Math.abs(car.u) * (mph ? 2.23694 : 3.6)), rpm = U.clamp(car.rpm / M4.redline, 0, 1);
+    const g = gauge.getContext('2d'), mph = Settings.units !== 'kmh', spd = Math.round(Math.abs(car.u) * (mph ? 2.23694 : 3.6)), rpm = U.clamp(car.rpm / (car.drift ? DRIFT.redline : M4.redline), 0, 1);
     g.fillStyle = '#0b0e13'; g.fillRect(0, 0, 512, 176);
     g.fillStyle = 'rgba(255,255,255,.07)'; g.fillRect(28, 140, 456, 10);
     const rg = g.createLinearGradient(28, 0, 484, 0); rg.addColorStop(0, '#3aa0ff'); rg.addColorStop(0.75, '#7fd0ff'); rg.addColorStop(0.9, '#ff4d4d');
@@ -327,8 +328,8 @@ function setVehicle(v) {
   Net.setVehicle(van && vehicle === 'car' ? 'van' : vehicle);   // (the van drives as a car; others see the van)
   // the motorcycle and the Bang Bus are just for fun: no personal bests, leaderboards, runs or stats (a streak with
   // any of it on them counts for nothing, even after switching back to the car)
-  const fun = bike || van, was = score.funOnly; score.funOnly = fun;
-  if (fun) { if (score.score >= 1) score.fun = true; if (!was && game.mode !== 'menu') hud.message((bike ? 'MOTORCYCLE' : 'BANG BUS') + ' · JUST FOR FUN, NO STATS'); }
+  const fun = bike || van || carKey === 's15', was = score.funOnly; score.funOnly = fun;
+  if (fun) { if (score.score >= 1) score.fun = true; if (!was && game.mode !== 'menu') hud.message((bike ? 'MOTORCYCLE' : van ? 'BANG BUS' : 'DRIFT CAR') + ' · JUST FOR FUN, NO STATS'); }
   const row = document.getElementById('vehRow'); if (row) row.classList.toggle('hidden', !canBike());
   showVan(van);
   if ((typeof Race !== 'undefined' && Race.active) || (typeof Garage !== 'undefined' && Garage.f1Preview)) showF1(true);   // (racing / the Garage showing the F1: still the F1 car)
@@ -743,21 +744,28 @@ function applyCarCfg() {
 }
 function installCar(key) {
   if (!PLAYER_CARS[key]) key = 'm4';
+  const asked = key;
+  if (PLAYER_CARS[key].owners && !canBike()) key = 'm4';   // (the owners' drift car: only on their accounts - it comes back when they sign in)
   const old = CAR_PARTS[carKey], P = carParts(key), C = PLAYER_CARS[key];
   if (old !== P) {
     playerVis.root.remove(old.body, old.brake, old.indL, old.indR, ...old.wheels.map(w => w.pivot));
     playerVis.root.add(P.body, P.brake, P.indL, P.indR, ...P.wheels.map(w => w.pivot));
     Object.assign(playerVis, { body: P.body, wheels: P.wheels, brake: P.brake, indL: P.indL, indR: P.indR, M: P.M });
   }
-  carKey = Settings.car = key;
+  carKey = key; Settings.car = asked;
   // where the driver sits: cabin seen through the glass, steering column, first-person cockpit, door mirrors
   interior.geometry = P.M.interior; swMesh.geometry = P.M.wheelSW;
   if (!P.M.swCenter) { swTilt.position.y = C.sw.y; swTilt.position.z = -C.sw.f; swTilt.rotation.x = C.sw.rx; }
-  const off = { x: 0, y: C.cockpit.dy, z: -C.cockpit.df };
-  cockpit.position.set(off.x, off.y, off.z);
-  MIRRORS.setMount(C.mirror, off); MIRRORS.setSide(Settings.rhd);
+  const off = { x: 0, y: C.cockpit.dy, z: -C.cockpit.df }, sx = C.cockpit.sx || 1;
+  cockpit.position.set(off.x, off.y, off.z); cockpit.scale.x = sx;   // (a narrower car: the cockpit is narrower too)
+  { const rim = cockpitWheel.children[0] && cockpitWheel.children[0].material;   // (the M stripe on the wheel is the BMW's only)
+    if (rim) { rim.vertexColors = key === 'm4'; rim.color.set(key === 'm4' ? 0xffffff : 0x16181c); rim.needsUpdate = true; } }
+  MIRRORS.setMount(sx !== 1 ? Object.assign({}, C.mirror, { x: C.mirror.x / sx }) : C.mirror, off); MIRRORS.setSide(Settings.rhd);
   applyCarCfg(); saveSettings();
   if (typeof Net !== 'undefined' && Net.setModel) Net.setModel(key);
+  // the drift car is just for fun, like the motorcycle and the Bang Bus: no leaderboards, runs or stats
+  const fun = vehicle === 'bike' || vanOn || carKey === 's15';
+  if (score.funOnly !== fun) { score.funOnly = fun; if (fun && score.score >= 1) score.fun = true; }
 }
 // (older saves: the paint picked in Settings becomes the M4's paint)
 if (!Settings.cars) Settings.cars = { m4: { color: Settings.color } };
@@ -804,6 +812,7 @@ function resetCar() {
 }
 
 let zoneHit = false, railHit = false, lastGoodS = 40;
+let ffbHit = 0, ffbRough = 0;   // (this frame's knock and rough ground, for force feedback - js/ffb.js)
 // guard-rail contact for the player (rigid wall, per physics substep)
 // Walls the car can hit at road position s: the two guard rails, plus the barrier line of any
 // construction zone (only while the car is on the open side of it). On the loop circuit the right
@@ -911,6 +920,7 @@ async function syncBest(mode) {
   } catch (e) { /* offline: keep the saved one */ }
 }
 function enterServer(slot, room) {
+  DriftTrack.exit();
   score.useBest('mp'); syncBest('mp');                 // (multiplayer has its own personal best)
   ROAD.setLoop(true); ZONES.setLoop(ROAD.loop.L);
   setWorld(room && room.theme, room && room.tod);     // the server's world type and time of day
@@ -1249,7 +1259,11 @@ function renderAccount() {
 Account.onChange = () => {
   acctMsg = ''; renderAccount(); syncBest(game.mode === 'mp' ? 'mp' : 'sp'); loadOwnerTools(); loadAdmin();
   if (window.AdminPanel) AdminPanel.account();          // (signed out / another account: the admin button goes)
+  const wantCar = PLAYER_CARS[Settings.car] ? Settings.car : 'm4';
+  if (wantCar !== carKey || (PLAYER_CARS[carKey].owners && !canBike())) installCar(wantCar);   // (the owners' drift car: back once they're signed in, gone when not)
   setVehicle(Settings.vehicle);                        // (the motorcycle only for its accounts; anyone else is in the car)
+  if (typeof Garage !== 'undefined') Garage.refresh();
+  $id('playDrift').classList.toggle('hidden', !canBike());   // (Play > Drift track: the owners only for now)
   if (game.mode === 'sp' && game.scored && !spToken) fetchSpToken();   // (signed in during a scored run: the next one counts)
   if (Account.ready) Welcome.update();
 };
@@ -1309,7 +1323,9 @@ $id('acctNameLater').onclick = () => show('scrTitle');
 // ---------- singleplayer ----------
 $id('spScored').onclick = () => startSingle(true);
 $id('spFree').onclick = () => startSingle(false);
+$id('playDrift').onclick = () => { if (typeof DriftTrack !== 'undefined') DriftTrack.enter('minami'); };
 function startSingle(scored) {
+  DriftTrack.exit();
   score.reset();                                       // (ends anything left over first)
   game.mode = 'sp'; game.scored = scored; game.density = scored ? SCORED_DENSITY : Settings.density;
   setWorld(Settings.world, Settings.tod);              // the world type / time of day picked on the singleplayer screen
@@ -1383,7 +1399,7 @@ addEventListener('pageshow', e => {
 function quitToTitle() {
   if (game.mode === 'mp' || (game.mode === 'race' && Net.active())) { quitting = true; Net.leave(); quitting = false; }   // (onLeft puts the endless road back)
   else score.reset();
-  Race.exit();
+  Race.exit(); DriftTrack.exit();
   game.mode = 'menu'; game.scored = false; game.density = SCORED_DENSITY;
   setWorld(Settings.world, Settings.tod);              // (the title screen shows your chosen world again)
   startPosition(); score.reset();
@@ -1785,6 +1801,7 @@ for (const t of Tracks.TRACKS) {
   trackThumb(row.querySelector('canvas'), t.id);
 }
 function startTimeTrial(track) {
+  DriftTrack.exit();
   if (Net.active()) { quitting = true; Net.leave(); quitting = false; }
   score.reset();
   game.mode = 'race'; game.scored = false; game.density = 0;
@@ -1991,7 +2008,7 @@ function mmStartShapes(lap) {
   return { pad, off, on };
 }
 function drawMinimap(dt) {
-  const on = (game.mode === 'mp' || game.mode === 'race') && !menuOpen && (Settings.minimap || bigMap);
+  const on = (game.mode === 'mp' || game.mode === 'race' || game.mode === 'drift') && !menuOpen && (Settings.minimap || bigMap);
   if (mm.classList.contains('hidden') === on) mm.classList.toggle('hidden', !on);
   if (!on || (mmT -= dt) > 0) return;
   mmT = bigMap ? 0.12 : 0.08;
@@ -2000,7 +2017,7 @@ function drawMinimap(dt) {
   const g = mmc, W = size;
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, W, W);
-  if (Race.active) { Race.drawMap(g, W); return; }     // (racing: the whole track, everyone on it)
+  if (Race.active || DriftTrack.active) { Race.drawMap(g, W); return; }     // (racing / the drift track: the whole track)
   g.lineJoin = g.lineCap = 'round';
   const line = (pts, map, w, col) => { g.beginPath(); pts.forEach((p, i) => { const q = map(p.x ?? p[0], p.z ?? p[1]); i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]); }); g.lineWidth = w; g.strokeStyle = col; g.stroke(); };
   const lap = ROAD.near(0, car.s), start = mmStartShapes(lap);
@@ -2068,6 +2085,7 @@ function drawMinimap(dt) {
 // what's on the pause screen
 function updatePause() {
   const r = Net.room;
+  if (game.mode === 'drift') { const t = Tracks.DRIFT_BY_ID[DriftTrack.id]; $id('pauseMode').textContent = `Drift track · ${t ? t.name : ''}`; return; }
   if (game.mode === 'race') {
     const t = Tracks.TRACK_BY_ID[Race.track];
     $id('pauseMode').textContent = `Racing · ${t ? t.name : ''} · ` + (Race.kind === 'tt' ? 'Time trial' : r && r.race && r.race.queue ? 'Queue' : (r ? r.name : 'Race'));
@@ -2091,7 +2109,7 @@ function openMenu(id = 'scrPause') {
 function closeMenu() {
   menuOpen = false; menu.classList.add('hidden'); document.getElementById('hud').classList.remove('hidden');
   $id('hint').textContent = hintText();
-  hud.trafficLabel = game.mode === 'race' ? (Race.kind === 'tt' ? 'TIME TRIAL' : 'RACE') : game.scored ? 'SCORED' : 'FREE DRIVE';   // (just which kind of run, above the speedo)
+  hud.trafficLabel = game.mode === 'drift' ? 'DRIFT TRACK' : game.mode === 'race' ? (Race.kind === 'tt' ? 'TIME TRIAL' : 'RACE') : game.scored ? 'SCORED' : 'FREE DRIVE';   // (just which kind of run, above the speedo)
   sound.init(); sound.suspend(false);
   started = true; last = performance.now();
 }
@@ -2129,7 +2147,12 @@ function updatePlayerVisual(dt) {
   playerVis.root.rotation.x = level ? 0 : bm.pitch;
   playerVis.root.rotation.z = level ? 0 : bm.roll;
   animateWheels(playerVis, car.u * dt, car.steer);
-  swMesh.rotation.z = -car.steer * M4.ratio / Settings.sens;
+  if (car.drift) for (const w of playerVis.wheels) if (!w.front) {   // (spinning / locked rear tyres turn faster / slower than the road)
+    w.xs = ((w.xs || 0) - ((car.wr || 0) * DRIFT.rw - car.u) * dt / playerVis.M.r) % (Math.PI * 2);
+    w.mesh.rotation.x += w.xs * w.spinSign;
+  }
+  DriftFx.update(dt, car, playerVis);
+  swMesh.rotation.z = car.drift ? -car.steer * DRIFT.ratio / Settings.sens : -car.steer * M4.ratio / Settings.sens;   // (drift car: its own 10:1 rack)
   // cockpit camera: the detailed interior + mirrors replace the simple one (which is only seen through the glass)
   const inCockpit = camMode === 1 && !menuOpen;
   const bike = vehicle === 'bike';
@@ -2398,6 +2421,8 @@ function driveStep(dt, ctl, paused) {
   const n = Math.max(1, Math.ceil(dt / SUB)), h = dt / n;
   // (racing: no lane assist of any kind; menu open on a server: the coasting car keeps its lane)
   const steerSet = Race.active ? RACE_STEER() : paused ? Object.assign({}, Settings, { assist: 1, laneCentre: true }) : Settings;
+  // the owners' drift car: its own tyre physics (js/drift.js); everything else drives as always
+  car.drift = carKey === 's15' && vehicle === 'car' && !vanOn && !Race.active && canBike() ? DRIFT : null;
   let wallHit = 0;
   ROAD.hintS = car.s;      // (loop circuit: road lookups pick the lap you're on)
   const held = Race.active && Race.frozen;               // (racing: on the grid until the lights go out)
@@ -2426,15 +2451,29 @@ function driveStep(dt, ctl, paused) {
     if (bump > 4) Race.onBump(bump, Net.lastBumpId);     // (a hard hit on the car in front: causing a collision)
     if (wallHit > 2) sound.thump(0.2 + wallHit / 14);
     zoneHit = false; railHit = false;
+    ffbHit = Math.max(bump, wallHit);
     // off the track: a gravel trap bogs the car down hard; grass / painted run-off holds you to about
     // 150 km/h (pulled down smoothly), so cutting a corner or running wide costs time
     const off = Math.abs(car.d) - (2 * ROAD.LW + Tracks.RUNOFF.kerb + 0.6);
+    ffbRough = Math.abs(car.d) > 2 * ROAD.LW ? (off > 0 ? 0.7 : 0.45) : 0;   // (force feedback: kerb, then run-off)
     if (off > 0 && Math.abs(car.u) > 1) {
       const grav = Tracks.gravelAt(ROAD.loop, car.s, car.d < 0 ? -1 : 1) && off > 2;
+      if (grav) ffbRough = 1;
       car.u *= Math.exp(-(grav ? 1.15 : 0.25 * OFF_SLOW) * dt);
       if (grav) car.v *= Math.exp(-2 * dt);
       else if (car.u > OFF_CAP) car.u -= (car.u - OFF_CAP) * (1 - Math.exp(-1.6 * OFF_SLOW * dt));
     }
+    if (!paused) playBeat(dt);
+    return;
+  }
+  // ---- the drift track: just you, the barriers and the grass (no traffic, no score) ----
+  if (DriftTrack.active) {
+    zoneHit = false; railHit = false;
+    if (wallHit > 2) sound.thump(0.2 + wallHit / 14);
+    ffbHit = wallHit;
+    const off = Math.abs(car.d) - (2 * ROAD.LW + Tracks.RUNOFF.kerb);   // (on the grass: rough, and it scrubs speed)
+    ffbRough = Math.abs(car.d) > 2 * ROAD.LW ? (off > 0 ? 0.75 : 0.45) : 0;
+    if (off > 0 && Math.abs(car.u) > 1) car.u *= Math.exp(-0.35 * dt);
     if (!paused) playBeat(dt);
     return;
   }
@@ -2458,6 +2497,8 @@ function driveStep(dt, ctl, paused) {
   if (impact > 1.5) car.hitT = 0.8;
   if (wallHit > 3.5 || zoneHit || railHit) crashEvent(Math.max(wallHit, 2));
   zoneHit = false; railHit = false;
+  ffbHit = Math.max(impact, bump, wallHit, coneHits ? 0.5 : 0);
+  ffbRough = Math.abs(car.d) > 2 * ROAD.LW + 0.15 ? (Math.abs(car.d) > 2 * ROAD.LW + 2.5 ? 0.8 : 0.4) : 0;   // (force feedback: shoulder, then off it)
   const kmh = Math.abs(car.u) * 3.6;
   const misses = traffic.nearMisses(proxy, kmh); // always run so pass tracking stays correct
   if (paused) { score.prox = 1; score.update(dt); return; }   // (no points while the menu is open)
@@ -2495,6 +2536,7 @@ function driveStep(dt, ctl, paused) {
     for (const c of traffic.cars) if (c.crashed && c.body) { c.body.z += sh; c.z += sh; }
     for (const c of world.clouds.children) c.position.z += sh;
     zoneProps.shift(sh);
+    DriftFx.shift(sh);
   }
 }
 
@@ -2522,6 +2564,7 @@ function frame(now) {
     } else if (Input.hit('Enter') && screen === 'scrPause') closeMenu();
     else if (!Input.padCap) PadNav.update(ctl);
     updatePadPanel();
+    if (typeof FFB !== 'undefined') FFB.stop();   // (menus: no forces on the wheel)
     // on a server the game doesn't stop behind the menu: your car keeps rolling with the shared traffic
     const rolling = game.mode === 'mp' || (game.mode === 'race' && Net.active());   // (a multiplayer race doesn't wait for you either)
     if (rolling) { time += dt; if (Race.fin) finStep(dt); else driveStep(dt, COAST, true); Race.update(dt); }
@@ -2540,16 +2583,22 @@ function frame(now) {
   time += dt;
   if (Input.tap('camera') || ctl.camBtn) camMode ^= 1;   // chase <-> cockpit
   if (Input.tap('style')) setFx((FX.mode + 1) % 3);   // normal -> toon -> realistic -> normal
-  if (Input.tap('reset') || ctl.reset) { if (Race.active) Race.reset(); else resetCar(); }
+  if (Input.tap('reset') || ctl.reset) { if (Race.active) Race.reset(); else if (DriftTrack.active) DriftTrack.reset(); else resetCar(); }
   if (Input.tap('gearbox') || ctl.gearbox) { car.manual = Settings.manual = !car.manual; manEl.checked = car.manual; saveSettings(); hud.message(car.manual ? 'MANUAL' : 'AUTO'); }
-  if (Input.tap('map') && (game.mode === 'mp' || game.mode === 'race')) bigMap = !bigMap;
+  if (Input.tap('map') && (game.mode === 'mp' || game.mode === 'race' || game.mode === 'drift')) bigMap = !bigMap;
   if (Input.tap('shiftUp') || ctl.up) { if (!car.manual) { car.manual = Settings.manual = true; manEl.checked = true; } car.shift(1); }
   if (Input.tap('shiftDown') || ctl.down) { if (!car.manual) { car.manual = Settings.manual = true; manEl.checked = true; } car.shift(-1); }
 
   if (Race.fin) { finStep(dt); if (Input.hit('Enter') && Race.kind === 'tt') Race.reset(); }   // (finish fly-by: the car drives itself)
   else {
     Race.gate(ctl);                                    // (racing start: no throttle before the green light - see race.js)
+    ffbHit = 0; ffbRough = 0;
     driveStep(dt, ctl, false);
+  }
+  // steering wheel force feedback / controller rumble (js/ffb.js)
+  if (typeof FFB !== 'undefined') {
+    if (Race.fin || (Race.active && Race.frozen)) FFB.stop();
+    else { FFB.hit(ffbHit); FFB.drive(dt, { kmh: Math.abs(car.u) * 3.6, wheel: Input.padKind === 'wheel' ? Input.wheelPos || 0 : null, ay: car.ay || 0, rough: ffbRough, align: car.drift ? car.ffbAlign || 0 : undefined }); }   // (drift car: the tyres' own aligning force)
   }
   Race.update(dt);                                     // (racing: lap timing, lights, race HUD)
   world.update(car.s, camera);

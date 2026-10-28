@@ -140,6 +140,7 @@ const Input = {
         const c = this.cfg;
         let st = p.axes[c.steer.axis] || 0; if (c.steer.inv) st = -st;
         if (Math.abs(st) < 0.004) st = 0;
+        this.wheelPos = st;   // (force feedback: where the wheel actually is - js/ffb.js)
         if (this.prevSt === undefined) this.prevSt = st;
         if (Math.abs(st - this.prevSt) > 0.01) { this.wheelUsed = true; this.lastWheelMove = now; }
         this.prevSt = st;

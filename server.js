@@ -357,7 +357,7 @@ function issueMpToken(p) {
 // a new position from p: add to their run record
 function trackRun(p, st) {
   const R = p.run; if (!R || R.closed || R.room !== p.room) return;
-  if (p.veh === 'bike' || p.veh === 'van') R.bike = true;   // (on the motorcycle or the Bang Bus at any point: the run is just for fun)
+  if (p.veh === 'bike' || p.veh === 'van' || p.model === 's15') R.bike = true;   // (on the motorcycle, the Bang Bus or the drift car at any point: the run is just for fun)
   const prev = R.last; R.last = { s: st.s, t: st.t };
   if (!prev) return;
   const dt = st.t - prev.t;                            // (sender's clock)
@@ -464,7 +464,8 @@ function cleanState(st) {
 function roster(room) { return [...room.players.values()].map(p => ({ id: p.id, name: p.name, color: p.color, title: p.title || null, acct: !!(p.account && p.account.name), veh: p.veh === 'bike' || p.veh === 'van' ? p.veh : undefined, model: p.model && p.model !== 'm4' ? p.model : undefined })); }
 // which car a player drives (Garage): looks only, every car has the same hitbox
 const CAR_MODELS = ['m4'];
-const cleanModel = m => (CAR_MODELS.includes(m) || /^f1:[a-z]{2,10}:#[0-9a-f]{6}(:[a-z]{2,8}:#[0-9a-f]{6})?(:[smh][01][lsh]?)?$/.test(m) ? m : 'm4');   // (racing: 'f1:<pattern>:<colour 2>[:<rim style>:<rim colour>][:<tyre s|m|h><rear wing 1|0><front wing l|s|h>]', the F1 paint pattern, rims, parts)
+// (the S15 drift car: the owners only, like the motorcycle)
+const cleanModel = (m, p) => ((m === 's15' && p && mayBike(p)) || CAR_MODELS.includes(m) || /^f1:[a-z]{2,10}:#[0-9a-f]{6}(:[a-z]{2,8}:#[0-9a-f]{6})?(:[smh][01][lsh]?)?$/.test(m) ? m : 'm4');   // (racing: 'f1:<pattern>:<colour 2>[:<rim style>:<rim colour>][:<tyre s|m|h><rear wing 1|0><front wing l|s|h>]', the F1 paint pattern, rims, parts)
 // the motorcycle and the van: only for the accounts in DB.BIKE_NAMES (anyone else asking for them stays a car;
 // the van drives and scores as a car, other players just see the van)
 const mayBike = p => !!(p.account && p.account.name && DB.BIKE_NAMES.includes(p.account.name.toLowerCase()));
@@ -1042,7 +1043,7 @@ wss.on('connection', ws => {
     // switched between car and motorcycle while on a server: everyone's roster shows the new one
     if (m.t === 'veh') {
       p.veh = pickVeh(p, m.veh);
-      if (m.model !== undefined) p.model = cleanModel(m.model);
+      if (m.model !== undefined) p.model = cleanModel(m.model, p);
       cleanExt(p, m.ext);
       if (p.room) broadcast(p.room, { t: 'roster', list: roster(p.room) });
       return;
@@ -1103,7 +1104,7 @@ wss.on('connection', ws => {
     if (m.color !== undefined) p.color = cleanColor(m.color);
     if (m.bin !== undefined) p.bin = m.bin === 1;      // (this game reads the binary snapshots / positions)
     if (m.veh !== undefined) p.veh = pickVeh(p, m.veh);
-    if (m.model !== undefined) p.model = cleanModel(m.model);
+    if (m.model !== undefined) p.model = cleanModel(m.model, p);
     cleanExt(p, m.ext);
     if (m.t === 'join') {
       const id = String(m.room || '');

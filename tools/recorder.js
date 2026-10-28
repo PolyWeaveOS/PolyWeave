@@ -13,7 +13,8 @@
   const FPS = 60;
   const MUXER_URL = 'https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.1/build/mp4-muxer.min.js';
   const RES = { '1080p': [1920, 1080, 'avc1.640028', 16e6], '1440p': [2560, 1440, 'avc1.640033', 28e6], '4K': [3840, 2160, 'avc1.640034', 50e6] };
-  const CAMS = [['game', 'Game camera'], ['chase', 'Chase'], ['low', 'Low chase'], ['side', 'Side'], ['drone', 'Drone'], ['orbit', 'Orbit'], ['road', 'Roadside']];
+  const CAMS = [['game', 'Game camera'], ['chase', 'Chase'], ['low', 'Low chase'], ['front', 'Front'], ['frontLow', 'Low front'], ['hood', 'Bonnet'], ['bumper', 'Bumper'],
+    ['wheel', 'Wheel'], ['side', 'Side'], ['drone', 'Drone'], ['heli', 'Helicopter'], ['top', 'Top down'], ['orbit', 'Orbit'], ['road', 'Roadside'], ['free', 'Free roam']];
   const wrapA = U.wrap, lerp = (a, b, k) => a + (b - a) * k, lerpA = (a, b, k) => a + wrapA(b - a) * k;
 
   // ---------------------------------------------------------------- capture (every frame while driving)
@@ -165,11 +166,82 @@
   // ---------------------------------------------------------------- cameras
   const cs = { yaw: null, orbit: 0, spot: null, side: 1 };
   function resetCams() { cs.yaw = null; cs.orbit = 0; cs.spot = null; }
+  // where the cameras bolted to the car go, from the shape of the car you're in (m ahead of its centre; - = behind)
+  let cf = null;
+  function carFrame() {
+    const b = playerVis.body;
+    if (!cf || cf.body !== b) {
+      const g = b.geometry; if (!g.boundingBox) g.computeBoundingBox();
+      const bb = g.boundingBox, oz = playerVis.root.position.z;   // (the body's front is -z)
+      cf = { body: b, nose: -(bb.min.z + oz), tail: -(bb.max.z + oz), hood: -(bb.min.z * 0.27 + oz), hoodY: bb.max.y * 0.86, half: bb.max.x };
+    }
+    return cf;
+  }
+  // free roam: WASD / arrows move, Space up, Shift down, scroll zooms, drag the picture to look around
+  let fc = null;
+  const held = new Set(), FREE_KEYS = ['KeyW', 'KeyA', 'KeyS', 'KeyD', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space', 'ShiftLeft', 'ShiftRight'];
+  function freeFromCamera() {                                     // (starts from wherever the camera was)
+    const d = camera.getWorldDirection(new THREE.Vector3()), p = camera.position;
+    fc = { x: p.x, y: Math.max(p.y, 0.3), z: p.z, yaw: Math.atan2(d.x, -d.z), pitch: Math.asin(U.clamp(d.y, -1, 1)), fov: U.clamp(camera.fov, 15, 90), origin: ROAD.origin, vx: 0, vy: 0, vz: 0 };
+  }
+  // keyframes (per clip): K drops one at the current moment from where the free camera is; playing / exporting, the
+  // camera glides through them on a smooth curve (eases in at the first and out at the last). Flying it yourself takes
+  // over until you press play, seek or add a keyframe.
+  const CH = ['x', 'y', 'z', 'yaw', 'pitch', 'fov'];
+  function keyPose(K, t) {
+    const n = K.length, yaw = [K[0].yaw];
+    for (let i = 1; i < n; i++) yaw.push(yaw[i - 1] + wrapA(K[i].yaw - K[i - 1].yaw));   // (turns the short way round)
+    const val = (i, c) => c === 'yaw' ? yaw[i] : K[i][c], out = {};
+    if (n === 1 || t <= K[0].t) { for (const c of CH) out[c] = val(0, c); return out; }
+    if (t >= K[n - 1].t) { for (const c of CH) out[c] = val(n - 1, c); return out; }
+    let i = 0; while (i < n - 2 && K[i + 1].t <= t) i++;
+    const h = K[i + 1].t - K[i].t, s = (t - K[i].t) / h, s2 = s * s, s3 = s2 * s;
+    const tan = (j, c) => j <= 0 || j >= n - 1 ? 0 : (val(j + 1, c) - val(j - 1, c)) / (K[j + 1].t - K[j - 1].t);
+    for (const c of CH) out[c] = (2 * s3 - 3 * s2 + 1) * val(i, c) + (s3 - 2 * s2 + s) * h * tan(i, c) + (-2 * s3 + 3 * s2) * val(i + 1, c) + (s3 - s2) * h * tan(i + 1, c);
+    return out;
+  }
+  function keysOf(clip) { return clip.keys || (clip.keys = []); }
+  function addKey() {
+    if (!fc) return;
+    const K = keysOf(R.clip).filter(k => Math.abs(k.t - R.t) > 0.05);   // (one already here: replaced)
+    K.push({ t: R.t, x: fc.x, y: fc.y, z: fc.z - fc.origin, yaw: fc.yaw, pitch: fc.pitch, fov: fc.fov });   // (z kept free of world shifts)
+    K.sort((a, b) => a.t - b.t); R.clip.keys = K; fc.manual = false;
+    toast(`Keyframe ${K.indexOf(K.find(k => k.t === R.t)) + 1} of ${K.length} at ${(R.t - R.clip.inT).toFixed(1)} s`);
+  }
+  function delKey() {
+    const K = keysOf(R.clip); if (!K.length) return;
+    let j = 0; K.forEach((k, i) => { if (Math.abs(k.t - R.t) < Math.abs(K[j].t - R.t)) j = i; });
+    K.splice(j, 1); toast(K.length ? `Keyframe removed (${K.length} left)` : 'Keyframe removed');
+  }
+  function freeMove(dt) {
+    if (!fc) return;
+    const on = (...k) => k.some(c => held.has(c)) ? 1 : 0;
+    const f = on('KeyW', 'ArrowUp') - on('KeyS', 'ArrowDown'), r = on('KeyD', 'ArrowRight') - on('KeyA', 'ArrowLeft'), u = on('Space') - on('ShiftLeft', 'ShiftRight');
+    if (f || r || u) fc.manual = true;
+    const SPD = 14, sy = Math.sin(fc.yaw), cy = Math.cos(fc.yaw), e = 1 - Math.exp(-6 * dt);   // (eased: smooth moves for the video)
+    fc.vx += ((sy * f + cy * r) * SPD - fc.vx) * e; fc.vz += ((-cy * f + sy * r) * SPD - fc.vz) * e; fc.vy += (u * SPD * 0.6 - fc.vy) * e;
+    fc.x += fc.vx * dt; fc.y = Math.max(0.3, fc.y + fc.vy * dt); fc.z += fc.vz * dt;
+  }
+  let lookDrag = null;
+  renderer.domElement.addEventListener('pointerdown', e => { if (R.active && R.mode === 'free' && !R.exporting) { lookDrag = { x: e.clientX, y: e.clientY }; renderer.domElement.setPointerCapture(e.pointerId); } });
+  renderer.domElement.addEventListener('pointermove', e => {
+    if (!lookDrag || !fc) return;
+    fc.manual = true;
+    fc.yaw += (e.clientX - lookDrag.x) * 0.005; fc.pitch = U.clamp(fc.pitch - (e.clientY - lookDrag.y) * 0.005, -1.5, 1.5);
+    lookDrag = { x: e.clientX, y: e.clientY };
+  });
+  renderer.domElement.addEventListener('pointerup', () => { lookDrag = null; });
+  addEventListener('wheel', e => {
+    if (!R.active || R.mode !== 'free' || !fc || R.exporting || (ed && ed.contains(e.target))) return;
+    e.preventDefault(); fc.manual = true; fc.fov =U.clamp(fc.fov * Math.exp(e.deltaY * 0.001), 12, 95);   // (scroll up: zoom in)
+  }, { passive: false });
+  addEventListener('keyup', e => held.delete(e.code));
+  addEventListener('blur', () => held.clear());
   function look(x, y, z, tx, ty, tz, fov, nearP) {
     camera.position.set(x, y, z); camera.up.set(0, 1, 0); camera.lookAt(tx, ty, tz);
     camera.fov = fov; camera.near = nearP; camera.updateProjectionMatrix();
   }
-  function placeCamera(mode, P, dt) {
+  function placeCamera(mode, P, dt, clip, t) {
     if (mode === 'game') {
       const A = P.a.cam, B = P.b.cam, k = P.k;
       camera.position.set(lerp(A[0], B[0], k), lerp(A[1], B[1], k), lerp(A[2], B[2], k));
@@ -177,9 +249,33 @@
       camera.fov = lerp(A[7], B[7], k); camera.near = A[8]; camera.updateProjectionMatrix();
       return;
     }
-    cs.yaw = cs.yaw === null ? P.yaw : U.dampAngle(cs.yaw, P.yaw, mode === 'drone' ? 2 : 4, dt);
-    const sy = Math.sin(cs.yaw), cy = Math.cos(cs.yaw), fx = sy, fz = -cy, lx = cy, lz = sy;   // forward / right
+    if (mode === 'free') {                                        // free roam: where you've flown it (follows the world if it shifts)
+      if (!fc) { freeFromCamera(); fc.origin = P.a.origin; }
+      fc.z += P.a.origin - fc.origin; fc.origin = P.a.origin;
+      const K = clip && clip.keys;
+      if (K && K.length && !fc.manual) { Object.assign(fc, keyPose(K, t)); fc.z += fc.origin; fc.vx = fc.vy = fc.vz = 0; }   // (on the keyframe path)
+      const cp = Math.cos(fc.pitch);
+      camera.position.set(fc.x, fc.y, fc.z); camera.up.set(0, 1, 0);
+      camera.lookAt(fc.x + Math.sin(fc.yaw) * cp, fc.y + Math.sin(fc.pitch), fc.z - Math.cos(fc.yaw) * cp);
+      camera.fov = fc.fov; camera.near = 0.15; camera.updateProjectionMatrix();
+      return;
+    }
+    cs.yaw = cs.yaw === null ? P.yaw : U.dampAngle(cs.yaw, P.yaw, mode === 'drone' || mode === 'heli' ? 2 : 4, dt);
+    // (cameras bolted to the car turn with it exactly; the others follow its heading smoothly)
+    const yw = mode === 'hood' || mode === 'bumper' || mode === 'wheel' ? P.yaw : cs.yaw;
+    const sy = Math.sin(yw), cy = Math.cos(yw), fx = sy, fz = -cy, lx = cy, lz = sy;   // forward / right
     if (mode === 'chase') look(P.x - fx * 6.6, 1.35, P.z - fz * 6.6, P.x + fx * 3, 0.75, P.z + fz * 3, 58, 0.25);
+    else if (mode === 'front') look(P.x + fx * 7, 1.3, P.z + fz * 7, P.x - fx * 0.5, 0.65, P.z - fz * 0.5, 52, 0.25);
+    else if (mode === 'frontLow') look(P.x + fx * 4.6, 0.45, P.z + fz * 4.6, P.x - fx * 0.5, 0.6, P.z - fz * 0.5, 56, 0.1);
+    else if (mode === 'hood') { const C = carFrame(); look(P.x + fx * C.hood, C.hoodY, P.z + fz * C.hood, P.x + fx * 14, 0.15, P.z + fz * 14, 62, 0.05); }
+    else if (mode === 'bumper') { const C = carFrame(); look(P.x + fx * (C.nose + 0.12), 0.45, P.z + fz * (C.nose + 0.12), P.x + fx * 25, 0.4, P.z + fz * 25, 64, 0.05); }
+    else if (mode === 'wheel') { const C = carFrame(), w = C.half + 0.28, b = C.tail * 0.88;
+      look(P.x - lx * w + fx * b, 0.38, P.z - lz * w + fz * b, P.x - lx * (C.half - 0.25) + fx * 9, 0.3, P.z - lz * (C.half - 0.25) + fz * 9, 60, 0.05); }
+    else if (mode === 'heli') look(P.x - lx * 24 + fx * 6, 15, P.z - lz * 24 + fz * 6, P.x + fx * 4, 0, P.z + fz * 4, 42, 0.5);
+    else if (mode === 'top') {
+      camera.position.set(P.x, 28, P.z); camera.up.set(fx, 0, fz); camera.lookAt(P.x, 0, P.z);   // (the car's nose points up the screen)
+      camera.fov = 40; camera.near = 0.5; camera.updateProjectionMatrix();
+    }
     else if (mode === 'low') look(P.x - fx * 4.9, 0.55, P.z - fz * 4.9, P.x + fx * 2.5, 0.55, P.z + fz * 2.5, 56, 0.1);
     else if (mode === 'side') look(P.x - lx * 5.4 + fx * 1.2, 1.0, P.z - lz * 5.4 + fz * 1.2, P.x + fx * 0.6, 0.6, P.z + fz * 0.6, 52, 0.2);
     else if (mode === 'drone') look(P.x - fx * 15, 9.5, P.z - fz * 15, P.x + fx * 8, 0, P.z + fz * 8, 50, 0.5);
@@ -263,7 +359,7 @@
   const realBlur = window.blurAmount;
   function render(clip, t, dt, mode, withHud, hudCanvas) {
     const P = pose(clip, t);
-    placeCamera(mode, P, dt);
+    placeCamera(mode, P, dt, clip, t);
     const inCar = mode === 'game' && P.cockpit;
     playerBike.riderTop.visible = !(mode === 'game' && P.firstPerson);   // (motorcycle, first person: you're the rider)
     cockpit.visible = cockpitWheel.visible = inCar; interior.visible = swMesh.visible = !inCar;
@@ -352,6 +448,7 @@
     if (!!ROAD.loop !== saved.loop) { ROAD.setLoop(saved.loop); world.reset(); }   // (before the origin: setLoop zeroes it)
     ROAD.origin = saved.origin; ROAD.hintS = saved.hintS;
     if (world.theme !== saved.theme) world.setTheme(saved.theme);
+    camera.up.set(0, 1, 0); held.clear(); lookDrag = null;          // (Top down tilts it)
     camera.position.copy(saved.pos); camera.quaternion.copy(saved.quat); camera.near = saved.camNear; camera.fov = saved.fov; camera.updateProjectionMatrix();
     zoneProps.group && (zoneProps.group.visible = true);
     for (const c of saved.shown) if (traffic.cars.includes(c)) c.vis.root.visible = true;
@@ -377,6 +474,12 @@
         <select data-k="mode" title="Camera">${opt(CAMS, R.mode)}</select>
         <select data-k="speed" title="Speed">${opt([['1', 'Normal speed'], ['0.5', 'Slow motion ½×'], ['0.25', 'Slow motion ¼×']], String(R.speed))}</select>
         <label><input type="checkbox" data-k="hud"${R.hud ? ' checked' : ''}> HUD</label>
+        <span data-k="keys" style="display:none;gap:6px">
+          <button data-k="kadd" title="Keyframe the free camera here (K)">+ Keyframe</button>
+          <button data-k="kdel" title="Remove the nearest keyframe (Delete)">− Keyframe</button>
+          <button data-k="kclr" title="Remove all keyframes">Clear</button>
+        </span>
+        <span class="t" data-k="hint" style="opacity:.65"></span>
         <span class="grow"></span>
         <button data-k="in" title="Start the clip here (I)">Set start</button>
         <button data-k="out" title="End the clip here (O)">Set end</button>
@@ -392,8 +495,11 @@
     const fillClips = () => { $('clip').innerHTML = clips.map((c, i) => `<option value="${i}"${c === R.clip ? ' selected' : ''}>${c.name} (${Math.round(c.dur)} s)</option>`).join(''); };
     fillClips();
     $('clip').onchange = e => { R.clip = clips[+e.target.value]; useClipWorld(R.clip); R.t = R.clip.inT; resetCams(); };
-    $('play').onclick = () => { R.playing = !R.playing; };
-    $('mode').onchange = e => { R.mode = e.target.value; resetCams(); };
+    $('play').onclick = e => { R.playing = !R.playing; if (fc) fc.manual = false; e.target.blur(); };   // (back on the keyframe path)
+    $('mode').onchange = e => { R.mode = e.target.value; resetCams(); fc = null; e.target.blur(); };   // (blur: the arrow keys fly the camera, not the list)
+    $('kadd').onclick = e => { addKey(); e.target.blur(); };
+    $('kdel').onclick = e => { delKey(); e.target.blur(); };
+    $('kclr').onclick = e => { R.clip.keys = []; toast('Keyframes cleared'); e.target.blur(); };
     $('speed').onchange = e => { R.speed = +e.target.value; };
     $('hud').onchange = e => { R.hud = e.target.checked; };
     $('res').onchange = e => { R.res = e.target.value; };
@@ -424,7 +530,7 @@
       if (drag === 'in') { R.clip.inT = Math.min(t, R.clip.outT - 0.5); R.t = R.clip.inT; }
       else if (drag === 'out') { R.clip.outT = Math.max(t, R.clip.inT + 0.5); R.t = Math.max(R.clip.inT, R.clip.outT - 1); }
       else R.t = U.clamp(t, R.clip.inT, R.clip.outT);
-      resetCams();
+      resetCams(); if (fc) fc.manual = false;
     };
     tl.onpointermove = move; tl.onpointerup = () => (drag = null);
     R.ui = { $, tl };
@@ -443,6 +549,16 @@
       g.fillStyle = e.crash ? '#ff6b6b' : 'rgba(255,255,255,.55)'; g.fillRect(X(e.t) - 1, h - 16, 2, 8);
     }
     g.fillStyle = '#ffd84a'; g.fillRect(X(c.inT) - 3, 2, 6, h - 4); g.fillRect(X(c.outT) - 3, 2, 6, h - 4);
+    if (c.keys && c.keys.length) {                               // free-roam keyframes: blue diamonds, joined by the path
+      g.strokeStyle = 'rgba(127,227,255,.5)'; g.lineWidth = 2; g.beginPath(); g.moveTo(X(c.keys[0].t), 14); g.lineTo(X(c.keys[c.keys.length - 1].t), 14); g.stroke();
+      g.fillStyle = '#7fe3ff';
+      for (const k of c.keys) { const x = X(k.t); g.beginPath(); g.moveTo(x, 8); g.lineTo(x + 6, 14); g.lineTo(x, 20); g.lineTo(x - 6, 14); g.closePath(); g.fill(); }
+    }
+    const free = R.mode === 'free', nk = c.keys ? c.keys.length : 0;
+    R.ui.$('keys').style.display = free ? 'flex' : 'none';
+    R.ui.$('hint').textContent = !free ? '' : fc && fc.manual && nk ? 'Flying · K to keyframe here · play / click the timeline to follow your keyframes'
+      : nk ? `${nk} keyframe${nk > 1 ? 's' : ''} · following the path · move to take over`
+      : 'WASD / arrows move · Space up · Shift down · scroll zoom · drag to look · K keyframe';
     g.fillStyle = '#fff'; g.fillRect(X(R.t) - 1, 0, 2, h);
     const s = (c.outT - c.inT) / R.speed;
     R.ui.$('time').textContent = `${(R.t - c.inT).toFixed(1)} / ${(c.outT - c.inT).toFixed(1)} s` + (R.speed !== 1 ? ` (video ${s.toFixed(1)} s)` : '');
@@ -451,6 +567,7 @@
   function frame(dt) {
     if (R.exporting) return;
     const c = R.clip;
+    if (R.mode === 'free') freeMove(dt);                          // (flies while paused too)
     if (R.playing) { R.t += dt * R.speed; if (R.t > c.outT) { R.t = c.inT; resetCams(); } }
     render(c, R.t, dt, R.mode, R.hud, hudCv);
     drawTimeline();
@@ -497,7 +614,7 @@
     const n = Math.max(1, Math.round((c.outT - c.inT) / R.speed * FPS)), t0 = performance.now();
     let ok = false;
     try {
-      resetCams();
+      resetCams(); if (fc) fc.manual = false;               // (the video follows the keyframes)
       for (let i = 0; i < n && !R.cancel && !err; i++) {
         const t = c.inT + i / FPS * R.speed;
         render(c, t, 1 / FPS, R.mode, R.hud, hudLayer);
@@ -543,6 +660,10 @@
     if (e.code === 'F9' && !typing) { e.preventDefault(); if (!R.active) saveClip(); return; }
     if (e.code === 'F10' && !typing) { e.preventDefault(); R.active ? close() : open(); return; }
     if (!R.active || R.exporting || typing) return;
+    // free roam: these keys fly the camera (play / pause with the button then; the arrows don't step frames)
+    if (R.mode === 'free' && FREE_KEYS.includes(e.code)) { e.preventDefault(); e.stopImmediatePropagation(); held.add(e.code); return; }
+    if (R.mode === 'free' && e.code === 'KeyK') { e.preventDefault(); e.stopImmediatePropagation(); if (!e.repeat) addKey(); return; }
+    if (R.mode === 'free' && (e.code === 'Delete' || e.code === 'Backspace')) { e.preventDefault(); e.stopImmediatePropagation(); if (!e.repeat) delKey(); return; }
     if (e.code === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); close(); }
     else if (e.code === 'Space') { e.preventDefault(); R.playing = !R.playing; }
     else if (e.code === 'KeyI') setIn();

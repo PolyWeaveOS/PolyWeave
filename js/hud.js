@@ -195,7 +195,7 @@ class Hud {
     this.set('unit', e.unit || (e.unit = $('unit')), mph ? 'MPH' : 'KM/H');
     this.set('gear', e.gear, car.gear < 0 ? 'R' : car.gear === 0 ? 'N' : String(car.gear));
     this.set('mode', e.mode, car.manual ? 'MANUAL' : 'AUTO');
-    e.rpm.style.width = (U.clamp(car.rpm / M4.redline, 0, 1) * 100).toFixed(1) + '%';
+    e.rpm.style.width = (U.clamp(car.rpm / (car.drift ? DRIFT.redline : M4.redline), 0, 1) * 100).toFixed(1) + '%';
     e.rpm.classList.toggle('limit', car.limiter);
     this.set('la', e.la, this.trafficLabel || '');   // (scored / free drive)
   }

@@ -122,8 +122,9 @@ Object.assign(ROAD, {
   // a little wider at the sides: 2.5 m of kerb / run-off paint each side before the barriers
   setTrack(id) {
     this._tracks = this._tracks || {};
-    if (id && typeof Tracks !== 'undefined' && Tracks.TRACK_BY_ID[id]) {
-      this.loop = this._tracks[id] || (this._tracks[id] = Tracks.buildTrack(Tracks.TRACK_BY_ID[id]));
+    const T = id && typeof Tracks !== 'undefined' ? Tracks.TRACK_BY_ID[id] || (Tracks.DRIFT_BY_ID && Tracks.DRIFT_BY_ID[id]) : null;   // (race tracks, or the drift tracks)
+    if (T) {
+      this.loop = this._tracks[id] || (this._tracks[id] = Tracks.buildTrack(T));
       this.SH_L = 2.5; this.SH_R = 2.5;
     } else { this.loop = null; this.SH_L = 1.4; this.SH_R = 3.0; }
     this.origin = 0;

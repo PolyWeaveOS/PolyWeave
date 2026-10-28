@@ -32,10 +32,22 @@ const TRACKS = [
       [603, 413], [525, 460], [427, 452], [353, 388], [297, 306], [239, 224], [180, 144], [88, 126], [17, 190], [-1, 288], [66, 313], [141, 336], [90, 417], [41, 501], [81, 553],
       [149, 480], [243, 459], [314, 525], [366, 610], [364, 693], [269, 722], [170, 704], [80, 662], [11, 592], [-18, 497], [-40, 399], [-60, 302], [-54, 202], [-30, 106], [-3, 9]] },
 ];
+// Drift tracks (owners only for now: Play > Drift track, js/drifttrack.js) - not in TRACKS, so they never show up for racing.
+// 'minami': the real centre line of Ebisu Circuit's South (Minami) course in Fukushima, Japan - the drift course
+// D1 runs on - from OpenStreetMap (way 119769642, (c) OpenStreetMap contributors, ODbL), metres east / north, driven
+// clockwise from the start of the long straight; scaled 1.5x because the game's road is wider than the real one.
+const DRIFT_TRACKS = [
+  { id: 'minami', name: 'Minami Forest Course', short: 'MINAMI', drift: true, scale: 1.5, rmin: 13, look: ['grass', 'day'],
+    desc: 'Laid out from the real map of Ebisu Circuit\'s South course in the forested hills of Fukushima - the home of Japanese drifting. Tight hairpins, a fast sweeper and a long straight, trees all round.',
+    path: [[-11, -11], [-63, 4], [-107, 15], [-120, 14], [-136, 10], [-171, -5], [-174, -11], [-175, -17], [-170, -39], [-172, -50], [-175, -56], [-184, -59], [-189, -57], [-204, -34], [-211, -33],
+      [-219, -37], [-224, -48], [-224, -58], [-216, -79], [-216, -89], [-225, -117], [-227, -133], [-226, -145], [-229, -161], [-237, -172], [-256, -182], [-270, -186], [-284, -187], [-300, -180],
+      [-306, -166], [-306, -159], [-303, -151], [-302, -147], [-262, -66], [-246, -34], [-239, -20], [-220, -1], [-193, 15], [-167, 26], [-131, 30], [-99, 29], [-80, 26], [-43, 14], [-5, 3], [0, 0], [0, -5], [-2, -9]] },
+];
 // barriers: tarmac strips on the straights, and on the outside of every corner a gravel trap (sand) that runs from
 // the braking zone to the exit, with the wall set back behind it, like a real circuit
 const RUNOFF = { strip: 3, trapMax: 24, inside: 4.5, half: 7.4, kerb: 1.3 };
 const TRACK_BY_ID = Object.fromEntries(TRACKS.map(t => [t.id, t]));
+const DRIFT_BY_ID = Object.fromEntries(DRIFT_TRACKS.map(t => [t.id, t]));   // (kept apart: the server's race / lap checks only ever accept TRACK_BY_ID)
 const RACE_LAPS = 3, RACE_MAX = 10, RACE_MIN = 2, RACE_COUNTDOWN = 60;
 
 // the outline as a path: straights between corners, each corner a circular arc of its radius (shrunk if the
@@ -93,7 +105,7 @@ function splinePath(t) {
     }
   }
   // scaled down, a hairpin can get tighter than the road is wide: ease any bend tighter than RMIN open a little
-  const RMIN = 18, M = out.length, h = 20;                // (curvature measured over +-10 m)
+  const RMIN = t.rmin || 18, M = out.length, h = 20;                // (curvature measured over +-10 m)
   for (let it = 0; it < 400; it++) {
     let moved = false;
     for (let i = 0; i < M; i++) {
@@ -149,6 +161,8 @@ function buildTrack(t, STEP = 2) {
     // a right-hand bend's outside is on the left
     rawL[i] = RUNOFF.half + RUNOFF.kerb + Math.max(RUNOFF.strip, trap(kR), kL > 1 / 150 ? RUNOFF.inside : 0);
     rawR[i] = RUNOFF.half + RUNOFF.kerb + Math.max(RUNOFF.strip, trap(kL), kR > 1 / 150 ? RUNOFF.inside : 0);
+    // drift course: grass and tyre walls close by - 3 m of grass, 6 m on the outside of a corner (no gravel traps)
+    if (t.drift) { rawL[i] = RUNOFF.half + RUNOFF.kerb + (kR > 1 / 70 ? 6 : 3); rawR[i] = RUNOFF.half + RUNOFF.kerb + (kL > 1 / 70 ? 6 : 3); }
   }
   const sm = Math.round(24 / STEP);
   for (let i = 0; i < N; i++) {
@@ -164,6 +178,11 @@ function buildTrack(t, STEP = 2) {
     }
     const lim = Math.max(RUNOFF.half + RUNOFF.kerb + 1.5, best / 2 - 4);
     WL[i] = Math.min(WL[i], lim); WR[i] = Math.min(WR[i], lim);
+    // (drift course: inside a tight hairpin the wall stays well clear of the bend's centre)
+    if (t.drift) {
+      const k = K[i], inner = Math.max(RUNOFF.half + RUNOFF.kerb + 0.6, 1 / Math.max(Math.abs(k), 1e-6) - 2.5);
+      if (k > 0) WR[i] = Math.min(WR[i], inner); else if (k < 0) WL[i] = Math.min(WL[i], inner);
+    }
   }
   return { L, STEP, N, X, Z, TH, K, TOT, grid, CELL, race: true, track: t, corners, WL, WR };
 }
@@ -178,5 +197,5 @@ const minLapMs = L => Math.round(L / (345 / 3.6) * 1000 * 1.12);
 const _lenCache = {};
 function trackLength(id) { return _lenCache[id] || (_lenCache[id] = buildTrack(TRACK_BY_ID[id]).L); }
 
-const Tracks = { TRACKS, TRACK_BY_ID, RACE_LAPS, RACE_MAX, RACE_MIN, RACE_COUNTDOWN, RUNOFF, buildTrack, trackLength, minLapMs, outline, wallAt, gravelAt };
+const Tracks = { TRACKS, DRIFT_TRACKS, TRACK_BY_ID, DRIFT_BY_ID, RACE_LAPS, RACE_MAX, RACE_MIN, RACE_COUNTDOWN, RUNOFF, buildTrack, trackLength, minLapMs, outline, wallAt, gravelAt };
 if (typeof module !== 'undefined' && module.exports) module.exports = Tracks;
