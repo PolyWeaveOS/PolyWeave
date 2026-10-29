@@ -429,7 +429,9 @@ const referredBy = uid => { const r = db.prepare('SELECT by_uid FROM referrals W
 // far count). Distance and score come from verified runs that are still on the boards.
 if (!getMeta('bus_event_start')) setMeta('bus_event_start', Date.now());
 const BUS_EVENT_START = +getMeta('bus_event_start');
-const BUS_QUESTS = { play: 3600, drive: 75 * 1609.344, score: 100000, refer: 3 };
+const BUS_QUESTS = { play: 3600, drive: 75 * 1609.344, score: 100000, refer: 3, referAlt: 5 };
+// (or, instead of all five quests: refer 5 players. Admins (the Admin title, not banned) and Content Creators get it anyway)
+const busPerk = uid => (owns(uid, 'admin') && !isBanned(uid)) || owns(uid, 'creator');
 function busProgress(uid) {
   ensureUser(uid);
   const u = db.prepare('SELECT ev_play_s, bus FROM users WHERE uid = ?').get(uid);
@@ -442,11 +444,13 @@ function busProgress(uid) {
     { id: 'score', have: Math.round(r.best || 0), need: BUS_QUESTS.score },
     { id: 'refer', have: ref.counted, need: BUS_QUESTS.refer, pending: ref.pending },
   ];
+  const alt = { id: 'refer5', have: ref.counted, need: BUS_QUESTS.referAlt, pending: ref.pending };
   let unlocked = !!u.bus;
-  if (!unlocked && quests.every(q => q.have >= q.need)) { db.prepare('UPDATE users SET bus = 1 WHERE uid = ?').run(uid); unlocked = true; }
-  return { start: BUS_EVENT_START, quests, unlocked };
+  if (!unlocked && (quests.every(q => q.have >= q.need) || alt.have >= alt.need)) { db.prepare('UPDATE users SET bus = 1 WHERE uid = ?').run(uid); unlocked = true; }
+  const perk = busPerk(uid);   // (not saved: it goes with the title)
+  return { start: BUS_EVENT_START, quests, alt, unlocked: unlocked || perk, perk };
 }
-// the Bang Bus is theirs (finished the quests, or an owner): checks the quests too, so it unlocks the moment they're done
+// the Bang Bus is theirs (finished the quests or referred 5, an owner, an admin or a Content Creator): checks the quests too, so it unlocks the moment they're done
 const hasBus = (uid, name) => !!(name && BIKE_NAMES.includes(String(name).toLowerCase())) || busProgress(uid).unlocked;
 // a run token can be used once
 function spendToken(n) {

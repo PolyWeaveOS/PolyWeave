@@ -816,6 +816,8 @@ button.big:hover { background: #ffe37a; }
 .evIntro { font-size: 14px; opacity: .85; margin-bottom: 12px; }
 .evQuest { display: grid; grid-template-columns: 38px minmax(0, 1fr) auto; align-items: center; gap: 12px; padding: 11px 13px; margin-bottom: 8px; border-radius: 12px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.06); }
 .evQuest.click { cursor: pointer; } .evQuest.click:hover { border-color: var(--bus); }
+.evOr { display: flex; align-items: center; gap: 10px; margin: 4px 2px 12px; font-weight: 800; font-size: 12px; letter-spacing: 3px; opacity: .6; }
+.evOr::before, .evOr::after { content: ''; flex: 1; height: 1px; background: currentColor; opacity: .4; }
 .evIco { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; background: rgba(255,255,255,.07); }
 .evIco svg { width: 20px; height: 20px; }
 .evQuest.done .evIco { background: rgba(60,196,230,.2); color: var(--bus); }

@@ -694,8 +694,9 @@ function showVan(on) {
   for (const w of playerVis.wheels) w.pivot.visible = !on;
   if (on) playerVis.indL.visible = playerVis.indR.visible = playerVis.brake.visible = false;
 }
-// the van's chase camera: higher and looking further down the road, so you can see over its roof
-const VAN_CAM = { dist: 6.2, hgt: 2.9, look: 5.0, lookY: 0.85 };
+// the van's chase camera: just above its roof (~2.1 m) and looking far down the road, nearly level, so the middle of the
+// view passes just over the roof - you see the road ahead over the bus without looking down on it
+const VAN_CAM = { dist: 6.4, hgt: 2.55, look: 12, lookY: 1.6 };
 // the F1 car's chase camera: lower and a little closer (it's a long, low car)
 const F1_CAM = { dist: 5.8, hgt: 1.8, look: 4.0, lookY: 0.8 };
 function setPaint(hex) { Settings.color = hex; playerPaint.color.set(hex); playerPaintDS.color.set(hex); saveSettings(); }
@@ -2622,6 +2623,7 @@ let toolsFor = null;
 function titleUnlocks(id) {
   if (id === 'creator') { toolsFor = null; loadOwnerTools(); }
   if (id === 'admin' && Account.user && !Account.user.admin) { Account.user.staff = true; adminFor = null; loadAdmin(); if (window.AdminPanel) AdminPanel.account(); }
+  if ((id === 'creator' || id === 'admin') && Account.user && !Account.user.bus) { Account.user.bus = true; Account.onChange(); }   // (admins and Content Creators get the Bang Bus)
 }
 function loadOwnerTools() {
   if (!Account.signedIn || !Account.session || toolsFor === Account.session || window.Recorder) return;

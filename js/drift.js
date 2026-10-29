@@ -38,7 +38,10 @@ const DRIFT = {
   // no throttle / per throttle / per steer (rad), deepest angle, how fast it can change (rad/s); path: turn (g) at
   // neutral / per steer, how hard it's held; angle and yaw-rate gains
   dSteerSpan: 0.22, dKeep: 0.95, dPush: 0.32, dScrub: 0, dFfbAt: 0, gripAid: 1.0, dSwing: 0.8, dSwingRate: 3.2, dLiftSwing: 0.75, dSwingMin: 0.6, dWheelSwing: 0.5, dTrimMin: 0.25, dHoldIn: 0.55, dCarryFade: 0.12, dEase: 3.5, dEaseSwing: 9, dPathEase: 5, dBase: 0.18, dThrottle: 0.55, dSteer: 0.25, dMax: 1.15, dBrake: 0.5, dBrakeEntry: 0.078, dBrakeA0: 0.32, dBrakeFar: 0.3, dBrakeFast: 0.3, dPathBrake: 0.45, dBrakeG: 0.4, dMaxLow: 1.35, dRate: 0.9, dPathG: 0.6, dPathSteer: 1.6, dPathK: 1.0, dAngK: 3, dYawK: 7, dPathSlew: 6, dSwingAcc: 12,
-  kbHands: 16, kbHandsMax: 4.5,   // keys: how quickly the eased steering follows (rad/s natural frequency), fastest hands (rad/s at the wheels)
+  // keys = a pretend wheel: turning speed when a key goes down / after kbWheelRamp s (deg of wheel per s), self-centring
+  // (deg/s, and how softly it settles), how hard it can turn while gripping (g), never less than kbWheelMin deg
+  kbWheelRate0: 300, kbWheelRate: 800, kbWheelRamp: 0.3, kbWheelBack: 500, kbWheelBackK: 6, kbWheelG: 2.5, kbWheelMin: 150, kbWheelSlow: 2.5,
+  kbHands: 16, kbHandsMax: 4.5,  // keys: how quickly the eased steering follows (rad/s natural frequency), fastest hands (rad/s at the wheels)
   kbTurnG: 1.15, kbTurnGOff: 1.45,                 // keys, grip driving: how hard a full key turns (g)
 };
 
@@ -350,16 +353,49 @@ const driftCurve = s => (s < 1 ? Math.sin(s * Math.PI / 2) : 1 - (1 - DRIFT.slid
 
   // ---- steering (below) ----
   const SC = SteerController.prototype, baseUpdate = SC.update;
+  // wheel degrees (0..450) that turn the front wheels by `rad` through the progressive rack
+  const wheelDegFor = rad => {
+    const D = DRIFT, want = rad * 180 / Math.PI; let lo = 0, hi = 450;
+    for (let i = 0; i < 24; i++) { const m = (lo + hi) / 2; if (m / D.ratioC + D.ratioK * m * m * m < want) lo = m; else hi = m; }
+    return lo;
+  };
   SC.update = function (dt, car, ctl, settings) {
     if (!car.drift) return baseUpdate.call(this, dt, car, ctl, settings);
     const D = DRIFT, sens = settings.sens || 1;
     this.assistActive = 0; this.kbAssisting = false;
     let target;
-    if (ctl.source === 'wheel') {
+    // keys: they turn a pretend steering wheel - held, it turns (slowly at first, then quicker); let go, it centres
+    // itself like a real one. That wheel then goes through exactly the wheel's steering and drift control below, so a
+    // tap is a small correction, feathering the key holds an in-between angle, holding it turns hard.
+    const keys = ctl.source !== 'wheel' && !(typeof Input !== 'undefined' && Input.padKind === 'gamepad' && Math.abs(ctl.steer) % 1 > 0);
+    let wheelIn = ctl.source === 'wheel' ? ctl.steer : null;
+    if (keys) {
+      const k = Math.sign(ctl.steer), w = this.vw ?? car.steer / D.lock;   // (wheel position, -1..1 = 450 deg each way)
+      const u = Math.abs(car.u), dS = car.dS || 0;
+      // how far it can go: drifting, just past the drift control's span (more does nothing but take longer to come back);
+      // gripping, about as hard as the tyres can turn (never less than ~110 deg: enough for a brake entry)
+      const gripRad = Math.atan(D.L * D.kbWheelG * 9.81 / Math.max(u * u, 1)) + D.aPk * 0.5;
+      // (drifting at donut speeds: full lock, like the wheel)
+      const cap = U.lerp(Math.max(D.kbWheelMin, wheelDegFor(gripRad)), U.lerp(450, wheelDegFor(D.dSteerSpan * 1.05), U.smooth(8, 12, u)), dS) / 450;
+      if (k) {
+        this.vwT = Math.sign(this.vwK || 0) === k ? (this.vwT || 0) + dt : 0; this.vwK = k;
+        // (it turns against a spring - the further it's turned, the slower it goes: so how much of the time you hold the
+        //  key sets how far the wheel sits, evenly, like easing a real wheel in and out)
+        // (at parking / donut speeds the hands crank it round quicker, like hand-over-hand on a real wheel)
+        const rate = U.lerp(D.kbWheelRate0, D.kbWheelRate, U.smooth(0, D.kbWheelRamp, this.vwT)) / 450 * U.clamp(1 - k * w / cap, 0, 2) * U.lerp(D.kbWheelSlow, 1, U.smooth(4, 10, u));
+        this.vw = w + U.clamp(k * cap - w, -rate * dt, rate * dt);
+      } else {
+        this.vwK = 0; this.vwT = 0;
+        this.vw = w - Math.sign(w) * Math.min(Math.abs(w), Math.min(D.kbWheelBack / 450, D.kbWheelBackK * Math.abs(w)) * dt);   // (self-centring, settling softly)
+      }
+      this.vw = U.clamp(this.vw, -1, 1);
+      wheelIn = this.vw;
+    } else this.vw = undefined;
+    if (wheelIn !== null) {
       // through the rack: no lane assist, no speed-sensitive steering. Progressive ratio: ~16:1 round the centre
       // (calm on the straight, small corrections stay small), quickening to full lock (46 deg) at 450 deg of wheel
-      const deg = Math.abs(ctl.steer) * 450 * sens;
-      target = Math.sign(ctl.steer) * (deg / D.ratioC + D.ratioK * deg * deg * deg) * Math.PI / 180;
+      const deg = Math.abs(wheelIn) * 450 * (keys ? 1 : sens);
+      target = Math.sign(wheelIn) * (deg / D.ratioC + D.ratioK * deg * deg * deg) * Math.PI / 180;
       this.wheelF = (this.wheelF || 0) + (target - (this.wheelF || 0)) * (1 - Math.exp(-dt * 120));
       car.steer = U.clamp(this.wheelF, -D.lock, D.lock);
       this.dSteer = car.steer; car.kbThrottle = false;
