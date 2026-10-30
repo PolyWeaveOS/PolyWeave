@@ -53,13 +53,15 @@
       const fw = f.vis.wheels.find(w => w.front);
       fr.push(n, f.g.position.x, f.g.position.z, f.g.rotation.y, f.vis.spin, fw ? fw.base - fw.pivot.rotation.y : 0, f.vis.brake.visible ? 1 : 0, f.vis.lean ? f.vis.lean.rotation.z : 0);
     }
-    const pr = playerVis.root, fw = playerVis.wheels.find(w => w.front);
+    const pr = playerVis.root, fw = playerVis.wheels.find(w => w.front), f1w = playerF1.wheels.find(w => w.front);
     buf.push({
       t: clock, origin: ROAD.origin, s: car.s,
       cam: [p.x, p.y, p.z, q.x, q.y, q.z, q.w, camera.fov, camera.near],
       pl: [playerRoot.position.x, playerRoot.position.z, playerRoot.rotation.y, pr.rotation.x, pr.rotation.z, playerVis.spin,
         fw ? fw.base - fw.pivot.rotation.y : 0, swMesh.rotation.z, playerVis.brake.visible ? 1 : 0, cockpit.visible ? 1 : 0, playerGlass.opacity,
-        vehicle === 'bike' ? 1 : 0, playerBike.lean.rotation.z, playerBike.spin, camMode === 1 ? 1 : 0],
+        vehicle === 'bike' ? 1 : 0, playerBike.lean.rotation.z, playerBike.spin, camMode === 1 ? 1 : 0,
+        // (racing in the F1 car: it instead of your road car)
+        playerF1.root.visible ? 1 : 0, playerF1.root.rotation.x, playerF1.root.rotation.z, playerF1.spin || 0, f1w ? f1w.base - f1w.pivot.rotation.y : 0, playerF1.brake.visible ? 1 : 0],
       tr: Float32Array.from(tr), fr: fr.length ? Float64Array.from(fr) : null,
       hud: [hud.shownScore, score.best, score.pot, score.mult, U.clamp(score.timer, 0, 1), Math.abs(car.u), car.gear, U.clamp(car.rpm / M4.redline, 0, 1),
         car.limiter ? 1 : 0, score.prox || 1, score.pot > 0 ? 1 : 0],
@@ -126,8 +128,12 @@
     swMesh.rotation.z = cockpitWheel.rotation.z = lerp(A[7], B[7], k);
     playerVis.brake.visible = !!(k < 0.5 ? A[8] : B[8]);
     // motorcycle: lean + wheels (clips from before the bike existed have no entries here: car)
-    const onBike = !!(k < 0.5 ? A[11] : B[11]);
-    playerVis.root.visible = !onBike; playerBike.root.visible = onBike;
+    const onBike = !!(k < 0.5 ? A[11] : B[11]), onF1 = !!(k < 0.5 ? A[15] : B[15]);   // (clips from before this: no F1 entries = road car)
+    playerVis.root.visible = !onBike && !onF1; playerBike.root.visible = onBike && !onF1; playerF1.root.visible = onF1;
+    if (onF1) {
+      playerF1.root.rotation.x = lerp(A[16], B[16], k); playerF1.root.rotation.z = lerp(A[17], B[17], k);
+      setWheels(playerF1, lerp(A[18], B[18], k), lerp(A[19], B[19], k)); playerF1.brake.visible = !!(k < 0.5 ? A[20] : B[20]);
+    }
     if (onBike) { playerBike.lean.rotation.z = lerp(A[12], B[12], k); setWheels(playerBike, lerp(A[13], B[13], k), lerp(A[6], B[6], k) * 0.55); playerBike.brake.visible = playerVis.brake.visible; }
     // traffic (each car blended between the two moments it appears in)
     for (const v of pool.values()) v.root.visible = false;
@@ -160,7 +166,7 @@
         if (v.lean) v.lean.rotation.z = j !== undefined ? lerpA(N[i + 7], G[j + 7], kk) : N[i + 7];
       }
     }
-    return { a, b, k, x, z, yaw: -ry, s: ROAD.hintS, cockpit: !!(k < 0.5 ? A[9] : B[9]), firstPerson: !!(k < 0.5 ? A[14] : B[14]), glass: k < 0.5 ? A[10] : B[10], blur: lerp(a.blur || 0, b.blur || 0, k) };
+    return { a, b, k, x, z, yaw: -ry, s: ROAD.hintS, f1: onF1, cockpit: !!(k < 0.5 ? A[9] : B[9]), firstPerson: !!(k < 0.5 ? A[14] : B[14]), glass: k < 0.5 ? A[10] : B[10], blur: lerp(a.blur || 0, b.blur || 0, k) };
   }
 
   // ---------------------------------------------------------------- cameras
@@ -362,7 +368,12 @@
     placeCamera(mode, P, dt, clip, t);
     const inCar = mode === 'game' && P.cockpit;
     playerBike.riderTop.visible = !(mode === 'game' && P.firstPerson);   // (motorcycle, first person: you're the rider)
-    cockpit.visible = cockpitWheel.visible = inCar; interior.visible = swMesh.visible = !inCar;
+    cockpit.visible = cockpitWheel.visible = inCar && !P.f1; interior.visible = swMesh.visible = !inCar;
+    if (P.f1) {                                                     // F1 car: the helmet / lid / shield from outside, the cockpit from inside
+      playerF1.helmet.visible = !inCar; playerF1.cockpit.visible = inCar;
+      if (playerF1.lid) playerF1.lid.visible = !inCar;
+      if (playerF1.shield) playerF1.shield.visible = !inCar;
+    }
     playerGlass.opacity = inCar ? P.glass : 0.78;
     if (!inCar) { /* (outside views always show the body lean) */ }
     sunLight.position.set(P.x + SUN_OFF.x, SUN_OFF.y, P.z + SUN_OFF.z); sunLight.target.position.set(P.x, 0, P.z);
@@ -427,7 +438,7 @@
     R.active = true; R.clip = R.clip && clips.includes(R.clip) ? R.clip : clips[clips.length - 1];
     R.t = R.clip.inT; R.playing = true; resetCams();
     saved = { loop: !!ROAD.loop, origin: ROAD.origin, hintS: ROAD.hintS, theme: world.theme, camNear: camera.near, fov: camera.fov,
-      pos: camera.position.clone(), quat: camera.quaternion.clone(), menuVis: document.getElementById('menu').style.visibility };
+      pos: camera.position.clone(), quat: camera.quaternion.clone(), f1: playerF1.root.visible, menuVis: document.getElementById('menu').style.visibility };
     try { sound.suspend(true); } catch (e) { /* (no audio yet) */ }
     saved.shown = traffic.cars.filter(c => c.vis.root.visible);       // (put back on close: wrecks don't redo it themselves)
     for (const c of saved.shown) c.vis.root.visible = false;
@@ -455,6 +466,7 @@
     hidden(document.getElementById('hud'), false); document.getElementById('menu').style.visibility = saved.menuVis; hidden(badge, false);
     if (ed) ed.remove(); ed = null; if (hudCv) hudCv.remove(); hudCv = null;
     setVehicle(vehicle);                                             // (car / motorcycle as you had it)
+    if (saved.f1) showF1(true); else playerF1.root.visible = false;  // (racing in the F1 car: back in it)
     // the game puts your car, camera and scenery back on the next frame; the traffic shows again as it updates
     world.fillAll(car.s);
     try { if (!menuOpen) sound.suspend(false); } catch (e) { /* */ }

@@ -163,7 +163,8 @@ const Net = {
     if (!m || typeof m !== 'object') return;
     if (m.t === 'st') { const p = this.players.get(m.id); if (p) this.pushState(p, m.st); }
     else if (m.t === 'traffic') { if (this.room && this.onTraffic) this.onTraffic(m); }
-    else if (m.t === 'pong') { const r = performance.now() - m.c; if (r >= 0 && r < 3000) this.rtt = this.rtt === undefined ? r : this.rtt * 0.8 + r * 0.2; }
+    else if (m.t === 'pong') { const r = performance.now() - m.c; if (r >= 0 && r < 3000) { this.rtt = this.rtt === undefined ? r : this.rtt * 0.8 + r * 0.2;
+      const W = this.rttW || (this.rttW = []); W.push(r); if (W.length > 15) W.shift(); this.rttMin = Math.min(...W); } }   // (the fastest of the last ~30 s: friends are drawn ahead by that - see sample())
     else if (m.t === 'bumped') { if (this.room && this.onBumped) this.onBumped(m.v || 0); }   // a friend hit me hard (they saw it)
     else if (m.t === 'wreckOwner') { if (this.room && this.onWreckOwner) this.onWreckOwner(m.id); }   // a friend hit that car first: theirs to move
     else if (m.t === 'hello') this.myId = m.id;
@@ -216,7 +217,13 @@ const Net = {
   pushState(p, st) {
     if (!st || !Number.isFinite(st.s) || !Number.isFinite(st.d) || !Number.isFinite(st.t)) return;
     const now = performance.now() / 1000, off = now - st.t;
-    if (p.off === undefined || off < p.off) p.off = off; else p.off += 0.0004;      // (drifts up slowly to follow clock drift)
+    // (the fastest delivery in the last 2 s: follows the network getting slower or faster, without the old saw-tooth -
+    //  creeping up every update, then snapping back - that made friends surge and drop back a little all the time)
+    const W = p.offW || (p.offW = []); W.push(now, off);
+    while (W.length > 2 && W[0] < now - 2) W.splice(0, 2);
+    let mn = Infinity; for (let i = 1; i < W.length; i += 2) if (W[i] < mn) mn = W[i];
+    p.off = mn;
+    if (p.offR === undefined || Math.abs(p.offR - mn) > 0.3) p.offR = mn;   // (the clock friends are drawn on: eased to p.off in sample())
     p.jit = (p.jit ?? 0.02) * 0.96 + Math.min(0.5, off - p.off) * 0.04;
     p.lastRecv = now;
     const e = Object.assign({}, st);
@@ -245,6 +252,11 @@ const Net = {
       p.visLite.root.position.z = CG_F; p.visLite.root.visible = false;
       p.g.add(p.visLite.root);
       p.visFull = p.vis;
+      // (a car whose model file isn't here yet - the Koenigsegg: shown as an M4 meanwhile, rebuilt once it's in)
+      if (typeof bigModelReady === 'function' && !bigModelReady(p.model)) {
+        const want = p.model;
+        loadBigModel(want, () => { if (this.players.get(p.id) === p && p.g && p.model === want) { this.removeVis(p); this.makeVis(p); } });
+      }
       if (p.veh === 'van') {                      // the owners' van: the car until the van's file is in, then the van
         p.visLite.root.visible = false; p.visLite = p.vis;
         if (typeof getVanAsset === 'function') getVanAsset().then(a => {
@@ -298,14 +310,25 @@ const Net = {
     p.g = null; p.vis = p.visFull = p.visLite = null; p.sm = null;
   },
 
+  // The clock friends are drawn on: it moves on by exactly one frame each frame and is nudged gently onto the real
+  // time. (Reading the exact time mid-frame wobbles by a millisecond or more with how busy the frame is - at 110 km/h
+  // that's a 3 cm shudder every frame.)
+  clockStep(dt) {
+    const real = performance.now() / 1000;
+    if (this.fc === undefined || !(dt > 0) || Math.abs(real - this.fc) > 0.25) { this.fc = real; return; }
+    this.fc += dt; this.fc += (real - this.fc) * 0.05;
+  },
+  clockNow() { const real = performance.now() / 1000; return this.fc !== undefined && Math.abs(real - this.fc) < 0.1 ? this.fc : real; },   // (not stepped lately: the real time)
   // friend's state right now: a little in the past on THEIR clock, interpolated between updates
   sample(p, dt) {
     const b = p.buf; if (!b.length) return null;
-    const now = performance.now() / 1000;
-    if (now - p.lastRecv > 3) return null;           // no news for 3 s (tab hidden / lagging): hide them
+    const now = this.clockNow();                     // (a smooth frame clock - not the moment this line happens to run)
+    if (performance.now() / 1000 - p.lastRecv > 3) return null;   // no news for 3 s (tab hidden / lagging): hide them
     const want = U.clamp(0.065 + 2.5 * (p.jit || 0), 0.08, 0.3);   // one update interval + room for jitter
     p.delay = p.delay === undefined ? want : U.damp(p.delay, want, 0.5, dt);
-    const t = now - p.off - p.delay;
+    // (their clock vs mine eases over at no more than 5% speed: a change in the network never makes them jump)
+    p.offR = (p.offR ?? p.off) + U.clamp(p.off - (p.offR ?? p.off), -0.05 * dt, 0.05 * dt);
+    const t = now - p.offR - p.delay;
     let i = b.length - 1;
     while (i > 0 && b[i - 1].t > t) i--;
     if (i === 0) return Object.assign({}, b[0], { w: null });
@@ -316,15 +339,26 @@ const Net = {
     // That is where they were a moment ago (network delay + the smoothing buffer): ~8 m behind at 200 km/h.
     // Carry them forward by that time, so a friend touching your bumper is drawn touching it (and the
     // proxy gap and bumps use where they really are).
-    const lagWant = U.clamp(p.delay + ((this.rtt || 60) + (c.rtt || this.rtt || 60)) / 2000, 0, 0.45);
-    const lag = p.lag = p.lag === undefined ? lagWant : U.damp(p.lag, lagWant, 1.5, dt);   // (ping readings change it gradually)
+    // (the FASTEST trip, not the average: the clock they're drawn on already sits behind by the fastest delivery plus the
+    //  buffer, so adding the average jitter on top drew them too far ahead - over a metre on bad wifi)
+    const mine = this.rttMin ?? this.rtt ?? 60, lagWant = U.clamp(p.delay + (mine + (c.rtt || mine)) / 2000, 0, 0.45);
+    // (the buffer part moves exactly with the buffer - drawn further back, carried further forward - so a change in it never
+    //  nudges them; only the ping part is eased, as ping readings change)
+    p.lagR = p.lagR === undefined ? lagWant - p.delay : U.damp(p.lagR, lagWant - p.delay, 1.5, dt);
+    const lag = p.lag = U.clamp(p.delay + p.lagR, 0, 0.45);
     const span = Math.max(c.t - a.t, 1e-3), dd = U.clamp((c.d - a.d) / span, -6, 6);   // sideways speed (m/s)
     // carry forward with their braking / accelerating too (a crash stops a car fast: without this it would
     // overshoot into the car it just hit, then snap back)
     const v = st.v || 0, acc = U.clamp(((c.v || 0) - (a.v || 0)) / span, -25, 10);
-    st.s += acc < 0 && v + acc * lag < 0 ? v * v / (-2 * acc) : v * lag + 0.5 * acc * lag * lag;
-    st.d += dd * lag * 0.8;
-    st.dd = dd;                                        // (sideways speed: lets the smoothing tell real movement from corrections)
+    // (only "it stops within that time" when the speed is really dropping towards zero - forwards OR backwards: the old
+    //  test assumed forwards, so a car reversing was thrown metres the wrong way)
+    st.s += acc * v < 0 && Math.abs(v) < Math.abs(acc) * lag ? -v * v / (2 * acc) : v * lag + 0.5 * acc * lag * lag;
+    p.ddS = p.ddS === undefined ? dd : U.damp(p.ddS, dd, 10, dt);   // (sideways speed changes in steps with each update: eased, so the predicted line doesn't step too)
+    st.d += p.ddS * lag * 0.8;
+    // (and which way the car points, the same way: in a drift or a spin it's drawn turning with them, not a step behind)
+    const rr = U.clamp(U.wrap(c.ry - a.ry) / span, -6, 6); p.rrS = p.rrS === undefined ? rr : U.damp(p.rrS, rr, 4, dt);
+    st.ry += U.clamp(p.rrS * lag * 0.8, -0.6, 0.6);
+    st.dd = p.ddS;                                     // (sideways speed: lets the smoothing tell real movement from corrections)
     // wrecks they're simulating: same clock and same carry-forward as their car, so car and wreck line up
     if (c.w && c.w.length) {
       const prev = new Map((a.w || []).map(e => [e[0], e]));
@@ -393,6 +427,7 @@ const Net = {
   // ---------------------------------------------------------------- per frame (called by main.js)
   tick(dt, st) {
     if (!this.room) return;
+    this.clockStep(dt);
     this.sendT -= dt;
     if (this.sendT <= 0 && this.silent) this.sendT = NET_RATE;   // (racing: practising while a race you're not in runs - nobody sees you)
     if (this.sendT <= 0) {

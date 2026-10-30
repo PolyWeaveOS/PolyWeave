@@ -313,6 +313,8 @@ const VEH = {
 let vehicle = 'car';
 const canBike = () => !!(Account.user && Account.user.name && BIKE_NAMES.includes(Account.user.name.toLowerCase()));
 // the Bang Bus (the event's reward: js/event.js): the owners, and anyone who finished its quests
+// the special cars (the S15 drift car, the Koenigsegg): the owners and Content Creators (the server checks it too)
+const canSpecial = () => canBike() || !!(Account.user && Account.user.name && Account.user.creator);
 const canVan = () => canBike() || !!(Account.user && Account.user.name && Account.user.bus);
 function setVehicle(v) {
   if (typeof Net !== 'undefined' && Net.room && Net.room.carsOnly) v = 'car';   // (on a cars-only server: your car until you leave)
@@ -331,6 +333,8 @@ function setVehicle(v) {
   const fun = bike || van || carKey === 's15', was = score.funOnly; score.funOnly = fun;
   if (fun) { if (score.score >= 1) score.fun = true; if (!was && game.mode !== 'menu') hud.message((bike ? 'MOTORCYCLE' : van ? 'BANG BUS' : 'DRIFT CAR') + ' · JUST FOR FUN, NO STATS'); }
   const row = document.getElementById('vehRow'); if (row) row.classList.toggle('hidden', !canBike());
+  const gRow = document.getElementById('glideRow'); if (gRow) gRow.classList.toggle('hidden', !canBike());   // (owners: Ultra glide for the drift car)
+  const scRow = document.getElementById('smoothCamRow'); if (scRow) scRow.classList.toggle('hidden', !canBike());   // (owners: smooth camera for the drift car)
   showVan(van);
   if ((typeof Race !== 'undefined' && Race.active) || (typeof Garage !== 'undefined' && Garage.f1Preview)) showF1(true);   // (racing / the Garage showing the F1: still the F1 car)
 }
@@ -746,7 +750,12 @@ function applyCarCfg() {
 function installCar(key) {
   if (!PLAYER_CARS[key]) key = 'm4';
   const asked = key;
-  if (PLAYER_CARS[key].owners && !canBike()) key = 'm4';   // (the owners' drift car: only on their accounts - it comes back when they sign in)
+  if (PLAYER_CARS[key].owners && !canSpecial()) key = 'm4';   // (the owners' drift car: only on their accounts - it comes back when they sign in)
+  if (!bigModelReady(key)) {                           // (the Koenigsegg's model file: fetched first, then it's put on)
+    Settings.car = asked; saveSettings();
+    loadBigModel(key, () => { if (Settings.car === asked) installCar(asked); });
+    return;
+  }
   const old = CAR_PARTS[carKey], P = carParts(key), C = PLAYER_CARS[key];
   if (old !== P) {
     playerVis.root.remove(old.body, old.brake, old.indL, old.indR, ...old.wheels.map(w => w.pivot));
@@ -992,10 +1001,23 @@ function updateCamera(dt) {
   if (camMode !== 1) {
     // chase camera: follows the direction of travel smoothly (like "Low Poly Traffic Racer"),
     // so you see the car rotate into the turn instead of the whole world swinging
-    const travel = car.u > 4 ? car.yaw + Math.atan2(car.v, Math.max(car.u, 0.1)) : car.yaw;
-    camS.yaw = U.dampAngle(camS.yaw, travel, 5, dt);
+    let travel = car.u > 4 ? car.yaw + Math.atan2(car.v, Math.max(car.u, 0.1)) : car.yaw, camK = 5, shiftT = U.clamp(car.r * 1.5, -0.3, 0.3);
+    if (car.drift && spd > 3) {
+      // the drift car: the real direction of travel at any angle (the line above jumps once the car is past 90 deg - a 360)
+      const slip = Math.atan2(car.v, car.u), velHead = car.yaw + slip;
+      if (Settings.smoothCam && canBike()) {
+        // owners' smooth camera: never spins with the car - it follows where it's going and leans a little to the side it's sliding
+        travel = velHead; camK = 4; shiftT = U.clamp(-Math.sin(slip) * 0.7, -0.7, 0.7);
+      } else {
+        // deep / spinning: blend over to following the car's nose, slower - it swings round with a 360 instead of flicking
+        const k = U.clamp(U.smooth(0.8, 1.3, Math.abs(slip)) + ((car.spinT || 0) > 0 ? 1 : 0), 0, 1);
+        travel = velHead + U.wrap(car.yaw - velHead) * k; camK = U.lerp(5, 2.5, k);
+      }
+    }
+    { const y1 = U.dampAngle(camS.yaw, travel, camK, dt);
+      // (drift car: the camera never turns faster than ~200 deg/s - a 360 glides round instead of whipping)
+      camS.yaw = car.drift ? camS.yaw + U.clamp(U.wrap(y1 - camS.yaw), -3.5 * dt, 3.5 * dt) : y1; }
     // ...and slides slightly sideways toward the turn instead of orbiting
-    const shiftT = U.clamp(car.r * 1.5, -0.3, 0.3);
     camS.shift = U.damp(camS.shift || 0, shiftT, 4, dt);
     const sp = U.clamp(spd / 80, 0, 1);
     // camera has inertia: it lags back when accelerating and surges toward the car under braking
@@ -1172,6 +1194,12 @@ tcEl.checked = Settings.tc; manEl.checked = Settings.manual; mmEl.checked = Sett
 tcEl.addEventListener('change', () => { Settings.tc = car.tc = tcEl.checked; saveSettings(); });
 manEl.addEventListener('change', () => { Settings.manual = car.manual = manEl.checked; saveSettings(); });
 mmEl.addEventListener('change', () => { Settings.minimap = mmEl.checked; saveSettings(); });
+const glEl = $id('glideOn');                            // (owners only: the drift car on ice - js/drift.js, steering wheel only)
+glEl.checked = !!Settings.ultraGlide;
+glEl.addEventListener('change', () => { Settings.ultraGlide = glEl.checked; saveSettings(); });
+const scEl = $id('smoothCamOn');                        // (owners only: in the drift car the chase camera follows where it's going, never spins with it)
+scEl.checked = !!Settings.smoothCam;
+scEl.addEventListener('change', () => { Settings.smoothCam = scEl.checked; saveSettings(); });
 const ghEl = $id('ghostOn');                            // (racing: a see-through car on your best lap in time trials - race.js ghostShow)
 ghEl.checked = Settings.ghost !== false;               // (on by default)
 ghEl.addEventListener('change', () => { Settings.ghost = ghEl.checked; saveSettings(); });
@@ -1261,7 +1289,7 @@ Account.onChange = () => {
   acctMsg = ''; renderAccount(); syncBest(game.mode === 'mp' ? 'mp' : 'sp'); loadOwnerTools(); loadAdmin();
   if (window.AdminPanel) AdminPanel.account();          // (signed out / another account: the admin button goes)
   const wantCar = PLAYER_CARS[Settings.car] ? Settings.car : 'm4';
-  if (wantCar !== carKey || (PLAYER_CARS[carKey].owners && !canBike())) installCar(wantCar);   // (the owners' drift car: back once they're signed in, gone when not)
+  if (wantCar !== carKey || (PLAYER_CARS[carKey].owners && !canSpecial())) installCar(wantCar);   // (the owners' drift car: back once they're signed in, gone when not)
   setVehicle(Settings.vehicle);                        // (the motorcycle only for its accounts; anyone else is in the car)
   if (typeof Garage !== 'undefined') Garage.refresh();
   $id('playDrift').classList.toggle('hidden', !canBike());   // (Play > Drift track: the owners only for now)
@@ -1963,7 +1991,7 @@ function updateMpHud(dt) {
 function netState() {
   return { t: +(performance.now() / 1000).toFixed(3), s: +car.s.toFixed(2), d: +car.d.toFixed(3), ry: +(proxy.ry || 0).toFixed(4), v: +proxy.v.toFixed(2),
     steer: +car.steer.toFixed(3), brake: !!(car.brakeOn && car.gear >= 0), kmh: Math.round(Math.abs(car.u) * 3.6), score: Race.active ? Race.progress() : Math.round(score.score),   // (racing: how far round the race)
-    rt: Math.round(score.runTime || 0), rtt: Math.round(Net.rtt || 0), w: traffic.remote ? traffic.localWrecks() : undefined };
+    rt: Math.round(score.runTime || 0), rtt: Math.round(Net.rttMin ?? Net.rtt ?? 0), w: traffic.remote ? traffic.localWrecks() : undefined };
 }
 
 // ---------- proxy multiplier (multiplayer): drive close to another player for up to x10 ----------
@@ -2423,7 +2451,8 @@ function driveStep(dt, ctl, paused) {
   // (racing: no lane assist of any kind; menu open on a server: the coasting car keeps its lane)
   const steerSet = Race.active ? RACE_STEER() : paused ? Object.assign({}, Settings, { assist: 1, laneCentre: true }) : Settings;
   // the owners' drift car: its own tyre physics (js/drift.js); everything else drives as always
-  car.drift = carKey === 's15' && vehicle === 'car' && !vanOn && !Race.active && canBike() ? DRIFT : null;
+  car.drift = carKey === 's15' && vehicle === 'car' && !vanOn && !Race.active && canSpecial() ? DRIFT : null;
+  car.glide = !!(car.drift && Settings.ultraGlide && canBike() && ctl.source === 'wheel');   // (owners' Ultra glide: steering wheel only)
   let wallHit = 0;
   ROAD.hintS = car.s;      // (loop circuit: road lookups pick the lap you're on)
   const held = Race.active && Race.frozen;               // (racing: on the grid until the lights go out)
@@ -2482,7 +2511,7 @@ function driveStep(dt, ctl, paused) {
   // ---- traffic, collisions, scoring ----
   Net.tick(dt, netState());
   // shared traffic is drawn at "now" like friends are: its smoothing buffer + the trip from the server
-  traffic.lead = traffic.remote ? traffic.netDelay() + (Net.rtt || 60) / 2000 : 0;
+  traffic.lead = traffic.remote ? traffic.netDelay() + (Net.rttMin ?? Net.rtt ?? 60) / 2000 : 0;   // (the fastest trip: the clock the traffic is drawn on already sits behind by the fastest delivery)
   traffic.wreckPose = traffic.remote ? Net.wreckPoses() : null;   // (wrecks friends are simulating come from them)
   traffic.update(dt, proxy, game.density);
   if (traffic.remote) Net.unoverlap(traffic.cars, trafficHull);    // (friends never drawn inside a car)
@@ -2599,7 +2628,7 @@ function frame(now) {
   // steering wheel force feedback / controller rumble (js/ffb.js)
   if (typeof FFB !== 'undefined') {
     if (Race.fin || (Race.active && Race.frozen)) FFB.stop();
-    else { FFB.hit(ffbHit); FFB.drive(dt, { kmh: Math.abs(car.u) * 3.6, wheel: Input.padKind === 'wheel' ? Input.wheelPos || 0 : null, ay: car.ay || 0, rough: ffbRough, align: car.drift ? car.ffbAlign || 0 : undefined }); }   // (drift car: the tyres' own aligning force)
+    else { FFB.hit(ffbHit); FFB.drive(dt, { kmh: Math.abs(car.u) * 3.6, wheel: Input.padKind === 'wheel' ? Input.wheelPos || 0 : null, ay: car.ay || 0, rough: ffbRough, align: car.drift && Input.out.source === 'wheel' ? car.ffbAlign || 0 : undefined }); }   // (drift car: the tyres' own aligning force - only while you steer with the wheel: on the keys it would turn the idle wheel, and the game would take that as you steering with it)
   }
   Race.update(dt);                                     // (racing: lap timing, lights, race HUD)
   world.update(car.s, camera);
@@ -2623,7 +2652,8 @@ let toolsFor = null;
 function titleUnlocks(id) {
   if (id === 'creator') { toolsFor = null; loadOwnerTools(); }
   if (id === 'admin' && Account.user && !Account.user.admin) { Account.user.staff = true; adminFor = null; loadAdmin(); if (window.AdminPanel) AdminPanel.account(); }
-  if ((id === 'creator' || id === 'admin') && Account.user && !Account.user.bus) { Account.user.bus = true; Account.onChange(); }   // (admins and Content Creators get the Bang Bus)
+  if ((id === 'creator' || id === 'admin') && Account.user && !Account.user.bus) { Account.user.bus = true; Account.onChange(); }
+  if (id === 'creator' && Account.user && !Account.user.creator) { Account.user.creator = true; Account.onChange(); }   // (Content Creator: the special cars too)   // (admins and Content Creators get the Bang Bus)
 }
 function loadOwnerTools() {
   if (!Account.signedIn || !Account.session || toolsFor === Account.session || window.Recorder) return;

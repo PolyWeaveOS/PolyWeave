@@ -37,10 +37,11 @@ const DRIFT = {
   // drift control (see driftSub): steering span that counts as fully into / out of the turn (rad), the angle with
   // no throttle / per throttle / per steer (rad), deepest angle, how fast it can change (rad/s); path: turn (g) at
   // neutral / per steer, how hard it's held; angle and yaw-rate gains
-  dSteerSpan: 0.22, dKeep: 0.95, dPush: 0.32, dScrub: 0, dFfbAt: 0, gripAid: 1.0, dSwing: 0.8, dSwingRate: 3.2, dLiftSwing: 0.75, dSwingMin: 0.6, dWheelSwing: 0.5, dTrimMin: 0.25, dHoldIn: 0.55, dCarryFade: 0.12, dEase: 3.5, dEaseSwing: 9, dPathEase: 5, dBase: 0.18, dThrottle: 0.55, dSteer: 0.25, dMax: 1.15, dBrake: 0.5, dBrakeEntry: 0.078, dBrakeA0: 0.32, dBrakeFar: 0.3, dBrakeFast: 0.3, dPathBrake: 0.45, dBrakeG: 0.4, dMaxLow: 1.35, dRate: 0.9, dPathG: 0.6, dPathSteer: 1.6, dPathK: 1.0, dAngK: 3, dYawK: 7, dPathSlew: 6, dSwingAcc: 12,
+  dSteerSpan: 0.22, dKeep: 0.95, dPush: 0.32, dScrub: 0, dFfbAt: 0, gripAid: 1.0, dSwing: 0.8, dSwingRate: 3.2, dLiftSwing: 0.75, dSwingMin: 0.6, dWheelSwing: 0.5, dTrimMin: 0.25, dHoldIn: 0.55, dCarryFade: 0.12, dEase: 3.5, dEaseSwing: 9, dPathEase: 5, dBase: 0.18, dThrottle: 0.55, dSteer: 0.25, dMax: 1.15, dBrake: 0.5, dBrakeEntry: 0.078, dBrakeA0: 0.32, dBrakeFar: 0.3, dBrakeFast: 0.3, dPathBrake: 0.45, dBrakeG: 0.4, dMaxLow: 1.35, dRate: 0.9, dPathG: 0.6, dPathSteer: 1.6, dPathK: 1.0, dAngK: 3, dYawK: 7, dSpin: 1.25, dSpinV: 9, dOverSteer: 0.45, dSpinOverA: 0.95, dSpinOverRate: 1.4, dSnap: 0.55, dSnapRate0: 1.5, dSnapRate1: 3, dSpinGrip: 0.5, dSpinYaw: 2.6, dSpin360Steer: 0.3, dSpin360Yaw: 4, glideF: 0.6, glideR: 0.35, glideHold: 0.3, glideSpinA: 1.0,   // (Ultra glide, owners + wheel only: front / rear grip, drift-control strength)
+  dSpinHold: 1.5, dOverCap: 1.6, dOverMax: 4, dPathSlew: 6, dSwingAcc: 12,
   // keys = a pretend wheel: turning speed when a key goes down / after kbWheelRamp s (deg of wheel per s), self-centring
   // (deg/s, and how softly it settles), how hard it can turn while gripping (g), never less than kbWheelMin deg
-  kbWheelRate0: 300, kbWheelRate: 800, kbWheelRamp: 0.3, kbWheelBack: 500, kbWheelBackK: 6, kbWheelG: 2.5, kbWheelMin: 150, kbWheelSlow: 2.5,
+  kbWheelRate0: 300, kbWheelRate: 800, kbWheelRamp: 0.3, kbWheelBack: 500, kbWheelBackK: 6, kbWheelG: 2.0, kbWheelMin: 40, kbWheelBrake: 110, kbWheelSlow: 2.5, kbLowBoost: 1.05, kbPathV: 10, kbWheelRoll: 220, kbDriftIn: 1.1, kbOverRate: 60, kbAngRate: 0.6, kbAngBack: 1.3, kbLiftFade: 0.5, kbAngMax: 1.8, kbLead: 0.35, kbLeadGrow: 1.0, kbKickT: 0.22, kbKickV: 8, kbHoldK: 0.7, kbFollow: 0.35, kbGripBoostK: 0.35, kbGripAidK: 0.5, kbKickA: 0.4, kbKickSnap: 0.6, kbSwingHold: 0.35,   // (keys: W is all or nothing, so the extra angle at low speed is smaller than the wheel's 1.45)
   kbHands: 16, kbHandsMax: 4.5,  // keys: how quickly the eased steering follows (rad/s natural frequency), fastest hands (rad/s at the wheels)
   kbTurnG: 1.15, kbTurnGOff: 1.45,                 // keys, grip driving: how hard a full key turns (g)
 };
@@ -154,8 +155,12 @@ const driftCurve = s => (s < 1 ? Math.sin(s * Math.PI / 2) : 1 - (1 - DRIFT.slid
     // off the throttle and not drifting, the tyres bite harder (sharp turn-in, drives through gaps); on the throttle
     // and while drifting they're the drift tyres as they were
     const off = (1 - U.smooth(0.3, 0.9, U.clamp(inp.throttle, 0, 1))) * (1 - (c.dS || 0));
-    const gk = 1 + (D.gripBoost - 1) * off;
-    const GF = axle(Fzf, dLf, D.muF) * gk, GR = axle(Fzr, dLr, D.muR) * gk;
+    const gk = 1 + (D.gripBoost - 1) * off * (c.kbKeys ? D.kbGripBoostK : 1);   // (keys: less of the off-throttle extra grip - the car moves around more)
+    // snap oversteer: a violent, big yank of the steering at speed throws the weight off the rear for a moment - the back
+    // lets go (and if you keep it there, the car spins). Normal steering, brake entries and key taps are far below this
+    const snapIn = U.smooth(D.dSnapRate0, D.dSnapRate1, c.stPeak || 0) * U.smooth(0.15, 0.35, Math.abs(c.steer)) * U.smooth(12, 20, spd);
+    c.snap = Math.max((c.snap || 0) * Math.exp(-h / 0.45), snapIn);
+    const GF = axle(Fzf, dLf, D.muF) * gk * (c.glide ? D.glideF : 1),   /* (owners' Ultra glide: on ice) */ GR = axle(Fzr, dLr, D.muR) * gk * (1 - D.dSnap * c.snap) * (c.spinT > 0 ? 1 - D.dSpinGrip : 1);   // (spun out: the rear is gone for a moment)
 
     // ---- brakes ----
     // (drifting: most of the braking comes through the drift itself - see the drift control - so the front tyres keep
@@ -171,7 +176,7 @@ const driftCurve = s => (s < 1 ? Math.sin(s * Math.PI / 2) : 1 - (1 - DRIFT.slid
       // (the tyres grip harder pulling forward than sideways - muX: the power gets down instead of just spinning)
       if (s < 1e-6) return { fx: 0, fy: 0, kx: GR * D.muX * Math.PI / 2 / (D.kPk * Vr), s: 0 };
       const F = GR * driftCurve(s);
-      return { fx: F * D.muX * nx / s, fy: -F * ny / s, kx: Math.abs(sx) > 1e-4 ? F * D.muX * Math.abs(nx) / s / Math.abs(sx) : GR * D.muX * Math.PI / 2 / (D.kPk * Vr), s };
+      return { fx: F * D.muX * nx / s, fy: -F * ny / s * (c.glide ? D.glideR : 1),   /* (Ultra glide: slippery sideways only - it still pulls away) */ kx: Math.abs(sx) > 1e-4 ? F * D.muX * Math.abs(nx) / s / Math.abs(sx) : GR * D.muX * Math.PI / 2 / (D.kPk * Vr), s };
     };
     let R = rearForce(c.wr);
     // I dw/dt = Td - Fx rw - brakes, with Fx = kx (w rw - u)
@@ -204,6 +209,24 @@ const driftCurve = s => (s < 1 ? Math.sin(s * Math.PI / 2) : 1 - (1 - DRIFT.slid
     let Fx = Fxr + Fxf - drag * c.u - roll;
     let Fy = Fyr + Fyf - drag * c.v;
     let Mz = D.a * Fyf - D.b * Fyr;
+    // spun out: the rotation carries on round (the first moment of the spin keeps it turning)
+    // a 360: keep the wheel cranked into the spin (or the key held) on the throttle and it keeps whipping round; once it's
+    // come all the way round to facing forward, it's yours again - drive on. Let go and it just slides out of the spin
+    if (c.spinT > 0) {
+      const bf = Math.atan2(c.v, c.u); c.spinRot = (c.spinRot || 0) + Math.abs(U.wrap(bf - (c.spinB ?? bf))); c.spinB = bf;
+      const into = throttle > 0.5 && (c.kbKeys ? Math.sign(inp.steer || 0) === c.spinDir : Math.sign(c.steer) === c.spinDir && Math.abs(c.steer) > D.dSpin360Steer);
+      // (keys only - the keys can't steer a spin. On the wheel nothing pushes it round: the spin is the car's own
+      //  momentum and your steering, and you start and stop it yourself)
+      if (c.kbKeys) {
+        if (into) { c.spinT = Math.max(c.spinT, 0.3); if (Math.abs(c.r) < D.dSpin360Yaw) Mz += D.Iz * 12 * c.spinDir; }
+        else if (c.spinT > D.dSpinHold - 0.6 && Math.abs(c.r) < D.dSpinYaw) Mz += D.Iz * 9 * c.spinDir;
+        if (c.spinRot > 2 * Math.PI - 0.6 && Math.abs(bf) < 0.5 && c.u > 0) { c.spinT = 0; c.r *= 0.35; c.spun360 = true; }   // (landed it)
+      } else {
+        if (c.spinRot > 2 * Math.PI - 0.6 && Math.abs(bf) < 0.5 && c.u > 0) c.spun360 = true;
+        // wheel: once you've brought it back round to pointing roughly where it's going, the drift can take it again (no lock-out)
+        if (c.spinT < D.dSpinHold - 0.25 && Math.abs(bf) < D.dSpinOverA && c.u > 0) c.spinT = 0;
+      }
+    }
     // ---- drift control (CarX / Forza style): once the car is properly sliding, you drive the DRIFT, not the
     //      tyres. The angle comes from your right foot and how far you steer into / out of the turn, and it moves
     //      there smoothly (it can't snap back or run away into a spin, max ~55 deg); your steering also bends the
@@ -224,11 +247,25 @@ const driftCurve = s => (s < 1 ? Math.sin(s * Math.PI / 2) : 1 - (1 - DRIFT.slid
       const a0 = D.dBrakeA0 + D.dBrakeFar * U.smooth(D.dBrakeEntry, D.dBrakeEntry + 0.12, Math.abs(c.steer)) + D.dBrakeFast * U.smooth(0.15, 1.2, c.stPeak);
       // (while a brake entry is starting, turning the wheel further / faster still adds to how far it kicks out)
       if (c.dOn && (c.entryT || 0) > 0 && Math.sign(c.steer) === c.dSide) c.carry = Math.max(c.carry || 0, a0);
-      if (!c.dOn && c.brkT > 0 && c.u > 8 && Math.abs(c.steer) > D.dBrakeEntry) {
+      // spun out: past dSpin (above donut speeds) the drift control lets go and the car really spins - it can't grab a
+      // new drift until the spin is over (dSpinHold s)
+      c.spinT = Math.max(0, (c.spinT || 0) - h);
+      // (and oversteer: deep and still swinging round fast - a hard flick, too much turn - nothing can catch that: it spins)
+      const bRate = (Math.abs(beta) - (c.betaWas ?? Math.abs(beta))) / h; c.betaWas = Math.abs(beta);
+      const overRot = Math.abs(beta) > D.dSpinOverA && bRate > D.dSpinOverRate && c.u > 0 && !(c.dOn && (c.flipT || 0) > 0);   // (not while a switch to the other side is swinging across)
+      const glideSpin = c.glide && Math.abs(beta) > D.glideSpinA && Math.sign(c.steer) === Math.sign(c.r) && Math.abs(c.steer) > D.dSpin360Steer && inp.throttle > 0.5 && c.u > 0;   // (Ultra glide: deep and cranked into it on the throttle - it whips on round, a 360)
+      if (V > D.dSpinV - 2 && !(c.spinT > 0) && (glideSpin || !c.glide && ((c.dOn && Math.abs(beta) > D.dSpin && Math.sign(beta) === -c.dSide) || overRot))) { c.dOn = false; c.dS = 0; c.spinT = D.dSpinHold; c.spinRot = 0; c.spinB = Math.atan2(c.v, c.u); c.spinDir = Math.sign(c.r || 1); c.spun360 = false; }
+      if (!c.dOn && !(c.spinT > 0) && c.brkT > 0 && c.u > 8 && Math.abs(c.steer) > D.dBrakeEntry) {
         c.dOn = true; c.dSide = Math.sign(c.steer); c.bT = Math.max(0, -c.dSide * beta); c.bV = 0;
-        c.carry = a0; c.bMem = a0; c.swingT = 0; c.swingTo = 0; c.flipT = 0.5; c.entryT = 0.8;   // (the carry is the angle it swings out to; throttle / steering take it from there)
+        c.carry = a0; c.bMem = a0; c.swingT = 0; c.swingTo = 0; c.flipT = 0.5; c.entryT = 0.8; c.kbAng = a0;   // (the carry is the angle it swings out to; throttle / steering take it from there)
       }
-      if (want && !c.dOn) { c.dOn = true; c.dSide = Math.abs(c.r) > 0.3 ? Math.sign(c.r) : -Math.sign(beta || 1); c.bT = Math.max(0, -c.dSide * beta); c.carry = 0; c.bMem = c.bT; c.swingT = 0; c.swingTo = 0; }   // (the side: which way the car is rotating - at walking pace a tight turn's geometry looks like a slide the other way)
+      // keys: hold a turn key with W for kbKickT s above kbKickV and the rear steps out into a drift (any road speed - on
+      // the keys there's no throttle to feather, so at road speed the power alone can't break it loose); a lane-change tap
+      // is shorter than that and stays a lane change
+      c.kkT = c.kbKeys && !c.dOn && Math.abs(inp.steer || 0) > 0.5 && inp.throttle > 0.6 && V > D.kbKickV && c.u > 0 ? (c.kkT || 0) + h : 0;
+      if (c.kkT > D.kbKickT && !(c.spinT > 0)) { c.dOn = true; c.dSide = Math.sign(inp.steer); c.bT = Math.max(0, -c.dSide * beta); c.bV = 0; c.carry = 0; c.bMem = D.kbKickA; c.swingT = 0; c.swingTo = 0; c.kbAng = Math.max(c.bT, D.kbKickA); c.kkT = 0;
+        c.snap = Math.max(c.snap || 0, D.kbKickSnap); c.dS = Math.max(c.dS || 0, 0.8); c.bT = Math.max(c.bT, D.kbKickA * 0.7); c.bV = D.dRate; }   // (it kicks out at once: the rear lets go for a moment, the drift is already half on and swinging out)
+      if (want && !c.dOn && !(c.spinT > 0)) { c.dOn = true; c.dSide = Math.abs(c.r) > 0.3 ? Math.sign(c.r) : -Math.sign(beta || 1); c.bT = Math.max(0, -c.dSide * beta); c.carry = 0; c.bMem = c.bT; c.swingT = 0; c.swingTo = 0; c.kbAng = c.bT; }   // (the side: which way the car is rotating - at walking pace a tight turn's geometry looks like a slide the other way)
       // (out: the angle is nearly gone and you're not swinging it over to the other side)
       c.flipT = Math.max(0, (c.flipT || 0) - h);
       // (counter-steering hard - on the throttle OR off it - is swinging the car over: never end the drift as it passes straight)
@@ -245,7 +282,7 @@ const driftCurve = s => (s < 1 ? Math.sin(s * Math.PI / 2) : 1 - (1 - DRIFT.slid
         if (Math.sign(beta) === c.dSide && (Math.abs(beta) > 0.2 || (c.bT < -0.04 && Math.abs(beta) > 0.03))) {
           // the new drift starts with the swing's depth and, off the throttle, carries it (fading slowly) - throttle takes over
           c.carry = Math.max(Math.abs(beta), -c.bT, c.swingTo || 0);
-          c.dSide = -c.dSide; c.bT = Math.max(Math.abs(beta), -c.bT); c.bV = -(c.bV || 0); c.flipT = 0.7; c.bMem = c.carry; c.swingTo = 0; c.swingT = 0; }   // (a moment's grace: the new drift builds before it could count as over)
+          c.dSide = -c.dSide; c.bT = Math.max(Math.abs(beta), -c.bT); c.bV = -(c.bV || 0); c.flipT = 0.7; c.bMem = c.carry; c.swingTo = 0; c.swingT = 0; c.kbAng = Math.max(Math.abs(beta), -(c.kbAng || 0)); }   // (a moment's grace: the new drift builds before it could count as over)
         const side = c.dSide;                                             // +1 drifting round to the right
         // your steering as it is (a 30-45 deg real counter-steer is out of reach on a wheel): straight = a steady drift,
         // into the turn (+) = more angle and a tighter line, counter-steer (-) = less angle and a wider line
@@ -261,7 +298,11 @@ const driftCurve = s => (s < 1 ? Math.sin(s * Math.PI / 2) : 1 - (1 - DRIFT.slid
         c.thHold = brk > 0.1 ? Math.max(c.thHold || 0, 0) : U.clamp(inp.throttle, 0, 1);
         const thIn = Math.max(U.clamp(inp.throttle, 0, 1), brk > 0.1 ? c.thHold : 0), base = D.dBase * Math.min(1, thIn * 4 + brk * 3) + D.dThrottle * thIn + D.dBrake * brk;   // (fully off the throttle and the brake: the drift dies out)
         // (deepest angle: ~66 deg at speed, up to ~77 deg at walking pace - donuts and swinging round tight hairpins)
-        const dMax = U.lerp(D.dMaxLow, D.dMax, U.smooth(8, 16, V));
+        // (above donut speeds there's no safety limit any more: steer far enough into it on the throttle and the angle keeps
+        //  growing until the car spins out - below, the old limit keeps donuts and hairpin swings possible)
+        const overK = U.smooth(D.dSpinV - 2, D.dSpinV + 2, V) * (1 - U.smooth(0.05, 0.3, brake));   // (on the brake: the old safe limit - braking steepens a drift, it doesn't spin it)
+        const dMax = U.lerp(U.lerp(D.dMaxLow, D.dMax, U.smooth(8, 16, V)), D.dOverCap, overK);
+        const cinX = U.lerp(cin, U.clamp(cs, -1, D.dOverMax), overK);   // (steering past the span counts on: the further in, the deeper)
         // the angle you came in with (it's what a lift-off swing throws the car across with)
         if (cs > swingAt) c.bMem = Math.max(c.bT, (c.bMem || 0) - 0.4 * h);
         // a swing you've already thrown: off the throttle the new drift keeps it, fading slowly (steer into it to hold more)
@@ -269,7 +310,7 @@ const driftCurve = s => (s < 1 ? Math.sin(s * Math.PI / 2) : 1 - (1 - DRIFT.slid
         // (wheel: the drift is held by keeping the wheel turned INTO it - the further in, the more of the throttle's angle you
         //  keep; bring the wheel back to straight and the car straightens up, throttle or not. Keys: a key held = into it)
         const hold = wheelIn ? U.smooth(0, D.dHoldIn, cin) : 1;
-        let bt = cin >= 0 ? Math.min(Math.max((base + D.dSteer * cin * Math.min(1, thIn * 3 + brk * 3)) * U.lerp(1.45, 1, U.smooth(8, 16, V)) * hold, c.carry * (wheelIn ? ((c.entryT || 0) > 0 ? 1 : hold) : 0.6 + 0.4 * cin)), dMax) :   // (a brake entry kicks out at full strength first)
+        let bt = cin >= 0 ? Math.min(Math.max((base + (D.dSteer * Math.min(cinX, 1) + D.dOverSteer * Math.max(0, cinX - 1)) * Math.min(1, thIn * 3 + brk * 3)) * U.lerp(c.kbKeys ? U.lerp(1.45, D.kbLowBoost, U.smooth(3, 6, Math.abs(c.u))) : 1.45, 1, U.smooth(8, 16, V)) * hold, c.carry * (wheelIn ? ((c.entryT || 0) > 0 ? 1 : hold) : 0.6 + 0.4 * cin)), dMax) :   // (a brake entry kicks out at full strength first)
            (wheelIn ? 0                                                         // wheel: past straight (counter-steer) it just straightens - a big one swings over (below)
                     : Math.max(base * (1 + cin * (1 + D.dSwing * thIn)), -D.dMax * 0.8));
         // counter-steering hard - with the throttle or without it (a lift-off swing) - throws the car over into a drift the other
@@ -281,11 +322,35 @@ const driftCurve = s => (s < 1 ? Math.sin(s * Math.PI / 2) : 1 - (1 - DRIFT.slid
         if (cs < swingAt) { const sw = -Math.max(D.dLiftSwing * (c.bMem || 0), D.dSwingMin) * swPull; if (sw < bt) { bt = Math.max(sw, -D.dMax * 0.8); c.swingTo = Math.max(c.swingTo || 0, -bt); if (c.csT > 0.15) c.swingT = 1.6; } }   // (the swing keeps its deepest target as the key / wheel comes back)   // (a swing is always a proper drift on the new side, never a half-hearted lean)
         c.swingT = Math.max(0, (c.swingT || 0) - h);
         if (c.swingT > 0 && (c.swingTo || 0) > 0.05) bt = Math.min(bt, -c.swingTo);
+        // keys: they set the angle itself. The turn key INTO the drift winds it up (kbAngRate rad/s), the other one winds it
+        // back down; let go and it stays where it is - press until 30 deg, release, and it holds 30. Off the throttle it slowly
+        // straightens. Keep the other key held on the throttle and it swings over into a drift the other way. No limit:
+        // wind it past dSpin and it spins out
+        if (c.kbKeys) {
+          const kd = side * Math.sign(inp.steer || 0), on = thIn > 0.2, a = -side * beta;   // (a: the angle the car is at now)
+          if (c.kbAng === undefined) c.kbAng = Math.max(0, c.bT || 0);
+          // (held: it asks for only a little more / less than where the car actually is, so the car follows the key with no
+          //  run-on; let go: it holds the angle the car is at right then)
+          c.kdT = kd === c.kdWas ? (c.kdT || 0) + h : 0;                   // (how long this key has been held)
+          const slowK = U.lerp(2.5, 1, U.smooth(4, 10, V));                 // (donut speeds: it swings round quicker)
+          if (kd > 0) c.kbAng = U.clamp(c.kbAng + D.kbAngRate * slowK * h, a, a + D.kbLead * slowK + D.kbLeadGrow * Math.max(0, c.kdT - 0.4));   // (held on and on: it keeps asking for more - overcook it and it spins)
+          // (the other key: a tap trims; held past kbSwingHold s it throws the car over into a drift the other way - the
+          //  pendulum, on the throttle or off it - and once it's across the same key is the turn key of the new drift)
+          else if (kd < 0 && c.kdT > D.kbSwingHold) c.kbAng = Math.min(c.kbAng, -Math.max(D.dLiftSwing * Math.max(c.bMem || 0, a), D.dSwingMin));
+          else if (kd < 0) c.kbAng = U.clamp(c.kbAng - D.kbAngRate * D.kbAngBack * h, a - D.kbLead, a);
+          else if (c.kdWas > 0) { c.kbAng = a; c.bT = a; c.bV = 0; }   // (let go of the turn key: hold where the car is)
+          // (let go of the other key: the trim you asked for stays - the car eases down to it)
+          c.kdWas = kd;
+          if (!kd) c.kbAng += (a - c.kbAng) * (1 - Math.exp(-D.kbFollow * U.smooth(8, 11, V) * h));   // (hands off: the angle it holds drifts gently with where the car really goes - it breathes, not locked rigid)
+          if (!kd && !on && brk < 0.1) c.kbAng -= D.kbLiftFade * Math.sign(c.kbAng) * Math.min(1, Math.abs(c.kbAng) / 0.05) * h;
+          c.kbAng = U.clamp(c.kbAng, kd < 0 && on || c.kbAng < 0 ? -D.dSwingMin : 0, U.lerp(D.dMaxLow, D.kbAngMax, U.smooth(D.dSpinV - 2, D.dSpinV + 3, V)));   // (donut speeds: never past ~77 deg - no spinning out there)
+          bt = c.kbAng + D.dBrake * brk * 0.5; c.swingT = 0; c.swingTo = 0;   // (the brake still steepens it a bit)
+        }
         const rate = cin < -0.3 ? D.dSwingRate : D.dRate;                 // (swinging over is quicker than building angle)
         // the angle eases toward that like a spring with no bounce: it starts moving gently, flows, and settles softly
         // (no sudden starts or stops - the smooth look of a good drift clip)
         c.entryT = Math.max(0, (c.entryT || 0) - h);
-        const wn = cin < -0.3 || c.entryT > 0 ? D.dEaseSwing : D.dEase;
+        const wn = cin < -0.3 || c.entryT > 0 || (c.kbKeys && c.kdWas) ? D.dEaseSwing : D.dEase;   // (keys: the car follows a held key closely)
         // (and the swing builds up its speed over a moment rather than all at once: no jolt as the car starts across)
         c.bV = U.clamp((c.bV || 0) + U.clamp((wn * wn * (bt - c.bT) - 2 * wn * (c.bV || 0)) * h, -D.dSwingAcc * h, D.dSwingAcc * h), -rate, D.dRate);
         c.bT += c.bV * h;
@@ -294,9 +359,9 @@ const driftCurve = s => (s < 1 ? Math.sin(s * Math.PI / 2) : 1 - (1 - DRIFT.slid
         const aLat = 9.81 * U.clamp(D.dPathG + D.dPathSteer * cin + D.dPathBrake * brk * (cin > -0.3 ? 1 : 0), -1.0, 1.7);   // (counter-steer: straight on, or even drifting away from the turn)
         // how fast the path turns - eased in and out too, so the line flows instead of jerking with each key press
         // (and it can only swing round so fast: coming out of a donut the other way the line rolls over instead of snapping)
-        c.wPS = (c.wPS ?? c.r) + U.clamp((side * aLat / Math.max(V, 7) - (c.wPS ?? c.r)) * (1 - Math.exp(-h * D.dPathEase)), -D.dPathSlew * h, D.dPathSlew * h);
+        c.wPS = (c.wPS ?? c.r) + U.clamp((side * aLat / Math.max(V, c.kbKeys ? U.lerp(7, D.kbPathV, U.smooth(3, 6, Math.abs(c.u))) : 7) - (c.wPS ?? c.r)) * (1 - Math.exp(-h * D.dPathEase)), -D.dPathSlew * h, D.dPathSlew * h);
         const wPath = c.wPS;
-        const k = c.dS;
+        const k = c.dS * (c.glide ? D.glideHold : c.kbKeys ? U.lerp(1, D.kbHoldK, U.smooth(8, 11, V)) : 1);   // (keys: held less firmly too - the car's own movement shows; not at donut speeds)                 // (Ultra glide: the drift control barely holds it - the car rotates freely)
         // bend the path: a sideways push (across the direction of travel) toward the turn rate asked for
         const Fp = U.clamp(m * V * D.dPathK * (wPath - wPathNow), -m * 9.81 * 1.5, m * 9.81 * 1.5) * k;
         Fx -= Fp * c.v / Math.max(V, 0.1); Fy += Fp * c.u / Math.max(V, 0.1);
@@ -309,17 +374,17 @@ const driftCurve = s => (s < 1 ? Math.sin(s * Math.PI / 2) : 1 - (1 - DRIFT.slid
         // braking while drifting: a smooth slow-down along the direction of travel (the drift-tyre scrub of a real one)
         if (brk > 0 && V > 2) { const dec = brk * m * 9.81 * D.dBrakeG * k; Fx -= dec * c.u / V; Fy -= dec * c.v / V; }
         // and real drive while drifting: on the throttle the car keeps gaining speed sideways (fading out at high speed)
-        if (V > 2) { const push = m * 9.81 * D.dPush * Math.min(1, U.clamp(inp.throttle, 0, 1) * 1.4) * k * U.smooth(8, 11, V) * (1 - U.smooth(30, 47, V)) * (1 - brk); Fx += push * c.u / V; Fy += push * c.v / V; }   // (not at donut speeds, not while braking)
+        if (V > 2) { const push = m * 9.81 * D.dPush * Math.min(1, U.clamp(inp.throttle, 0, 1) * 1.4) * c.dS * U.smooth(8, 11, V) * (1 - U.smooth(30, 47, V)) * (1 - brk); Fx += push * c.u / V; Fy += push * c.v / V; }   // (not at donut speeds, not while braking)
         // at donut speeds a deep slide scrubs speed off (the tyres just smoke): W + a turn from a standstill stays a donut
         if (V > 1) { const scrub = m * 9.81 * D.dScrub * k * (1 - U.smooth(8, 11, V)) * U.smooth(0.5, 0.8, Math.abs(beta)); Fx -= scrub * c.u / V; Fy -= scrub * c.v / V; }
-        if (Fv < 0 && V > 3) { const add = -Fv * D.dKeep * Math.min(1, U.clamp(inp.throttle, 0, 1) * 1.8) * k * (1 - brk); Fx += add * c.u / V; Fy += add * c.v / V; }   // (your pedal / key, before the keyboard throttle help)
+        if (Fv < 0 && V > 3) { const add = -Fv * D.dKeep * Math.min(1, U.clamp(inp.throttle, 0, 1) * 1.8) * c.dS * (1 - brk); Fx += add * c.u / V; Fy += add * c.v / V; }   // (your pedal / key, before the keyboard throttle help)
         // force feedback while drifting: a spring toward a light counter-steer you can actually hold
         c.ffbDrift = U.clamp((-side * D.dFfbAt * D.dSteerSpan - c.steer) * 2.2, -1, 1) * k;
       }
       // off the throttle and not drifting: keep the car tracking where it's going (it drives through a gap instead of
       // stepping out into a slide of its own); fades out on the throttle, so throttle + a turn still kicks a drift off
       {
-        const kg = D.gripAid * (1 - c.dS) * (1 - U.smooth(0.2, 0.55, U.clamp(inp.throttle, 0, 1))) * U.smooth(0.03, 0.09, Math.abs(beta)) * (c.u > 3 ? 1 : 0);
+        const kg = D.gripAid * (c.kbKeys ? D.kbGripAidK : 1) * (c.spinT > 0 || c.glide ? 0 : 1) * (1 - c.dS) * (1 - U.smooth(0.2, 0.55, U.clamp(inp.throttle, 0, 1))) * U.smooth(0.03, 0.09, Math.abs(beta)) * (c.u > 3 ? 1 : 0);
         if (kg > 0) Mz += U.clamp(D.Iz * D.dYawK * (wPathNow + D.dAngK * beta - c.r), -D.Iz * 20, D.Iz * 20) * kg;
       }
       if (c.dS <= 0) c.ffbDrift = 0;
@@ -376,14 +441,20 @@ const driftCurve = s => (s < 1 ? Math.sin(s * Math.PI / 2) : 1 - (1 - DRIFT.slid
       // gripping, about as hard as the tyres can turn (never less than ~110 deg: enough for a brake entry)
       const gripRad = Math.atan(D.L * D.kbWheelG * 9.81 / Math.max(u * u, 1)) + D.aPk * 0.5;
       // (drifting at donut speeds: full lock, like the wheel)
-      const cap = U.lerp(Math.max(D.kbWheelMin, wheelDegFor(gripRad)), U.lerp(450, wheelDegFor(D.dSteerSpan * 1.05), U.smooth(8, 12, u)), dS) / 450;
+      // (rolling along slowly it stops at ~kbWheelRoll deg: a held key isn't full lock and a wild kick; nearly stopped =
+      //  full lock for donuts. Drifting: up to kbDriftIn x the span - hold it in long enough and the car spins out)
+      const gripCap = Math.min(Math.max((ctl.brake || 0) > 0.3 ? D.kbWheelBrake : D.kbWheelMin, wheelDegFor(gripRad))   /* (gripping: about what the tyres can do - on the brake enough for a brake-entry drift) */, U.lerp(450, D.kbWheelRoll, U.smooth(5, 8.5, u)));
+      const cap = U.lerp(gripCap, U.lerp(450, wheelDegFor(D.dSteerSpan * D.kbDriftIn), U.smooth(3, 6, u)), dS) / 450;
       if (k) {
         this.vwT = Math.sign(this.vwK || 0) === k ? (this.vwT || 0) + dt : 0; this.vwK = k;
         // (it turns against a spring - the further it's turned, the slower it goes: so how much of the time you hold the
         //  key sets how far the wheel sits, evenly, like easing a real wheel in and out)
         // (at parking / donut speeds the hands crank it round quicker, like hand-over-hand on a real wheel)
         const rate = U.lerp(D.kbWheelRate0, D.kbWheelRate, U.smooth(0, D.kbWheelRamp, this.vwT)) / 450 * U.clamp(1 - k * w / cap, 0, 2) * U.lerp(D.kbWheelSlow, 1, U.smooth(4, 10, u));
-        this.vw = w + U.clamp(k * cap - w, -rate * dt, rate * dt);
+        // (drifting, past the normal range it only creeps on: hold the key in too long and you overcook it and spin)
+        const over = dS > 0.5 && Math.hypot(car.u, car.v) > D.dSpinV - 2 && k * w > wheelDegFor(D.dSteerSpan * 1.1) / 450;   // (not at donut speeds: no spin-outs there)
+        const step = U.clamp(k * cap - w, -rate * dt, rate * dt);
+        this.vw = w + (over && Math.sign(step) === k ? k * Math.min(Math.abs(step), D.kbOverRate / 450 * dt) : step);
       } else {
         this.vwK = 0; this.vwT = 0;
         this.vw = w - Math.sign(w) * Math.min(Math.abs(w), Math.min(D.kbWheelBack / 450, D.kbWheelBackK * Math.abs(w)) * dt);   // (self-centring, settling softly)
@@ -391,6 +462,7 @@ const driftCurve = s => (s < 1 ? Math.sin(s * Math.PI / 2) : 1 - (1 - DRIFT.slid
       this.vw = U.clamp(this.vw, -1, 1);
       wheelIn = this.vw;
     } else this.vw = undefined;
+    car.kbKeys = keys;
     if (wheelIn !== null) {
       // through the rack: no lane assist, no speed-sensitive steering. Progressive ratio: ~16:1 round the centre
       // (calm on the straight, small corrections stay small), quickening to full lock (46 deg) at 450 deg of wheel

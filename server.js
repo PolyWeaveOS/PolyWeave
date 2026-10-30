@@ -465,7 +465,10 @@ function roster(room) { return [...room.players.values()].map(p => ({ id: p.id, 
 // which car a player drives (Garage): looks only, every car has the same hitbox
 const CAR_MODELS = ['m4'];
 // (the S15 drift car: the owners only, like the motorcycle)
-const cleanModel = (m, p) => ((m === 's15' && p && mayBike(p)) || CAR_MODELS.includes(m) || /^f1:[a-z]{2,10}:#[0-9a-f]{6}(:[a-z]{2,8}:#[0-9a-f]{6})?(:[smh][01][lsh]?)?$/.test(m) ? m : 'm4');   // (racing: 'f1:<pattern>:<colour 2>[:<rim style>:<rim colour>][:<tyre s|m|h><rear wing 1|0><front wing l|s|h>]', the F1 paint pattern, rims, parts)
+// the owners' special cars (the S15 drift car, the Koenigsegg): the owners and Content Creators only - anyone else asking stays an M4
+const SPECIAL_CARS = ['s15', 'koenigsegg'];
+const mayCar = p => !!p && (mayBike(p) || !!(p.account && p.account.id && DB.owns(p.account.id, 'creator')));
+const cleanModel = (m, p) => ((SPECIAL_CARS.includes(m) && mayCar(p)) || CAR_MODELS.includes(m) || /^f1:[a-z]{2,10}:#[0-9a-f]{6}(:[a-z]{2,8}:#[0-9a-f]{6})?(:[smh][01][lsh]?)?$/.test(m) ? m : 'm4');   // (racing: 'f1:<pattern>:<colour 2>[:<rim style>:<rim colour>][:<tyre s|m|h><rear wing 1|0><front wing l|s|h>]', the F1 paint pattern, rims, parts)
 // the motorcycle and the van: only for the accounts in DB.BIKE_NAMES (anyone else asking for them stays a car;
 // the van drives and scores as a car, other players just see the van)
 const mayBike = p => !!(p.account && p.account.name && DB.BIKE_NAMES.includes(p.account.name.toLowerCase()));
@@ -579,7 +582,7 @@ const server = http.createServer((req, res) => {
         if (isNew && DB.betaOpen()) DB.gift(user.id, 'beta');     // (new players get Beta Tester until it's switched off)
         DB.gift(user.id, 'verified');                           // (signed in with Google; only sent once)
         if (isNew && m.ref) { const by = Accounts.byName(String(m.ref).slice(0, 16)); if (by) DB.addReferral(user.id, by.id); }   // (made from someone's invite link)
-        json(200, Object.assign({ session: token, name: user.name, title: DB.equipped(user.id), banned: DB.isBanned(user.id), banUntil: DB.banUntil(user.id), bus: DB.hasBus(user.id, user.name) }, isAdmin(user) ? { admin: true } : isStaff(user) ? { staff: true } : {}));
+        json(200, Object.assign({ session: token, name: user.name, title: DB.equipped(user.id), banned: DB.isBanned(user.id), banUntil: DB.banUntil(user.id), bus: DB.hasBus(user.id, user.name), creator: DB.owns(user.id, 'creator') }, isAdmin(user) ? { admin: true } : isStaff(user) ? { staff: true } : {}));
       })
         .catch(e => json(401, { error: e.message }));
     });
@@ -588,7 +591,7 @@ const server = http.createServer((req, res) => {
   const bearer = () => Accounts.bySession(String(req.headers.authorization || '').replace(/^Bearer /, ''));
   if (route === '/api/account') {                       // who am I? (Authorization: Bearer <session>)
     const u = bearer();
-    json(u ? 200 : 401, u ? Object.assign({ name: u.name, title: DB.equipped(u.id), banned: DB.isBanned(u.id), banUntil: DB.banUntil(u.id), bus: DB.hasBus(u.id, u.name) }, isAdmin(u) ? { admin: true } : isStaff(u) ? { staff: true } : {}) : { error: 'not signed in' });   // (staff: has the Admin title)   // (banned: leaderboard banned - the launch popup tells them; banUntil: when a temporary ban ends; bus: Bang Bus unlocked)
+    json(u ? 200 : 401, u ? Object.assign({ name: u.name, title: DB.equipped(u.id), banned: DB.isBanned(u.id), banUntil: DB.banUntil(u.id), bus: DB.hasBus(u.id, u.name), creator: DB.owns(u.id, 'creator') }, isAdmin(u) ? { admin: true } : isStaff(u) ? { staff: true } : {}) : { error: 'not signed in' });   // (staff: has the Admin title)   // (banned: leaderboard banned - the launch popup tells them; banUntil: when a temporary ban ends; bus: Bang Bus unlocked)
     return;
   }
   // the Bang Bus event: GET /api/event (Bearer) -> each quest's progress and whether the bus is unlocked

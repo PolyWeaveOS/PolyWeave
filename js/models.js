@@ -845,7 +845,40 @@ CATALOG.m4 = () => {
   };
 };
 
-function getModel(key) { return _geoCache[key] || (_geoCache[key] = CATALOG[key]()); }
+// --------- The Koenigsegg: the owner's own model 1:1 (assets/koenigsegg.js, from their .blend) ---------
+// Only fetched when someone needs it (it's 1.4 MB): until then it stands in as an M4 (not cached - see getModel).
+const BIG_MODELS = { koenigsegg: { file: 'assets/koenigsegg.js?v=1', global: 'KOENIGSEGG_IMPORT', loading: false, cbs: [] } };
+function bigModelReady(key) { const B = BIG_MODELS[key]; return !B || !!window[B.global]; }
+function loadBigModel(key, cb) {
+  const B = BIG_MODELS[key]; if (!B || window[B.global]) { if (cb) cb(); return; }
+  if (cb) B.cbs.push(cb);
+  if (B.loading) return; B.loading = true;
+  const s = document.createElement('script'); s.src = B.file;
+  s.onload = () => { const cbs = B.cbs; B.cbs = []; for (const f of cbs) f(); };
+  s.onerror = () => { B.loading = false; console.warn('car model file', B.file); };
+  document.head.appendChild(s);
+}
+CATALOG.koenigsegg = () => {
+  const D = window.KOENIGSEGG_IMPORT;
+  if (!D) { loadBigModel('koenigsegg'); return Object.assign({}, getModel('m4'), { placeholder: true }); }
+  const front = -D.bounds.min[2], rear = -D.bounds.max[2];
+  return {
+    key: 'koenigsegg', body: creaseNormals(gbFromImport(D.body), 38),
+    interior: new THREE.BufferGeometry(), wheelSW: getModel('s15').wheelSW,
+    wheelGeoms: D.wheels.map(w => creaseNormals(gbFromImport(w.parts), 38)),
+    wheels: D.wheels.map(w => ({ x: w.center[0], y: w.center[1], f: -w.center[2], side: w.center[0] > 0 ? 1 : -1, front: -w.center[2] > 0 })),
+    r: D.wheels[0].radius, tw: D.wheels[0].width, L: front - rear, W: 0.95, front, rear,
+    brake: gbFromImport(D.body, ['TAIL']), indL: new THREE.BufferGeometry(), indR: new THREE.BufferGeometry(),
+    hull: SAT.hull(0.95, front - 0.03, rear + 0.03, 0.32, 0.26),
+  };
+};
+
+function getModel(key) {
+  if (_geoCache[key]) return _geoCache[key];
+  const M = CATALOG[key]();
+  if (!M.placeholder) _geoCache[key] = M;              // (a stand-in while its file loads isn't kept)
+  return M;
+}
 
 // Build an instance (Group) of a vehicle. Returns handles for animation.
 // ---------- "Lite" traffic meshes: all non-paint parts baked into vertex colours ----------

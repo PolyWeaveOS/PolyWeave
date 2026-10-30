@@ -148,7 +148,7 @@ const Garage = (() => {
     const c = cfg();
     const onBus = !f1 && Settings.vehicle === 'van' && canVan();   // (driving the Bang Bus: its own paint, nothing to set up)
     for (const b of cars.children) b.classList.toggle('sel', b === bus ? onBus : !onBus && b.dataset.k === carKey);
-    for (const b of cars.children) if (b.dataset.k && PLAYER_CARS[b.dataset.k].owners) b.classList.toggle('hidden', !canBike());   // (the owners' drift car)
+    for (const b of cars.children) if (b.dataset.k && PLAYER_CARS[b.dataset.k].owners) b.classList.toggle('hidden', !canSpecial());   // (the special cars: owners + Content Creators)
     bus.classList.toggle('locked', !canVan());
     bus.title = canVan() ? 'The Bang Bus' : 'Locked: finish the Bang Bus quests to unlock it';
     for (const b of tyres.children) b.classList.toggle('sel', b.dataset.k === f1Cfg().tyre);

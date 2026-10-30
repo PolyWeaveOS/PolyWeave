@@ -123,7 +123,7 @@ class Traffic {
     this._pa = []; this._pb = [];
   }
 
-  clear() { for (const c of this.cars) this.scene.remove(c.vis.root); this.cars = []; this.initDone = false; this.byId = new Map(); this.srvOff = undefined; }
+  clear() { for (const c of this.cars) this.scene.remove(c.vis.root); this.cars = []; this.initDone = false; this.byId = new Map(); this.srvOff = undefined; this.srvOffR = undefined; this.srvW = null; }
   remove(i) { const c = this.cars[i]; this.scene.remove(c.vis.root); this.cars.splice(i, 1); if (c.id !== undefined && this.byId) this.byId.delete(c.id); }
 
   // ---------------------------------------------------------------- online: shared traffic
@@ -133,12 +133,15 @@ class Traffic {
   // here (the crash physics) and its resting place is reported back so everyone sees it.
   applySnapshot(m) {
     const now = performance.now() / 1000, off = now - m.ts;
-    if (this.srvOff === undefined) { this.srvOff = off; this.srvJit = 0.02; }
-    else {
-      this.srvOff = Math.min(off, this.srvOff + 0.0005);   // fastest delivery seen (drifts up slowly)
-      // how late snapshots arrive beyond that, on average (a busy server or patchy wifi): the buffer grows to cover it
-      this.srvJit = this.srvJit * 0.97 + Math.min(0.5, off - this.srvOff) * 0.03;
-    }
+    // fastest delivery in the last 3 s (no saw-tooth: the old "creep up, snap back" made all the traffic surge a little)
+    const W = this.srvW || (this.srvW = []); W.push(now, off);
+    while (W.length > 2 && W[0] < now - 3) W.splice(0, 2);
+    let mn = Infinity; for (let i = 1; i < W.length; i += 2) if (W[i] < mn) mn = W[i];
+    if (this.srvOff === undefined) this.srvJit = 0.02;
+    this.srvOff = mn;
+    if (this.srvOffR === undefined || Math.abs(this.srvOffR - mn) > 0.3) this.srvOffR = mn;
+    // how late snapshots arrive beyond that, on average (a busy server or patchy wifi): the buffer grows to cover it
+    this.srvJit = this.srvJit * 0.97 + Math.min(0.5, off - this.srvOff) * 0.03;
     if (!this.byId) this.byId = new Map();
     for (const [id, key, color] of m.add || []) {
       if (this.byId.has(id)) continue;
@@ -166,7 +169,11 @@ class Traffic {
     while (i > 0 && b[i - 1].t > t) i--;
     if (i === 0) return Object.assign({ vs: 0, vd: 0, vr: 0 }, b[0]);
     const a = b[i - 1], n = b[i], dt = Math.max(n.t - a.t, 1e-3), k = U.clamp((t - a.t) / dt, 0, 1.6);
-    return { s: a.s + (n.s - a.s) * k, d: a.d + (n.d - a.d) * k, v: a.v + (n.v - a.v) * k, ry: a.ry + U.wrap(n.ry - a.ry) * k, f: k < 0.5 ? a.f : n.f,
+    // (along the road: a curve through both snapshots that also matches their speeds - straight lines between them kinked
+    //  10 times a second; a wreck or a late snapshot (k > 1) keeps the straight line)
+    let s = a.s + (n.s - a.s) * k;
+    if (k <= 1 && !((a.f | n.f) & 8)) { const k2 = k * k, k3 = k2 * k; s = (2 * k3 - 3 * k2 + 1) * a.s + (k3 - 2 * k2 + k) * a.v * dt + (-2 * k3 + 3 * k2) * n.s + (k3 - k2) * n.v * dt; }
+    return { s, d: a.d + (n.d - a.d) * k, v: a.v + (n.v - a.v) * k, ry: a.ry + U.wrap(n.ry - a.ry) * k, f: k < 0.5 ? a.f : n.f,
       vs: (n.s - a.s) / dt, vd: (n.d - a.d) / dt, vr: U.wrap(n.ry - a.ry) / dt };   // (how it's moving: to draw it where it is now)
   }
   // how far in the past the shared traffic is drawn (before being carried forward to "now"): one snapshot
@@ -175,10 +182,15 @@ class Traffic {
   updateRemote(dt, P) {
     const want = U.clamp(0.1 + 2.5 * (this.srvJit || 0.02), 0.13, 0.4);
     this.tDelay = this.tDelay === undefined ? want : U.damp(this.tDelay, want, 0.5, dt);
-    const rt = performance.now() / 1000 - (this.srvOff || 0) - this.tDelay;
+    // (drawn on the smooth frame clock - js/net.js - and the server's clock eased over at no more than 5% speed)
+    this.srvOffR = (this.srvOffR ?? this.srvOff ?? 0) + U.clamp((this.srvOff || 0) - (this.srvOffR ?? this.srvOff ?? 0), -0.05 * dt, 0.05 * dt);
+    const rt = (typeof Net !== 'undefined' ? Net.clockNow() : performance.now() / 1000) - this.srvOffR - this.tDelay;
     const blink = (this.time * 1.45 % 1) < 0.55, ease = Math.exp(-dt / 0.1);
     // (the carry-forward follows ping changes gradually: a new ping reading would nudge every car at once)
-    const L = this.leadS = this.leadS === undefined ? (this.lead || 0) : U.damp(this.leadS, this.lead || 0, 1.5, dt);
+    // (the buffer part of it moves exactly with the buffer above - drawn further back, carried further forward, so a change
+    //  in the buffer never nudges the cars; only the ping part is eased)
+    const R = this.leadR = this.leadR === undefined ? (this.lead || 0) - this.tDelay : U.damp(this.leadR, (this.lead || 0) - this.tDelay, 1.5, dt);
+    const L = this.lead ? Math.max(0, this.tDelay + R) : 0;
     for (let i = this.cars.length - 1; i >= 0; i--) {
       const c = this.cars[i];
       if (c.goneAt !== undefined && rt >= c.goneAt && !c.local) { this.remove(i); continue; }
@@ -223,6 +235,9 @@ class Traffic {
           if (Math.abs(js) > 0.3 || Math.abs(jd) > 0.3) {
             jumped = true;                                 // (its speed carries on: the jump itself isn't movement)
             if (Math.abs(js) < 30 && Math.abs(jd) < 12) { c.es = (c.es || 0) - js; c.ed = (c.ed || 0) - jd; c.er = (c.er || 0) - U.wrap(st.ry - c.rry); }
+            // (take its speed from the snapshots: a car that appeared standing still kept speed 0 here, so every frame of it
+            //  driving off looked like another jump and it was held ~0.1 s behind forever - 2.5 m at 90 km/h)
+            if (st.vs !== undefined) { c.rvs = st.f & 8 ? st.vs : st.v; c.rvd = st.vd; }
           }
         }
         if (c.rs !== undefined && !jumped) { c.rvs = (st.s - c.rs) / dt; c.rvd = (st.d - c.rd) / dt; }
