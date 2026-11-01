@@ -238,6 +238,11 @@ class Sound {
   suspend(on) { if (this.ctx) on ? this.ctx.suspend() : this.ctx.resume(); }
   thump(strength) {
     if (!this.ctx) return;
+    // (a scrape or a push lasts many frames: one thump for it, not one a frame - a pile of them clipped and crackled;
+    //  a clearly harder knock still gets its own)
+    const now = this.ctx.currentTime;
+    if (now - (this.thumpT ?? -1) < 0.12 && strength <= (this.thumpS || 0) * 1.3) return;
+    this.thumpT = now; this.thumpS = strength;
     const ctx = this.ctx, o = ctx.createOscillator(), g = ctx.createGain();
     o.type = 'triangle'; o.frequency.setValueAtTime(110, ctx.currentTime); o.frequency.exponentialRampToValueAtTime(40, ctx.currentTime + 0.25);
     g.gain.setValueAtTime(Math.min(1, strength), ctx.currentTime); g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.35);

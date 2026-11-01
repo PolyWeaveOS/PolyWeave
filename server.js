@@ -76,6 +76,7 @@ const maxOf = room => (room.race ? Tracks.RACE_MAX : MAX_PLAYERS);
 // lights go out, 3 laps, results for 15 s, and back to the lobby. The queue for each track is its public
 // lobby rooms (a new one opens while the last is racing); players can also host public / private races.
 // Each game times itself and reports laps; finishing times are measured here, from the start.
+const RACE_SWITCH_AT = Date.UTC(2026, 10, 17, 5, 0, 0);   // (the racing tracks get switched: 2026-11-17 00:00 US Eastern - /api/clock)
 const RACE_RESULTS_MS = 15000, RACE_AFTER_WINNER_MS = 60000, RACE_LIMIT_MS = 15 * 60e3;
 const RACE_TEST = process.env.PW_RACE_TEST === '1';   // (local testing only: 5 s countdown, no minimum race time)
 // (each track's own world + time of day for its queue: js/tracks.js look)
@@ -357,7 +358,7 @@ function issueMpToken(p) {
 // a new position from p: add to their run record
 function trackRun(p, st) {
   const R = p.run; if (!R || R.closed || R.room !== p.room) return;
-  if (p.veh === 'bike' || p.veh === 'van' || p.model === 's15') R.bike = true;   // (on the motorcycle, the Bang Bus or the drift car at any point: the run is just for fun)
+  if (p.veh === 'bike' || p.veh === 'van' || p.model === 's15' || CONTENT_CARS.includes(p.model)) R.bike = true;   // (on the motorcycle, the Bang Bus, the drift car or a content car at any point: the run is just for fun)
   const prev = R.last; R.last = { s: st.s, t: st.t };
   if (!prev) return;
   const dt = st.t - prev.t;                            // (sender's clock)
@@ -394,8 +395,16 @@ function setAccount(p, acct) {
   if (was === now) return;
   if (was) { const s = online.get(was); if (s) { s.delete(p); if (!s.size) online.delete(was); } presenceChanged(was); }
   if (now) { if (!online.has(now)) online.set(now, new Set()); online.get(now).add(p); presenceChanged(now); }
+  if ((was && isCreatorUid(was)) || (now && isCreatorUid(now))) creatorsChanged();   // (the creators' chat: who's online)
 }
 const pushTo = (uid, m) => { const s = online.get(uid); if (s) for (const p of s) send(p.ws, m); };
+// ---- the creators' chat (Film area): always on - every owner / Content Creator with the game open (signed in) is in
+// it, wherever they are in the game. The last 60 messages are kept (in memory) for whoever opens it next.
+const isCreatorUid = uid => { const n = Accounts.nameOf(uid); return !!n && (DB.BIKE_NAMES.includes(n.toLowerCase()) || DB.owns(uid, 'creator')); };
+const creatorLog = [];
+const creatorsOnline = () => [...online.keys()].filter(isCreatorUid).map(uid => ({ name: Accounts.nameOf(uid), title: DB.equipped(uid) || null })).sort((a, b) => a.name.localeCompare(b.name));
+const toCreators = m => { for (const uid of online.keys()) if (isCreatorUid(uid)) pushTo(uid, m); };
+const creatorsChanged = () => toCreators({ t: 'cchat', online: creatorsOnline() });
 // what a connection is doing: menu, singleplayer (world, time of day) or a server (public ones can be joined)
 function activityOf(p) {
   const r = p.room;
@@ -461,14 +470,17 @@ function cleanState(st) {
 }
 
 // acct: signed in (their name is their account's, so it can open their profile; a guest's name could be anyone's)
-function roster(room) { return [...room.players.values()].map(p => ({ id: p.id, name: p.name, color: p.color, title: p.title || null, acct: !!(p.account && p.account.name), veh: p.veh === 'bike' || p.veh === 'van' ? p.veh : undefined, model: p.model && p.model !== 'm4' ? p.model : undefined })); }
+function roster(room) { return [...room.players.values()].map(p => { const m = modelIn(p, room); return { id: p.id, name: p.name, color: p.color, title: p.title || null, acct: !!(p.account && p.account.name), veh: p.veh === 'bike' || p.veh === 'van' ? p.veh : undefined, model: m && m !== 'm4' ? m : undefined }; }); }
 // which car a player drives (Garage): looks only, every car has the same hitbox
 const CAR_MODELS = ['m4'];
 // (the S15 drift car: the owners only, like the motorcycle)
-// the owners' special cars (the S15 drift car, the Koenigsegg): the owners and Content Creators only - anyone else asking stays an M4
-const SPECIAL_CARS = ['s15', 'koenigsegg'];
+// the owners' special cars (the S15 drift car): the owners and Content Creators only - anyone else asking stays an M4
+const SPECIAL_CARS = ['s15'];
+// the content cars (Film area, js/playercars.js): the same accounts, and only on a creator server - anywhere else they show as an M4
+const CONTENT_CARS = ['koenigsegg', 'mclaren720s', 'gt3', 'imola', 'aventador', 'laferrari', 'tourbillon'];
 const mayCar = p => !!p && (mayBike(p) || !!(p.account && p.account.id && DB.owns(p.account.id, 'creator')));
-const cleanModel = (m, p) => ((SPECIAL_CARS.includes(m) && mayCar(p)) || CAR_MODELS.includes(m) || /^f1:[a-z]{2,10}:#[0-9a-f]{6}(:[a-z]{2,8}:#[0-9a-f]{6})?(:[smh][01][lsh]?)?$/.test(m) ? m : 'm4');   // (racing: 'f1:<pattern>:<colour 2>[:<rim style>:<rim colour>][:<tyre s|m|h><rear wing 1|0><front wing l|s|h>]', the F1 paint pattern, rims, parts)
+const modelIn = (p, room) => (CONTENT_CARS.includes(p.model) && !(room && room.creator) ? 'm4' : p.model);
+const cleanModel = (m, p) => (((SPECIAL_CARS.includes(m) || CONTENT_CARS.includes(m)) && mayCar(p)) || CAR_MODELS.includes(m) || /^f1:[a-z]{2,10}:#[0-9a-f]{6}(:[a-z]{2,8}:#[0-9a-f]{6})?(:[smh][01][lsh]?)?$/.test(m) ? m : 'm4');   // (racing: 'f1:<pattern>:<colour 2>[:<rim style>:<rim colour>][:<tyre s|m|h><rear wing 1|0><front wing l|s|h>]', the F1 paint pattern, rims, parts)
 // the motorcycle and the van: only for the accounts in DB.BIKE_NAMES (anyone else asking for them stays a car;
 // the van drives and scores as a car, other players just see the van)
 const mayBike = p => !!(p.account && p.account.name && DB.BIKE_NAMES.includes(p.account.name.toLowerCase()));
@@ -509,6 +521,7 @@ function claimWrecks(p, list) {
 function joinRoom(p, room) {
   leaveRoom(p);
   if (room.players.size >= maxOf(room)) { send(p.ws, { t: 'error', msg: `${room.name} is full (${maxOf(room)} players).` }); return; }
+  if (room.creator && !mayCar(p)) { send(p.ws, { t: 'error', msg: 'That server is for Content Creators only.' }); return; }   // (creator servers: owners + Content Creators)
   // parking space: the lowest one nobody in the room is using
   const used = new Set([...room.players.values()].map(o => o.slot));
   let slot = 0; while (used.has(slot)) slot++;
@@ -519,7 +532,7 @@ function joinRoom(p, room) {
   p.title = titleOf(p);
   send(p.ws, { t: 'joined', id: p.id, room: room.id, name: room.name, official: room.official, listed: room.listed, code: room.code, slot, best: p.best,
     scored: room.scored, density: room.density, theme: room.theme, tod: room.tod, bin: !!p.bin,   // (bin: binary positions understood)
-    race: room.race ? { track: room.race.track, laps: room.race.laps, queue: room.race.queue } : undefined, carsOnly: !!room.carsOnly });
+    race: room.race ? { track: room.race.track, laps: room.race.laps, queue: room.race.queue } : undefined, carsOnly: !!room.carsOnly, creator: !!room.creator });
   if (room.race) send(p.ws, raceMsg(room));            // (where the race is at: lobby / countdown / racing...)
   issueMpToken(p);                                     // (scored server + signed in: runs can go on the leaderboard)
   broadcast(room, { t: 'roster', list: roster(room) });
@@ -548,7 +561,7 @@ const server = http.createServer((req, res) => {
   if (req.url.startsWith('/api/servers')) {
     const all = [...rooms.values()];
     const official = all.filter(r => r.official).map(roomInfo);
-    const pub = all.filter(r => !r.official && !r.race && r.listed && r.players.size).map(roomInfo)   // (players' public servers while someone's on them)
+    const pub = all.filter(r => !r.official && !r.race && !r.creator && r.listed && r.players.size).map(roomInfo)   // (players' public servers while someone's on them; creator servers: only in their own list)
       .sort((a, b) => b.players - a.players).slice(0, 50);
     let online = 0; for (const r of rooms.values()) online += r.players.size;
     res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' });
@@ -557,6 +570,13 @@ const server = http.createServer((req, res) => {
   }
   const json = (code, obj) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(obj)); };
   const url = new URL(req.url, 'http://x'), route = url.pathname;
+  // the limited-time timers, on the server's clock (the game counts down from this, never from the player's own clock):
+  // race: Season 1's racing tracks are switched (2026-11-17, midnight US Eastern); bus: the Bang Bus event ends
+  if (route === '/api/clock') {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify({ now: Date.now(), race: RACE_SWITCH_AT, bus: DB.BUS_EVENT_END }));
+    return;
+  }
   // racing: who's queueing / racing on each track + public hosted races
   if (route === '/api/race') {
     let online = 0; for (const r of rooms.values()) online += r.players.size;
@@ -607,6 +627,25 @@ const server = http.createServer((req, res) => {
     const u = bearer();
     if (!u || !u.name || !(DB.OWNER_NAMES.includes(u.name.toLowerCase()) || DB.owns(u.id, 'creator'))) { res.writeHead(404); res.end('Not found'); return; }
     fs.readFile(path.join(ROOT, 'tools', 'recorder.js'), (err, data) => {
+      if (err) { res.writeHead(404); res.end('Not found'); return; }
+      res.writeHead(200, { 'Content-Type': TYPES['.js'], 'Cache-Control': 'no-store' });
+      res.end(data);
+    });
+    return;
+  }
+  // the creator servers (Film > Creator servers, Bearer): the owners and Content Creators only - everyone else gets a plain 404
+  if (route === '/api/creator/servers') {
+    const u = bearer();
+    if (!u || !u.name || !(DB.OWNER_NAMES.includes(u.name.toLowerCase()) || DB.owns(u.id, 'creator'))) { res.writeHead(404); res.end('Not found'); return; }
+    json(200, { servers: [...rooms.values()].filter(r => r.creator && r.listed && r.players.size).map(r => Object.assign(roomInfo(r), { density: r.density })) });
+    return;
+  }
+  // Clip Studio (tools/studio.js, in the Film area): the owners' accounts (PolyWeave, CurryEater) and Content Creators.
+  // Everyone else gets a plain 404, as if it didn't exist.
+  if (route === '/api/tools/studio') {
+    const u = bearer();
+    if (!u || !u.name || !(DB.OWNER_NAMES.includes(u.name.toLowerCase()) || DB.owns(u.id, 'creator'))) { res.writeHead(404); res.end('Not found'); return; }
+    fs.readFile(path.join(ROOT, 'tools', 'studio.js'), (err, data) => {
       if (err) { res.writeHead(404); res.end('Not found'); return; }
       res.writeHead(200, { 'Content-Type': TYPES['.js'], 'Cache-Control': 'no-store' });
       res.end(data);
@@ -971,7 +1010,7 @@ const server = http.createServer((req, res) => {
       if (!(run.score >= MIN_RUN)) { json(200, { rank: null }); return; }
       // motorcycle and Bang Bus runs are just for fun: no leaderboard, no run record, no stats (the game doesn't send
       // them; a multiplayer run is also checked against what the server saw)
-      if (m.veh === 'bike' || m.veh === 'van' || (R && R.bike)) { if (R) R.closed = true; json(200, { rank: null, fun: true }); return; }
+      if (m.veh === 'bike' || m.veh === 'van' || CONTENT_CARS.includes(m.car) || (R && R.bike)) { if (R) R.closed = true; json(200, { rank: null, fun: true }); return; }
       if (!DB.spendToken(tok.n)) { json(409, { error: 'That run was already submitted.' }); return; }
       if (R) R.closed = true;
       const v = RunCheck.verify(run, { mode, wallS: (Date.now() - tok.t) / 1000, mp: R ? { dist: R.dist, nearS: R.nearS } : null });
@@ -1093,6 +1132,17 @@ wss.on('connection', ws => {
     }
     // signed-in game: online for friends (sent on connecting, and again after signing in / out)
     if (m.t === 'auth') { setAccount(p, Accounts.bySession(m.session)); send(ws, { t: 'authed', ok: !!p.account }); return; }
+    // the creators' chat: {get: 1} -> who's online + the recent messages; {text} -> to every creator online (one per 1.5 s)
+    if (m.t === 'cchat') {
+      const uid = p.account && p.account.id; if (!uid || !isCreatorUid(uid)) return;
+      if (m.get) { send(ws, { t: 'cchat', online: creatorsOnline(), log: creatorLog }); return; }
+      const text = cleanText(m.text).slice(0, 200); if (!text) return;
+      const now = Date.now(); if (now - (p.cchatT || 0) < 1500) return; p.cchatT = now;
+      const e = { name: Accounts.nameOf(uid), title: DB.equipped(uid) || null, text, at: now };
+      creatorLog.push(e); if (creatorLog.length > 60) creatorLog.shift();
+      toCreators({ t: 'cchat', msg: e });
+      return;
+    }
     // what I'm doing outside servers: menu / singleplayer (world, time of day, scored); servers are known here
     if (m.t === 'activity') {
       const a = m.a || {};
@@ -1124,6 +1174,15 @@ wss.on('connection', ws => {
       const roomName = String(m.roomName || '').replace(/[^\p{L}\p{N} _.'!\-]/gu, '').trim().slice(0, 24) || `${p.name}'s race`;
       const room = makeRoom('p-' + code, roomName, false, code, false, 0,
         { listed: !!m.listed, theme: THEMES.includes(m.theme) ? m.theme : 'grass', tod: TODS.includes(m.tod) ? m.tod : 'day', race: { track: m.track } });
+      rooms.set(room.id, room);
+      joinRoom(p, room);
+    } else if (m.t === 'create' && m.creator) {         // a creator server (Film area): never scored, the host's traffic
+      if (!mayCar(p)) { send(ws, { t: 'error', msg: 'Creator servers are for Content Creators only.' }); return; }
+      const code = newCode();
+      const roomName = String(m.roomName || '').replace(/[^\p{L}\p{N} _.'!\-]/gu, '').trim().slice(0, 24) || `${p.name} creators`;
+      const room = makeRoom('p-' + code, roomName, false, code, false, Number.isFinite(m.density) ? num(m.density, 0, 1) : 0.3,
+        { listed: !!m.listed, theme: THEMES.includes(m.theme) ? m.theme : 'grass', tod: TODS.includes(m.tod) ? m.tod : 'day' });
+      room.creator = true;
       rooms.set(room.id, room);
       joinRoom(p, room);
     } else if (m.t === 'create') {

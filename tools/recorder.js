@@ -13,7 +13,7 @@
   const FPS = 60;
   const MUXER_URL = 'https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.1/build/mp4-muxer.min.js';
   const RES = { '1080p': [1920, 1080, 'avc1.640028', 16e6], '1440p': [2560, 1440, 'avc1.640033', 28e6], '4K': [3840, 2160, 'avc1.640034', 50e6] };
-  const CAMS = [['game', 'Game camera'], ['chase', 'Chase'], ['low', 'Low chase'], ['front', 'Front'], ['frontLow', 'Low front'], ['hood', 'Bonnet'], ['bumper', 'Bumper'],
+  const CAMS = [['game', 'Game camera'], ['chase', 'Chase'], ['zoomOut', 'Zoomed out'], ['low', 'Low chase'], ['front', 'Front'], ['frontLow', 'Low front'], ['hood', 'Bonnet'], ['bumper', 'Bumper'],
     ['wheel', 'Wheel'], ['side', 'Side'], ['drone', 'Drone'], ['heli', 'Helicopter'], ['top', 'Top down'], ['orbit', 'Orbit'], ['road', 'Roadside'], ['free', 'Free roam']];
   const wrapA = U.wrap, lerp = (a, b, k) => a + (b - a) * k, lerpA = (a, b, k) => a + wrapA(b - a) * k;
 
@@ -34,7 +34,6 @@
     const map = (ROAD.loop ? 'loop:' : 'road:') + world.theme;
     if (map !== capMap) { buf = []; start = 0; events = []; capMap = map; }
     clock += dt;
-    const q = camera.quaternion, p = camera.position;
     const tr = [];
     for (const c of traffic.cars) {
       const v = c.vis; if (!v || !v.root.visible) continue;
@@ -53,24 +52,33 @@
       const fw = f.vis.wheels.find(w => w.front);
       fr.push(n, f.g.position.x, f.g.position.z, f.g.rotation.y, f.vis.spin, fw ? fw.base - fw.pivot.rotation.y : 0, f.vis.brake.visible ? 1 : 0, f.vis.lean ? f.vis.lean.rotation.z : 0);
     }
+    buf.push(sample(tr, fr));
+    while (start < buf.length && buf[start].t < clock - BUFFER) start++;
+    if (start > 600) { buf = buf.slice(start); start = 0; }
+    while (events.length && events[0].t < clock - BUFFER - 6) events.shift();
+  }
+  // one moment: camera, your car, the traffic and friends (tr / fr: as collected above; Clip Studio runs have none)
+  function sample(tr = [], fr = []) {
+    const q = camera.quaternion, p = camera.position;
     const pr = playerVis.root, fw = playerVis.wheels.find(w => w.front), f1w = playerF1.wheels.find(w => w.front);
-    buf.push({
+    return {
       t: clock, origin: ROAD.origin, s: car.s,
       cam: [p.x, p.y, p.z, q.x, q.y, q.z, q.w, camera.fov, camera.near],
       pl: [playerRoot.position.x, playerRoot.position.z, playerRoot.rotation.y, pr.rotation.x, pr.rotation.z, playerVis.spin,
         fw ? fw.base - fw.pivot.rotation.y : 0, swMesh.rotation.z, playerVis.brake.visible ? 1 : 0, cockpit.visible ? 1 : 0, playerGlass.opacity,
         vehicle === 'bike' ? 1 : 0, playerBike.lean.rotation.z, playerBike.spin, camMode === 1 ? 1 : 0,
         // (racing in the F1 car: it instead of your road car)
-        playerF1.root.visible ? 1 : 0, playerF1.root.rotation.x, playerF1.root.rotation.z, playerF1.spin || 0, f1w ? f1w.base - f1w.pivot.rotation.y : 0, playerF1.brake.visible ? 1 : 0],
+        playerF1.root.visible ? 1 : 0, playerF1.root.rotation.x, playerF1.root.rotation.z, playerF1.spin || 0, f1w ? f1w.base - f1w.pivot.rotation.y : 0, playerF1.brake.visible ? 1 : 0,
+        // (the drift car: how hard the rear tyres are scrubbing - its smoke and skid marks in the replay)
+        car.drift && playerVis.root.visible ? car.slipR || 0 : 0],
       tr: Float32Array.from(tr), fr: fr.length ? Float64Array.from(fr) : null,
       hud: [hud.shownScore, score.best, score.pot, score.mult, U.clamp(score.timer, 0, 1), Math.abs(car.u), car.gear, U.clamp(car.rpm / M4.redline, 0, 1),
         car.limiter ? 1 : 0, score.prox || 1, score.pot > 0 ? 1 : 0],
       blur: blurAmount(),
-    });
-    while (start < buf.length && buf[start].t < clock - BUFFER) start++;
-    if (start > 600) { buf = buf.slice(start); start = 0; }
-    while (events.length && events[0].t < clock - BUFFER - 6) events.shift();
+    };
   }
+  // Clip Studio (tools/studio.js, the owners only) plugs in here: its own runs, its own traffic in the replay
+  const hooks = {};
   // HUD messages / results happen as events (drawn with their animations in the video)
   { const m = hud.message.bind(hud); hud.message = (text, crash = false) => { events.push({ t: clock, k: 'msg', text, crash }); m(text, crash); }; }
   { const r = hud.showResult.bind(hud); hud.showResult = (points, peak, best) => { events.push({ t: clock, k: 'res', points, peak, best }); r(points, peak, best); }; }
@@ -166,6 +174,7 @@
         if (v.lean) v.lean.rotation.z = j !== undefined ? lerpA(N[i + 7], G[j + 7], kk) : N[i + 7];
       }
     }
+    if (hooks.pose) hooks.pose(clip, t);                            // (Clip Studio: the traffic you placed)
     return { a, b, k, x, z, yaw: -ry, s: ROAD.hintS, f1: onF1, cockpit: !!(k < 0.5 ? A[9] : B[9]), firstPerson: !!(k < 0.5 ? A[14] : B[14]), glass: k < 0.5 ? A[10] : B[10], blur: lerp(a.blur || 0, b.blur || 0, k) };
   }
 
@@ -247,12 +256,18 @@
     camera.position.set(x, y, z); camera.up.set(0, 1, 0); camera.lookAt(tx, ty, tz);
     camera.fov = fov; camera.near = nearP; camera.updateProjectionMatrix();
   }
+  const ZOOM_K = 1.6;                                             // Zoomed out: x the game camera's distance and height
   function placeCamera(mode, P, dt, clip, t) {
-    if (mode === 'game') {
+    if (mode === 'game' || mode === 'zoomOut') {
       const A = P.a.cam, B = P.b.cam, k = P.k;
       camera.position.set(lerp(A[0], B[0], k), lerp(A[1], B[1], k), lerp(A[2], B[2], k));
       _qa.set(A[3], A[4], A[5], A[6]); _qb.set(B[3], B[4], B[5], B[6]); camera.quaternion.slerpQuaternions(_qa, _qb, k);
-      camera.fov = lerp(A[7], B[7], k); camera.near = A[8]; camera.updateProjectionMatrix();
+      camera.fov = lerp(A[7], B[7], k); camera.near = A[8];
+      if (mode === 'zoomOut') {                                   // the game camera's angle, its distance and height from the car scaled up
+        const c = camera.position;
+        c.set(P.x + (c.x - P.x) * ZOOM_K, c.y * ZOOM_K, P.z + (c.z - P.z) * ZOOM_K);
+      }
+      camera.updateProjectionMatrix();
       return;
     }
     if (mode === 'free') {                                        // free roam: where you've flown it (follows the world if it shifts)
@@ -361,10 +376,35 @@
   }
   function rr(g, x, y, w, h, r) { g.beginPath(); g.roundRect ? g.roundRect(x, y, Math.max(w, 0), h, Math.min(r, w / 2)) : g.rect(x, y, Math.max(w, 0), h); }
 
+  // ---------------------------------------------------------------- the drift car's smoke + skid marks
+  // (they build up over time, so they're played forward with the clip; a jump on the timeline rebuilds the last few seconds)
+  const fx = { clip: null, t: 0, origin: 0 };
+  function fxStep(clip, P, dt) {
+    if (P.a.origin !== fx.origin) { DriftFx.shift(P.a.origin - fx.origin); fx.origin = P.a.origin; }   // (the world shifted under them)
+    const A = P.a.pl, B = P.b.pl, slip = lerp(A[21] || 0, B[21] || 0, P.k), gap = P.b.t - P.a.t;
+    const vx = gap > 0 ? (B[0] - A[0]) / gap : 0, vz = gap > 0 ? (B[1] - A[1]) / gap : 0;
+    playerRoot.updateMatrixWorld(true);
+    DriftFx.update(dt, { drift: true, slipR: slip, yaw: 0, u: -vz, v: vx }, playerVis);   // (yaw 0: u / v are then just the world velocity)
+  }
+  // (P: everything already posed at t)
+  function fxTo(clip, t, P) {
+    if (fx.clip === clip && t >= fx.t && t - fx.t < 0.5) {
+      if (t > fx.t) fxStep(clip, P, t - fx.t);
+      fx.t = t; return P;
+    }
+    // a new clip, a jump, or back to the start
+    DriftFx.clear(); fx.clip = clip; fx.t = t;
+    const t0 = Math.max(clip.inT, t - 6), stp = 1 / 30;
+    fx.origin = find(clip, t0)[0].origin;
+    for (let s = t0; s < t; s += stp) fxStep(clip, pose(clip, s), Math.min(stp, t - s));
+    return pose(clip, t);
+  }
+  function fxReset() { DriftFx.clear(); fx.clip = null; }
+
   // ---------------------------------------------------------------- draw one frame of the replay
   const realBlur = window.blurAmount;
   function render(clip, t, dt, mode, withHud, hudCanvas) {
-    const P = pose(clip, t);
+    const P = fxTo(clip, t, pose(clip, t));
     placeCamera(mode, P, dt, clip, t);
     const inCar = mode === 'game' && P.cockpit;
     playerBike.riderTop.visible = !(mode === 'game' && P.firstPerson);   // (motorcycle, first person: you're the rider)
@@ -429,13 +469,22 @@
   function hidden(el, on) { if (el) el.style.visibility = on ? 'hidden' : ''; }
   // the road the clip was driven on (loop circuit or endless highway) and its world type
   function useClipWorld(clip) {
+    if (hooks.world && hooks.world(clip)) return;                   // (Clip Studio runs: it sets up their map itself)
     if (!!ROAD.loop !== !!clip.loop) { ROAD.setLoop(!!clip.loop); world.reset(); }
     if (clip.theme !== world.theme) world.setTheme(clip.theme);
   }
-  function open() {
+  // (clip: open this one on its own - a Clip Studio run: it never joins the F10 clip list; opts.hud: start with the
+  //  HUD on / off)
+  function open(clip, opts = {}) {
     if (R.active || R.exporting) return;
-    if (!clips.length && !saveClip()) return;
-    R.active = true; R.clip = R.clip && clips.includes(R.clip) ? R.clip : clips[clips.length - 1];
+    R.solo = !!(clip && clip.samples);
+    if (R.solo) R.clip = clip;
+    else {
+      if (!clips.length && !saveClip()) return;
+      R.clip = R.clip && clips.includes(R.clip) ? R.clip : clips[clips.length - 1];
+    }
+    if (opts.hud !== undefined) R.hud = opts.hud;
+    R.active = true;
     R.t = R.clip.inT; R.playing = true; resetCams();
     saved = { loop: !!ROAD.loop, origin: ROAD.origin, hintS: ROAD.hintS, theme: world.theme, camNear: camera.near, fov: camera.fov,
       pos: camera.position.clone(), quat: camera.quaternion.clone(), f1: playerF1.root.visible, menuVis: document.getElementById('menu').style.visibility };
@@ -444,6 +493,7 @@
     for (const c of saved.shown) c.vis.root.visible = false;
     for (const p of Net.players.values()) if (p.g) p.g.visible = false;
     zoneProps.group && (zoneProps.group.visible = false);
+    fxReset();                                                       // (the game's own smoke / marks: the replay draws the clip's)
     rg.visible = true;
     hidden(document.getElementById('hud'), true); hidden(document.getElementById('menu'), true); hidden(badge, true);
     useClipWorld(R.clip);
@@ -453,7 +503,7 @@
   function close() {
     if (!R.active || R.exporting) return;
     R.active = false;
-    rg.visible = false;
+    rg.visible = false; fxReset();
     for (const f of fpool.values()) Net.removeVis(f);
     fpool.clear();
     if (!!ROAD.loop !== saved.loop) { ROAD.setLoop(saved.loop); world.reset(); }   // (before the origin: setLoop zeroes it)
@@ -471,6 +521,7 @@
     world.fillAll(car.s);
     try { if (!menuOpen) sound.suspend(false); } catch (e) { /* */ }
     if (game.mode === 'sp' && !menuOpen) openMenu('scrPause');      // (back to the game paused, not mid-swerve)
+    if (hooks.close) hooks.close(R.clip);
   }
   function sizeHud() { if (hudCv) { hudCv.width = innerWidth; hudCv.height = innerHeight; } }
   addEventListener('resize', sizeHud);
@@ -505,8 +556,10 @@
     document.body.appendChild(ed);
     const $ = k => ed.querySelector(`[data-k="${k}"]`);
     const fillClips = () => { $('clip').innerHTML = clips.map((c, i) => `<option value="${i}"${c === R.clip ? ' selected' : ''}>${c.name} (${Math.round(c.dur)} s)</option>`).join(''); };
-    fillClips();
-    $('clip').onchange = e => { R.clip = clips[+e.target.value]; useClipWorld(R.clip); R.t = R.clip.inT; resetCams(); };
+    if (R.solo) {                                                   // (a Clip Studio run: just that one, and it's deleted from Clip Studio)
+      $('clip').innerHTML = `<option>${R.clip.name.replace(/</g, '&lt;')} (${Math.round(R.clip.dur)} s)</option>`; $('clip').disabled = true; $('del').style.display = 'none';
+    } else fillClips();
+    $('clip').onchange = e => { R.clip = clips[+e.target.value]; useClipWorld(R.clip); R.t = R.clip.inT; resetCams(); if (hooks.editor) hooks.editor(ed, R); };
     $('play').onclick = e => { R.playing = !R.playing; if (fc) fc.manual = false; e.target.blur(); };   // (back on the keyframe path)
     $('mode').onchange = e => { R.mode = e.target.value; resetCams(); fc = null; e.target.blur(); };   // (blur: the arrow keys fly the camera, not the list)
     $('kadd').onclick = e => { addKey(); e.target.blur(); };
@@ -546,6 +599,7 @@
     };
     tl.onpointermove = move; tl.onpointerup = () => (drag = null);
     R.ui = { $, tl };
+    if (hooks.editor) hooks.editor(ed, R);
   }
   function setIn() { R.clip.inT = Math.min(R.t, R.clip.outT - 0.5); }
   function setOut() { R.clip.outT = Math.max(R.t, R.clip.inT + 0.5); }
@@ -583,6 +637,7 @@
     if (R.playing) { R.t += dt * R.speed; if (R.t > c.outT) { R.t = c.inT; resetCams(); } }
     render(c, R.t, dt, R.mode, R.hud, hudCv);
     drawTimeline();
+    if (hooks.frame) hooks.frame(R);
   }
 
   // ---------------------------------------------------------------- export: frame by frame, exactly 60 fps
@@ -683,6 +738,6 @@
     else if (e.code === 'ArrowLeft' || e.code === 'ArrowRight') { e.preventDefault(); R.playing = false; R.t = U.clamp(R.t + (e.code === 'ArrowLeft' ? -1 : 1) / FPS * (e.shiftKey ? 30 : 1), R.clip.inT, R.clip.outT); resetCams(); }
   }, true);
 
-  window.Recorder = { capture, frame, open, close, saveClip, clips, get active() { return R.active; } };
+  window.Recorder = { capture, frame, open, close, saveClip, clips, sample, hooks, get active() { return R.active; } };
   toast('Recorder ready · F9 saves the last minute · F10 opens the editor');
 })();

@@ -845,12 +845,18 @@ CATALOG.m4 = () => {
   };
 };
 
-// --------- The Koenigsegg: the owner's own model 1:1 (assets/koenigsegg.js, from their .blend) ---------
-// Only fetched when someone needs it (it's 1.4 MB): until then it stands in as an M4 (not cached - see getModel).
-const BIG_MODELS = { koenigsegg: { file: 'assets/koenigsegg.js?v=1', global: 'KOENIGSEGG_IMPORT', loading: false, cbs: [] } };
-function bigModelReady(key) { const B = BIG_MODELS[key]; return !B || !!window[B.global]; }
+// --------- The content cars (Film area): real models 1:1 (assets/<key>.js, e.g. the owner's Koenigsegg from their .blend) ---------
+// Only fetched when someone needs one (they're 1-2 MB each): until then it stands in as an M4 (not cached - see getModel).
+// Which ones there are and their files: js/playercars.js (content: true, file). Each file sets window.<KEY>_IMPORT.
+const BIG_MODELS = {};
+const bigOf = key => {
+  const C = typeof PLAYER_CARS !== 'undefined' && PLAYER_CARS[key];
+  if (!C || !C.content || !C.file) return null;
+  return BIG_MODELS[key] || (BIG_MODELS[key] = { file: C.file, global: key.toUpperCase() + '_IMPORT', loading: false, cbs: [] });
+};
+function bigModelReady(key) { const B = bigOf(key); return !B || !!window[B.global]; }
 function loadBigModel(key, cb) {
-  const B = BIG_MODELS[key]; if (!B || window[B.global]) { if (cb) cb(); return; }
+  const B = bigOf(key); if (!B || window[B.global]) { if (cb) cb(); return; }
   if (cb) B.cbs.push(cb);
   if (B.loading) return; B.loading = true;
   const s = document.createElement('script'); s.src = B.file;
@@ -858,12 +864,13 @@ function loadBigModel(key, cb) {
   s.onerror = () => { B.loading = false; console.warn('car model file', B.file); };
   document.head.appendChild(s);
 }
-CATALOG.koenigsegg = () => {
-  const D = window.KOENIGSEGG_IMPORT;
-  if (!D) { loadBigModel('koenigsegg'); return Object.assign({}, getModel('m4'), { placeholder: true }); }
+// a content car's model (a car whose file isn't in yet, or is still loading, is shown as an M4)
+const bigCar = key => () => {
+  const B = bigOf(key), D = B && window[B.global];
+  if (!D) { if (B) loadBigModel(key); return Object.assign({}, getModel('m4'), { placeholder: true }); }
   const front = -D.bounds.min[2], rear = -D.bounds.max[2];
   return {
-    key: 'koenigsegg', body: creaseNormals(gbFromImport(D.body), 38),
+    key, body: creaseNormals(gbFromImport(D.body), 38),
     interior: new THREE.BufferGeometry(), wheelSW: getModel('s15').wheelSW,
     wheelGeoms: D.wheels.map(w => creaseNormals(gbFromImport(w.parts), 38)),
     wheels: D.wheels.map(w => ({ x: w.center[0], y: w.center[1], f: -w.center[2], side: w.center[0] > 0 ? 1 : -1, front: -w.center[2] > 0 })),
@@ -872,6 +879,7 @@ CATALOG.koenigsegg = () => {
     hull: SAT.hull(0.95, front - 0.03, rear + 0.03, 0.32, 0.26),
   };
 };
+for (const k of ['koenigsegg', 'mclaren720s', 'gt3', 'imola', 'aventador', 'laferrari', 'tourbillon']) CATALOG[k] = bigCar(k);
 
 function getModel(key) {
   if (_geoCache[key]) return _geoCache[key];

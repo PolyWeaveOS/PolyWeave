@@ -315,6 +315,10 @@ const canBike = () => !!(Account.user && Account.user.name && BIKE_NAMES.include
 // the Bang Bus (the event's reward: js/event.js): the owners, and anyone who finished its quests
 // the special cars (the S15 drift car, the Koenigsegg): the owners and Content Creators (the server checks it too)
 const canSpecial = () => canBike() || !!(Account.user && Account.user.name && Account.user.creator);
+// the Film area (home, bottom right: the same accounts - js/film.js): while you're in it, you drive your content car
+// (Settings.filmCar); everywhere else your road car (Settings.car). Nothing in the Film area counts but time played.
+const Film = { on: false };
+const wantedCar = () => (Film.on && canSpecial() ? Settings.filmCar : Settings.car);
 const canVan = () => canBike() || !!(Account.user && Account.user.name && Account.user.bus);
 function setVehicle(v) {
   if (typeof Net !== 'undefined' && Net.room && Net.room.carsOnly) v = 'car';   // (on a cars-only server: your car until you leave)
@@ -330,10 +334,12 @@ function setVehicle(v) {
   Net.setVehicle(van && vehicle === 'car' ? 'van' : vehicle);   // (the van drives as a car; others see the van)
   // the motorcycle and the Bang Bus are just for fun: no personal bests, leaderboards, runs or stats (a streak with
   // any of it on them counts for nothing, even after switching back to the car)
-  const fun = bike || van || carKey === 's15', was = score.funOnly; score.funOnly = fun;
-  if (fun) { if (score.score >= 1) score.fun = true; if (!was && game.mode !== 'menu') hud.message((bike ? 'MOTORCYCLE' : van ? 'BANG BUS' : 'DRIFT CAR') + ' · JUST FOR FUN, NO STATS'); }
+  const film = !!(PLAYER_CARS[carKey] && PLAYER_CARS[carKey].content);   // (a content car: the Film area only, nothing counts)
+  const fun = bike || van || carKey === 's15' || film, was = score.funOnly; score.funOnly = fun;
+  if (fun) { if (score.score >= 1) score.fun = true; if (!was && game.mode !== 'menu') hud.message((bike ? 'MOTORCYCLE' : van ? 'BANG BUS' : film ? 'FILM CAR' : 'DRIFT CAR') + ' · JUST FOR FUN, NO STATS'); }
   const row = document.getElementById('vehRow'); if (row) row.classList.toggle('hidden', !canBike());
   const gRow = document.getElementById('glideRow'); if (gRow) gRow.classList.toggle('hidden', !canBike());   // (owners: Ultra glide for the drift car)
+  const cRow = document.getElementById('ctrlRow'); if (cRow) cRow.classList.toggle('hidden', !canBike());   // (owners: Controlled drift for the drift car)
   const scRow = document.getElementById('smoothCamRow'); if (scRow) scRow.classList.toggle('hidden', !canBike());   // (owners: smooth camera for the drift car)
   showVan(van);
   if ((typeof Race !== 'undefined' && Race.active) || (typeof Garage !== 'undefined' && Garage.f1Preview)) showF1(true);   // (racing / the Garage showing the F1: still the F1 car)
@@ -749,11 +755,13 @@ function applyCarCfg() {
 }
 function installCar(key) {
   if (!PLAYER_CARS[key]) key = 'm4';
-  const asked = key;
+  // a content car only inside the Film area, and only one whose model is in (anywhere else: your road car)
+  if (PLAYER_CARS[key].content && !(Film.on && canSpecial() && PLAYER_CARS[key].file)) key = PLAYER_CARS[Settings.car] && !PLAYER_CARS[Settings.car].content ? Settings.car : 'm4';
+  const asked = key, film = !!PLAYER_CARS[key].content, save = k => { if (film) Settings.filmCar = k; else Settings.car = k; };
   if (PLAYER_CARS[key].owners && !canSpecial()) key = 'm4';   // (the owners' drift car: only on their accounts - it comes back when they sign in)
-  if (!bigModelReady(key)) {                           // (the Koenigsegg's model file: fetched first, then it's put on)
-    Settings.car = asked; saveSettings();
-    loadBigModel(key, () => { if (Settings.car === asked) installCar(asked); });
+  if (!bigModelReady(key)) {                           // (a content car's model file: fetched first, then it's put on)
+    save(asked); saveSettings();
+    loadBigModel(key, () => { if (wantedCar() === asked) installCar(asked); });
     return;
   }
   const old = CAR_PARTS[carKey], P = carParts(key), C = PLAYER_CARS[key];
@@ -762,7 +770,7 @@ function installCar(key) {
     playerVis.root.add(P.body, P.brake, P.indL, P.indR, ...P.wheels.map(w => w.pivot));
     Object.assign(playerVis, { body: P.body, wheels: P.wheels, brake: P.brake, indL: P.indL, indR: P.indR, M: P.M });
   }
-  carKey = key; Settings.car = asked;
+  carKey = key; save(asked);
   // where the driver sits: cabin seen through the glass, steering column, first-person cockpit, door mirrors
   interior.geometry = P.M.interior; swMesh.geometry = P.M.wheelSW;
   if (!P.M.swCenter) { swTilt.position.y = C.sw.y; swTilt.position.z = -C.sw.f; swTilt.rotation.x = C.sw.rx; }
@@ -774,11 +782,14 @@ function installCar(key) {
   applyCarCfg(); saveSettings();
   if (typeof Net !== 'undefined' && Net.setModel) Net.setModel(key);
   // the drift car is just for fun, like the motorcycle and the Bang Bus: no leaderboards, runs or stats
-  const fun = vehicle === 'bike' || vanOn || carKey === 's15';
+  const fun = vehicle === 'bike' || vanOn || carKey === 's15' || film;   // (and the content cars: the Film area, nothing counts)
   if (score.funOnly !== fun) { score.funOnly = fun; if (fun && score.score >= 1) score.fun = true; }
 }
 // (older saves: the paint picked in Settings becomes the M4's paint)
 if (!Settings.cars) Settings.cars = { m4: { color: Settings.color } };
+// (the Koenigsegg used to be in the road Garage: now it's a content car, in the Film area)
+if (PLAYER_CARS[Settings.car] && PLAYER_CARS[Settings.car].content) { Settings.filmCar = Settings.car; Settings.car = 'm4'; }
+if (!PLAYER_CARS[Settings.filmCar] || !PLAYER_CARS[Settings.filmCar].content) Settings.filmCar = 'koenigsegg';
 installCar(Settings.car || 'm4');
 applyF1Cfg();                                           // (the F1 car's own Garage colours)
 
@@ -1090,7 +1101,8 @@ let screen = 'scrTitle', settingsFrom = 'scrTitle';
 const PARENT = { scrSP: 'scrPlay', scrMP: 'scrPlay', scrTitles: 'scrProfile', scrRace: 'scrRaceHub', scrRaceLB: 'scrRaceHub' };   // (scrGarage: set by Garage.setMode)
 function show(id) {
   if (id === 'scrSettings' && screen !== 'scrSettings') settingsFrom = screen;
-  if (id === 'scrGarage' && screen !== 'scrGarage' && typeof Garage !== 'undefined') Garage.setMode(screen === 'scrRaceHub');   // (from the racing hub: the Racing Garage, F1 car only)
+  if (id === 'scrGarage' && screen !== 'scrGarage' && typeof Garage !== 'undefined') Garage.setMode(screen === 'scrRaceHub', screen === 'scrFilm');   // (from the racing hub: the Racing Garage, F1 car only; from Film: the content cars)
+  if (id === 'scrTitle' && Film.on) Film.leave();       // (back on the main menu: out of the Film area, your road car again)
   screen = id;
   for (const s of menu.querySelectorAll('.screen')) s.classList.toggle('hidden', s.id !== id);
   if (id === 'scrMP') Net.refreshList();
@@ -1196,7 +1208,10 @@ manEl.addEventListener('change', () => { Settings.manual = car.manual = manEl.ch
 mmEl.addEventListener('change', () => { Settings.minimap = mmEl.checked; saveSettings(); });
 const glEl = $id('glideOn');                            // (owners only: the drift car on ice - js/drift.js, steering wheel only)
 glEl.checked = !!Settings.ultraGlide;
-glEl.addEventListener('change', () => { Settings.ultraGlide = glEl.checked; saveSettings(); });
+const ctEl = $id('ctrlOn');                             // (owners only: the drift car's Controlled drift - js/drift.js; one or the other with Ultra glide)
+ctEl.checked = !!Settings.ctrlDrift && !Settings.ultraGlide;
+glEl.addEventListener('change', () => { Settings.ultraGlide = glEl.checked; if (glEl.checked) { Settings.ctrlDrift = false; ctEl.checked = false; } saveSettings(); });
+ctEl.addEventListener('change', () => { Settings.ctrlDrift = ctEl.checked; if (ctEl.checked) { Settings.ultraGlide = false; glEl.checked = false; } saveSettings(); });
 const scEl = $id('smoothCamOn');                        // (owners only: in the drift car the chase camera follows where it's going, never spins with it)
 scEl.checked = !!Settings.smoothCam;
 scEl.addEventListener('change', () => { Settings.smoothCam = scEl.checked; saveSettings(); });
@@ -1288,8 +1303,10 @@ function renderAccount() {
 Account.onChange = () => {
   acctMsg = ''; renderAccount(); syncBest(game.mode === 'mp' ? 'mp' : 'sp'); loadOwnerTools(); loadAdmin();
   if (window.AdminPanel) AdminPanel.account();          // (signed out / another account: the admin button goes)
-  const wantCar = PLAYER_CARS[Settings.car] ? Settings.car : 'm4';
-  if (wantCar !== carKey || (PLAYER_CARS[carKey].owners && !canSpecial())) installCar(wantCar);   // (the owners' drift car: back once they're signed in, gone when not)
+  if (Film.on && !canSpecial() && typeof Film.leave === 'function') Film.leave();   // (signed out in the Film area: back out of it)
+  const wantCar = PLAYER_CARS[wantedCar()] ? wantedCar() : 'm4';
+  if (wantCar !== carKey || ((PLAYER_CARS[carKey].owners || PLAYER_CARS[carKey].content) && !canSpecial())) installCar(wantCar);   // (the owners' drift car: back once they're signed in, gone when not)
+  $id('filmBtn').classList.toggle('hidden', !canSpecial());   // (Film: owners + Content Creators)
   setVehicle(Settings.vehicle);                        // (the motorcycle only for its accounts; anyone else is in the car)
   if (typeof Garage !== 'undefined') Garage.refresh();
   $id('playDrift').classList.toggle('hidden', !canBike());   // (Play > Drift track: the owners only for now)
@@ -1383,7 +1400,7 @@ function takeToken(mode) {
   if (mode === 'mp') { const t = Net.runToken; Net.runToken = null; Net.send({ t: 'runtoken' }); return t; }
   const t = spToken; fetchSpToken(); return t;
 }
-const runBody = (mode, token, run) => JSON.stringify({ session: Account.session, token, mode, score: run.score, dur: run.dur, dist: run.dist || 0, log: run.log, veh: vanOn ? 'van' : vehicle });   // (veh: the server turns away motorcycle / Bang Bus runs)
+const runBody = (mode, token, run) => JSON.stringify({ session: Account.session, token, mode, score: run.score, dur: run.dur, dist: run.dist || 0, log: run.log, veh: vanOn ? 'van' : vehicle, car: carKey });   // (veh / car: the server turns away motorcycle / Bang Bus / content car runs)
 // time played (profile): reported about once a minute while you're driving, signed in, in any mode
 let playT = 0;
 function playBeat(dt) {
@@ -1432,7 +1449,7 @@ function quitToTitle() {
   game.mode = 'menu'; game.scored = false; game.density = SCORED_DENSITY;
   setWorld(Settings.world, Settings.tod);              // (the title screen shows your chosen world again)
   startPosition(); score.reset();
-  show('scrTitle');
+  show(Film.on ? 'scrFilm' : 'scrTitle');                // (from the Film area: back to its menu)
 }
 $id('pQuit').onclick = quitToTitle;
 $id('pResume').onclick = () => closeMenu();
@@ -1912,8 +1929,11 @@ Net.onTraffic = m => traffic.applySnapshot(m);
 Net.onWreckOwner = id => { const c = traffic.byId && traffic.byId.get(id); if (c && c.local) c.shadow = true; };
 traffic.onRecover = c => Net.reportRecover(c);
 traffic.onGone = c => Net.reportGone(c);
+let inCreatorRoom = false;
 Net.onJoined = (room, slot) => {
   Net.slot = slot; bigMap = false;
+  inCreatorRoom = !!room.creator;
+  if (Film.on && !room.creator) Film.leave();          // (a normal server - a friend's, a race: your road car, out of the Film area)
   Input.lastActive = performance.now();   // (the AFK clock starts fresh)
   score.reset();
   if (room.race) {                                     // racing: the track, practising in the lobby until the race
@@ -1946,7 +1966,7 @@ function inLotPad(s, d) {
   return ls > LOOP.LOT_S0 - 2 && ls < LOOP.LOT_S1 + 2 && d > ROAD.edgeR + LOOP.LOT_D0 - 2 && d < ROAD.edgeR + LOOP.LOT_D1 + 2;
 }
 function afkCheck(now) {
-  if (game.mode !== 'mp' || !Net.active()) { afkWarned = false; return; }
+  if (game.mode !== 'mp' || !Net.active() || inCreatorRoom) { afkWarned = false; return; }   // (creator servers: setting up shots, no AFK limit)
   const idle = (now - Input.lastActive) / 1000, limit = inLotPad(car.s, car.d) ? AFK_LOT : AFK_ROAD;
   if (idle < limit - 10) { afkWarned = false; return; }
   if (!afkWarned) { afkWarned = true; hud.message('AFK? MOVE OR YOU\'LL BE REMOVED', true); }
@@ -1964,7 +1984,8 @@ Net.onLeft = () => {
   exitServer();
   game.mode = 'menu'; game.scored = false; game.density = SCORED_DENSITY;
   setVehicle(Settings.vehicle);                        // (back from a cars-only server: whatever you drive normally)
-  if (!quitting) openMenu(racing ? 'scrRace' : 'scrMP');
+  if (!quitting) openMenu(racing ? 'scrRace' : inCreatorRoom && Film.on ? 'scrFilmMP' : 'scrMP');
+  inCreatorRoom = false;
 };
 Net.onRace = m => Race.onState(m);
 Net.onRaceFinish = m => { if (m.id !== Net.myId) hud.message(`${m.name.toUpperCase()} FINISHED P${m.pos}`); else Race.finUpdate({ pos: m.pos }); };
@@ -2138,7 +2159,7 @@ function openMenu(id = 'scrPause') {
 function closeMenu() {
   menuOpen = false; menu.classList.add('hidden'); document.getElementById('hud').classList.remove('hidden');
   $id('hint').textContent = hintText();
-  hud.trafficLabel = game.mode === 'drift' ? 'DRIFT TRACK' : game.mode === 'race' ? (Race.kind === 'tt' ? 'TIME TRIAL' : 'RACE') : game.scored ? 'SCORED' : 'FREE DRIVE';   // (just which kind of run, above the speedo)
+  hud.trafficLabel = game.mode === 'drift' ? (DriftTrack.id === 'greenscreen' ? 'GREEN SCREEN' : 'DRIFT TRACK') : game.mode === 'race' ? (Race.kind === 'tt' ? 'TIME TRIAL' : 'RACE') : game.scored ? 'SCORED' : 'FREE DRIVE';   // (just which kind of run, above the speedo)
   sound.init(); sound.suspend(false);
   started = true; last = performance.now();
 }
@@ -2453,6 +2474,7 @@ function driveStep(dt, ctl, paused) {
   // the owners' drift car: its own tyre physics (js/drift.js); everything else drives as always
   car.drift = carKey === 's15' && vehicle === 'car' && !vanOn && !Race.active && canSpecial() ? DRIFT : null;
   car.glide = !!(car.drift && Settings.ultraGlide && canBike() && ctl.source === 'wheel');   // (owners' Ultra glide: steering wheel only)
+  car.ctrl = !!(car.drift && Settings.ctrlDrift && canBike() && !car.glide);                 // (owners' Controlled drift: keys or wheel)
   let wallHit = 0;
   ROAD.hintS = car.s;      // (loop circuit: road lookups pick the lap you're on)
   const held = Race.active && Race.frozen;               // (racing: on the grid until the lights go out)
@@ -2502,8 +2524,9 @@ function driveStep(dt, ctl, paused) {
     if (wallHit > 2) sound.thump(0.2 + wallHit / 14);
     ffbHit = wallHit;
     const off = Math.abs(car.d) - (2 * ROAD.LW + Tracks.RUNOFF.kerb);   // (on the grass: rough, and it scrubs speed)
-    ffbRough = Math.abs(car.d) > 2 * ROAD.LW ? (off > 0 ? 0.75 : 0.45) : 0;
-    if (off > 0 && Math.abs(car.u) > 1) car.u *= Math.exp(-0.35 * dt);
+    const stage = !!ROAD.loop.track.stage;              // (the green screen room: one smooth floor all over)
+    ffbRough = stage ? 0 : Math.abs(car.d) > 2 * ROAD.LW ? (off > 0 ? 0.75 : 0.45) : 0;
+    if (!stage && off > 0 && Math.abs(car.u) > 1) car.u *= Math.exp(-0.35 * dt);
     if (!paused) playBeat(dt);
     return;
   }
@@ -2664,9 +2687,19 @@ function loadOwnerTools() {
       if (!src || window.Recorder) return;
       const s = document.createElement('script');
       s.src = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
+      s.onload = loadStudio;                            // (Clip Studio builds on the recorder)
       document.body.appendChild(s);
     })
     .catch(() => { toolsFor = null; });
+}
+// Clip Studio (tools/studio.js, in the Film area): the owners and Content Creators - the server checks the account again
+// and gives anyone else a 404
+function loadStudio() {
+  if (!canSpecial() || !Account.session || window.Studio) return;
+  fetch((Account.base || '') + '/api/tools/studio', { headers: { Authorization: 'Bearer ' + Account.session }, cache: 'no-store' })
+    .then(r => (r.ok ? r.text() : null))
+    .then(src => { if (!src || window.Studio) return; const s = document.createElement('script'); s.src = URL.createObjectURL(new Blob([src], { type: 'text/javascript' })); document.body.appendChild(s); })
+    .catch(() => {});
 }
 // Admin panel: only asked for when the server says this account is the admin, and the server checks again before
 // handing it over (admin/panel.js; everyone else gets a 404). The panel adds its own button + screen.

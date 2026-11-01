@@ -15,12 +15,17 @@ const DT_COL = {
   mtn: [COL(0x4f8a3d), COL(0x5a9446), COL(0x467f37)], mtnFar: COL(0x6b8aa0),
 };
 
+// the green screen room's chroma green (the floor, the sky dome; the post in the middle and the wall a shade darker so you
+// can see them while driving - still well inside what a keyer takes out)
+const GS_GREEN = 0x00b140, GS_EDGE = 0x00a63c;
+
 const DriftTrack = {
   active: false, group: null, id: null,
-  available: () => typeof canBike === 'function' && canBike(),
+  // (the green screen room: the Film area - owners + Content Creators; the drift track: the owners only for now)
+  available: id => (id === 'greenscreen' ? typeof canSpecial === 'function' && canSpecial() : typeof canBike === 'function' && canBike()),
 
   enter(id = 'minami') {
-    if (!this.available() || !Tracks.DRIFT_BY_ID[id]) return;
+    if (!this.available(id) || !Tracks.DRIFT_BY_ID[id]) return;
     if (Net.active()) { quitting = true; Net.leave(); quitting = false; }
     Race.exit();
     score.reset();
@@ -28,9 +33,10 @@ const DriftTrack = {
     this.id = id; this.active = true;
     ROAD.setTrack(id); ZONES.setLoop(0);
     world.raceOn = true; world.reset(); zoneProps.reset();
-    setWorld('grass', Settings.tod || 'day'); world.ground.material.color.set(0x5c8f40);
+    const stage = !!Tracks.DRIFT_BY_ID[id].stage;
+    setWorld('grass', stage ? 'day' : Settings.tod || 'day'); world.ground.material.color.set(0x5c8f40);   // (the studio: always lit as day)
     traffic.clear(); traffic.remote = false;
-    this.build();
+    if (stage) this.buildStage(); else this.build();
     this.place(0, 0);
     closeMenu();
     hud.message(Tracks.DRIFT_BY_ID[id].name.toUpperCase());
@@ -59,8 +65,34 @@ const DriftTrack = {
   clear() {
     if (!this.group) return;
     scene.remove(this.group);
-    this.group.traverse(o => { if (o.geometry) o.geometry.dispose(); });
+    this.group.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material && o.userData.own) o.material.dispose(); });
     this.group = null;
+  },
+
+  // the Green Screen Room: an even chroma-green floor and a dome over everything (unlit, no fog, no tone curve: the
+  // same green from every angle and distance), a green wall round the edge and the post in the middle. Your car still
+  // throws its shadow on the floor.
+  buildStage() {
+    this.clear();
+    const lp = ROAD.loop, st = lp.track.stage, grp = new THREE.Group();
+    let cx = 0, cz = 0, r = 0;
+    for (let i = 0; i < lp.N; i++) { cx += lp.X[i]; cz += lp.Z[i]; }
+    cx /= lp.N; cz /= lp.N;
+    for (let i = 0; i < lp.N; i++) r += Math.hypot(lp.X[i] - cx, lp.Z[i] - cz);
+    r /= lp.N;
+    const flat = c => new THREE.MeshBasicMaterial({ color: c, fog: false, toneMapped: false });
+    const mesh = (geo, mat, y = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(cx, y, cz); m.userData.own = true; grp.add(m); return m; };
+    const R = r + st.outer + 12;                          // (the dome: just past the wall)
+    const floor = mesh(new THREE.CircleGeometry(R, 96), flat(GS_GREEN), 0.004); floor.rotation.x = -Math.PI / 2;
+    const dome = mesh(new THREE.SphereGeometry(R, 64, 24, 0, Math.PI * 2, 0, Math.PI / 2), flat(GS_GREEN)); dome.material.side = THREE.BackSide;
+    const edge = flat(GS_EDGE); edge.side = THREE.DoubleSide;
+    mesh(new THREE.CylinderGeometry(r + st.outer + 1, r + st.outer + 1, 9, 96, 1, true), edge, 4.5);   // the wall
+    mesh(new THREE.CylinderGeometry(r - st.inner - 0.8, r - st.inner - 0.8, 7, 48), edge, 3.5);        // the post in the middle
+    // the car's shadow on the floor (a see-through layer that only shows shadows)
+    const sh = mesh(new THREE.CircleGeometry(R, 96), new THREE.ShadowMaterial({ opacity: 0.32, fog: false }), 0.008); sh.rotation.x = -Math.PI / 2; sh.receiveShadow = true;
+    scene.add(grp);
+    this.group = grp;
+    return grp;
   },
 
   build() {

@@ -19,6 +19,7 @@ const BusEvent = {
   },
   // from: the screen Back returns to (the main menu, or the Garage when it came from the locked bus)
   open(from) {
+    if (typeof LtmClock !== 'undefined' && LtmClock.busOver) return;   // (the event's over)
     this.from = from || (screen === 'scrGarage' ? 'scrGarage' : 'scrTitle');
     show('scrEvent'); this.render(); this.load();
   },
@@ -87,3 +88,42 @@ if (CG) $id('ltmEvent').classList.add('hidden');        // (CrazyGames: no Googl
 $id('evDrive').onclick = () => BusEvent.drive();
 // signed in / out (or Google's button arrived) while the event is open: redraw it with that account's progress
 { const prev = Account.onChange; Account.onChange = () => { if (prev) prev(); if (screen === 'scrEvent') { BusEvent.render(); BusEvent.load(); } }; }
+
+// ---------- the limited-time timers: racing (its tracks get switched) and the Bang Bus event (it ends)
+// Counted on the SERVER's clock (/api/clock): its time when asked, then the browser's own steady timer (performance.now,
+// which changing the computer's clock doesn't touch) - so setting your clock forward or back changes nothing.
+// When the Bang Bus event's timer hits 0 the event goes: its home card, the quests and the locked Bang Bus in the Garage
+// (whoever unlocked it keeps it). Racing stays: its tracks get switched then.
+const LtmClock = {
+  at: null, perf: 0, race: 0, bus: 0, busOver: false,
+  now() { return this.at === null ? null : this.at + (performance.now() - this.perf); },
+  async sync() {
+    try {
+      const base = await Net.findBase(); if (!base) return;
+      const t0 = performance.now(), j = await (await fetch(base + '/api/clock', { cache: 'no-store' })).json(), t1 = performance.now();
+      if (!Number.isFinite(j.now)) return;
+      this.at = j.now; this.perf = (t0 + t1) / 2; this.race = j.race || 0; this.bus = j.bus || 0;
+      this.tick();
+    } catch (e) { /* offline: no timers shown */ }
+  },
+  // 6d 04h 12m 09s (the seconds only in the last day)
+  fmt(ms) {
+    const s = Math.max(0, Math.floor(ms / 1000)), d = Math.floor(s / 86400), h = Math.floor(s / 3600) % 24, m = Math.floor(s / 60) % 60, p = n => String(n).padStart(2, '0');
+    return d ? `${d}d ${p(h)}h ${p(m)}m` : `${p(h)}h ${p(m)}m ${p(s % 60)}s`;
+  },
+  tick() {
+    const now = this.now(); if (now === null) return;
+    const race = this.race - now, bus = this.bus - now;
+    for (const id of ['ltmRaceT', 'raceT']) { const e = $id(id); if (e) { e.textContent = this.race ? (race > 0 ? 'NEW TRACKS IN ' + this.fmt(race) : 'NEW TRACKS COMING SOON') : ''; e.classList.toggle('hidden', !this.race); } }
+    const be = $id('ltmBusT'); if (be) { be.textContent = bus > 0 ? 'ENDS IN ' + this.fmt(bus) : ''; be.classList.toggle('hidden', !(this.bus && bus > 0)); }
+    if (this.bus && bus <= 0 && !this.busOver) {      // the event's over: it goes
+      this.busOver = true;
+      $id('ltmEvent').classList.add('hidden'); $id('wcEventBox').classList.add('hidden');
+      if (screen === 'scrEvent') show('scrTitle');
+      if (typeof Garage !== 'undefined') Garage.refresh();
+    }
+  },
+};
+setInterval(() => LtmClock.tick(), 1000);
+setInterval(() => LtmClock.sync(), 10 * 60e3);           // (now and then: asks the server's time again)
+LtmClock.sync();

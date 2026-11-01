@@ -44,10 +44,14 @@ const Garage = (() => {
   // the road car(s) (the F1 car lives in the Racing Garage)
   const cars = $('gCars');
   for (const k of PLAYER_CAR_KEYS) {
-    const b = document.createElement('button'); b.className = 'gCar'; b.dataset.k = k;
-    const [make, ...model] = PLAYER_CARS[k].name.split(' ');
-    b.innerHTML = `<small>${make.toUpperCase()}</small><b>${model.join(' ').toUpperCase()}</b>`;
-    b.onclick = () => { if (Settings.vehicle === 'van') { Settings.vehicle = 'car'; setVehicle('car'); } installCar(k); refresh(); };
+    const C = PLAYER_CARS[k], b = document.createElement('button'); b.className = 'gCar'; b.dataset.k = k;
+    const [make, ...model] = C.name.split(' ');
+    b.innerHTML = `<small>${make.toUpperCase()}</small><b>${(model.join(' ') || make).toUpperCase()}</b>` + (C.content && !C.file ? '<i class="gNeed">MODEL NEEDED</i>' : '');
+    b.onclick = () => {
+      if (C.content && !C.file) { note.textContent = `${C.name}: its 3D model isn't in the game yet. Once its model file is added, it drives here.`; note.classList.add('gBusNote'); return; }
+      if (Settings.vehicle === 'van') { Settings.vehicle = 'car'; setVehicle('car'); }
+      installCar(k); refresh();
+    };
     cars.appendChild(b);
   }
   // the Bang Bus (the event's reward, js/event.js): locked until its quests are done - then a tap opens the quests
@@ -58,6 +62,7 @@ const Garage = (() => {
     Settings.vehicle = 'van'; saveSettings(); setVehicle('van'); refresh();
   };
   if (!CG) cars.appendChild(bus);                          // (CrazyGames: no sign-in, so no event)
+  let film = false;                                        // the Film Garage (from the Film area): the content cars only
   // ---- Racing Garage > Parts: tyres (soft / medium / hard), rear wing, and the stats they make (js/f1.js f1Stats)
   const tyres = $('gTyres');
   for (const [k, T] of Object.entries(F1_TYRES)) {
@@ -90,13 +95,13 @@ const Garage = (() => {
   }
   // which garage: the road car's, or the Racing Garage (the F1 car)
   let racing = false;
-  function setMode(on) {
-    racing = f1 = on;
-    $('gTitle').textContent = on ? 'RACING GARAGE' : 'GARAGE';
+  function setMode(on, inFilm = false) {
+    racing = f1 = on; film = !on && inFilm;
+    $('gTitle').textContent = on ? 'RACING GARAGE' : film ? 'FILM GARAGE' : 'GARAGE';
     cars.classList.toggle('hidden', on);
     scr.querySelector('.gTop').classList.toggle('hidden', !on);
     showTop('custom');
-    PARENT.scrGarage = on ? 'scrRaceHub' : undefined;
+    PARENT.scrGarage = on ? 'scrRaceHub' : film ? 'scrFilm' : undefined;
   }
   function showTop(t) {
     scr.querySelectorAll('[data-gtop]').forEach(b => b.classList.toggle('sel', b.dataset.gtop === t));
@@ -104,7 +109,7 @@ const Garage = (() => {
     scr.querySelector('.gParts').classList.toggle('hidden', t !== 'parts');
   }
   scr.querySelectorAll('[data-gtop]').forEach(b => b.addEventListener('click', () => showTop(b.dataset.gtop)));
-  $('gBack').onclick = () => show(racing ? 'scrRaceHub' : 'scrTitle');
+  $('gBack').onclick = () => show(racing ? 'scrRaceHub' : film ? 'scrFilm' : 'scrTitle');
   // wheels
   const rims = $('gRims');
   for (const [k, n] of GARAGE_RIMS) {
@@ -148,7 +153,11 @@ const Garage = (() => {
     const c = cfg();
     const onBus = !f1 && Settings.vehicle === 'van' && canVan();   // (driving the Bang Bus: its own paint, nothing to set up)
     for (const b of cars.children) b.classList.toggle('sel', b === bus ? onBus : !onBus && b.dataset.k === carKey);
-    for (const b of cars.children) if (b.dataset.k && PLAYER_CARS[b.dataset.k].owners) b.classList.toggle('hidden', !canSpecial());   // (the special cars: owners + Content Creators)
+    for (const b of cars.children) {                     // (the Film Garage: the content cars; the Garage: the road cars - special ones for owners + Content Creators)
+      const C = b.dataset.k && PLAYER_CARS[b.dataset.k];
+      b.classList.toggle('hidden', film ? !(C && C.content) : !!(C && C.content) || !!(C && C.owners && !canSpecial()));
+    }
+    bus.classList.toggle('hidden', film || (typeof LtmClock !== 'undefined' && LtmClock.busOver && !canVan()));   // (the event's over: only for whoever unlocked it)
     bus.classList.toggle('locked', !canVan());
     bus.title = canVan() ? 'The Bang Bus' : 'Locked: finish the Bang Bus quests to unlock it';
     for (const b of tyres.children) b.classList.toggle('sel', b.dataset.k === f1Cfg().tyre);
@@ -170,9 +179,11 @@ const Garage = (() => {
     $('gColLabel').textContent = f1 ? 'Colour 1' : 'Colour';
     for (const b of pats.children) b.classList.toggle('sel', b.dataset.k === f1Cfg().pattern);
     const onDrift = !f1 && !onBus && carKey === 's15';
-    note.textContent = onBus ? 'Just for fun: the Bang Bus gives no leaderboard points and no proxy bonus (and nobody gets proxy from it). It comes in its own paint.'
+    note.textContent = film ? 'Film cars: only in the Film area (free drive, creator servers, the green screen room, Clip Studio). Nothing counts in them but time played.'
+        + (PLAYER_CARS[carKey] && PLAYER_CARS[carKey].credit ? `\nModel: ${PLAYER_CARS[carKey].credit} (Sketchfab)` : '')
+      : onBus ?'Just for fun: the Bang Bus gives no leaderboard points and no proxy bonus (and nobody gets proxy from it). It comes in its own paint.'
       : onDrift ? `Drift car (owners only): throttle + a turn kicks the rear out. While drifting, the throttle sets the angle and steering sets the line; steer the other way (on the throttle or off it) to swing into a drift the other way; let go of everything to straighten up. Just for fun: no leaderboard points.` : '';
-    note.classList.toggle('gBusNote', onBus || onDrift);
+    note.classList.toggle('gBusNote', film || onBus || onDrift);
     if (!racing) scr.querySelector('.gCustomize').classList.toggle('hidden', onBus);
     for (const m of marks) m();
     pick.value = c.color; pick2.value = f1Cfg().accent;

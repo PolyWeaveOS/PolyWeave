@@ -642,9 +642,9 @@ select option { background: #1d2733; color: #fff; }
 .mpCodeBox b { font-size: 24px; letter-spacing: 3px; color: var(--accent); user-select: text; }
 #mpList { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 #mpList span { font-size: 12px; font-weight: 700; padding: 4px 9px; border-radius: 12px; background: rgba(255,255,255,.08); border-left: 4px solid var(--c, #fff); }
-#mpStatus { margin-top: 10px; min-height: 18px; font-size: 13px; opacity: .8; }
-#mpStatus.ok { color: #7dffa4; opacity: 1; }
-#mpStatus.err { color: var(--red); opacity: 1; }
+#mpStatus, #fmStatus { margin-top: 10px; min-height: 18px; font-size: 13px; opacity: .8; }
+#mpStatus.ok, #fmStatus.ok { color: #7dffa4; opacity: 1; }
+#mpStatus.err, #fmStatus.err { color: var(--red); opacity: 1; }
 /* ---------- Multiplayer (in-game player list, top left) ---------- */
 #mpHud { position: fixed; top: 18px; left: 18px; min-width: 210px; padding: 8px 10px; border-radius: 8px; background: rgba(16, 20, 28, .45); text-shadow: 0 1px 3px rgba(0,0,0,.5); pointer-events: none;
   transform: scale(var(--hud, 1)); transform-origin: top left; }
@@ -732,6 +732,30 @@ button.big:hover { background: #ffe37a; }
 .gCar b { font-size: 13px; letter-spacing: 1px; }
 .gCar.sel { background: var(--accent); color: #1a1f28; border-color: var(--accent); }
 .gCar.sel small { opacity: .8; }
+/* the Film Garage: a content car whose model file isn't in yet */
+.gCar .gNeed { font-style: normal; font-size: 8.5px; font-weight: 800; letter-spacing: 1px; color: var(--yellow); opacity: .85; margin-top: 2px; }
+.gCar:has(.gNeed) { opacity: .7; }
+/* Film (js/film.js): the hub's cards, the FILM pill, the creator servers' refresh button */
+#scrGarage .gNote { white-space: pre-line; }   /* (the Film Garage: the model's credit on its own line) */
+.filmPill { background: rgba(0,177,64,.12); border-color: rgba(0,177,64,.5); color: #5fe08e; }
+#scrFilm .tagline { margin-bottom: 28px; }
+/* the creators' chat (Film hub, under the cards) */
+.filmChat { display: flex; gap: 10px; width: min(760px, 94vw); margin: 22px auto 0; text-align: left; }
+.filmChat .fcMain, .filmChat .fcSide { background: var(--panel); border: 1px solid rgba(255,255,255,.08); border-radius: 12px; padding: 10px 12px; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+.filmChat .fcMain { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.filmChat .fcSide { width: 170px; flex: none; }
+.filmChat .fcHead { font-size: 11px; font-weight: 800; letter-spacing: 2px; opacity: .7; margin-bottom: 6px; }
+.filmChat .fcLog { height: 140px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; font-size: 13px; line-height: 1.35; scrollbar-width: thin; }
+.filmChat .fcLog .nm { font-weight: 800; color: var(--accent); margin-right: 6px; }
+.filmChat .fcLog .tm { opacity: .45; font-size: 11px; margin-right: 6px; font-variant-numeric: tabular-nums; }
+.filmChat .fcEmpty { opacity: .55; font-size: 12px; }
+.filmChat .fcRow { display: flex; gap: 6px; margin-top: 8px; }
+.filmChat .fcRow input { flex: 1; min-width: 0; }
+.filmChat .fcOnline { display: flex; flex-direction: column; gap: 4px; max-height: 162px; overflow-y: auto; font-size: 13px; }
+.filmChat .fcOnline span::before { content: ''; display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #5bd47a; margin-right: 7px; vertical-align: 1px; }
+@media (max-width: 700px) { .filmChat { flex-direction: column; } .filmChat .fcSide { width: auto; } }
+.fmRefresh { width: 26px; height: 26px; padding: 0; border-radius: 50%; display: inline-grid; place-items: center; line-height: 0; margin-left: 8px; vertical-align: middle; }
+.fmRefresh svg { width: 13px; height: 13px; display: block; }
 .gTabs { display: flex; gap: 6px; margin-bottom: 12px; }
 .gTabs button { flex: 1; letter-spacing: 1.5px; }
 .gTabs button.sel { background: rgba(255,255,255,.14); color: var(--accent); border-color: rgba(255,216,74,.5); }
@@ -767,6 +791,9 @@ button.big:hover { background: #ffe37a; }
 .ltmTag { font-size: clamp(10px, .9vw, 12px); font-weight: 800; letter-spacing: 2px; color: var(--accent); }
 .ltmText b { font-size: clamp(22px, 2.6vw, 34px); font-weight: 900; letter-spacing: clamp(2px, .4vw, 5px); line-height: 1.05; }
 .ltmSub { font-size: clamp(11px, 1vw, 14px); opacity: .7; letter-spacing: .5px; }
+/* the limited-time timers (js/event.js LtmClock: the server's clock) */
+.ltmTimer { margin-top: 3px; font-size: clamp(10px, .85vw, 12px); font-weight: 800; letter-spacing: 1.5px; color: var(--yellow); font-variant-numeric: tabular-nums; }
+.ltmTimerPill { font-variant-numeric: tabular-nums; margin-left: 4px; }
 .ltmGo { font-size: clamp(13px, 1.2vw, 17px); font-weight: 900; letter-spacing: 2px; padding: 10px 18px; border-radius: 10px; background: var(--accent); color: #1a1f28; z-index: 1; }
 .ltmPill { font-size: 11px; letter-spacing: 2px; padding: 4px 9px; border-radius: 6px; background: rgba(255,216,74,.1); border: 1px solid rgba(255,216,74,.35); color: var(--yellow); vertical-align: middle; margin-left: 8px; }
 /* ---------- updates board (main menu, top right) ---------- */

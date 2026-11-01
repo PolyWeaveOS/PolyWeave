@@ -38,7 +38,13 @@ const DRIFT = {
   // no throttle / per throttle / per steer (rad), deepest angle, how fast it can change (rad/s); path: turn (g) at
   // neutral / per steer, how hard it's held; angle and yaw-rate gains
   dSteerSpan: 0.22, dKeep: 0.95, dPush: 0.32, dScrub: 0, dFfbAt: 0, gripAid: 1.0, dSwing: 0.8, dSwingRate: 3.2, dLiftSwing: 0.75, dSwingMin: 0.6, dWheelSwing: 0.5, dTrimMin: 0.25, dHoldIn: 0.55, dCarryFade: 0.12, dEase: 3.5, dEaseSwing: 9, dPathEase: 5, dBase: 0.18, dThrottle: 0.55, dSteer: 0.25, dMax: 1.15, dBrake: 0.5, dBrakeEntry: 0.078, dBrakeA0: 0.32, dBrakeFar: 0.3, dBrakeFast: 0.3, dPathBrake: 0.45, dBrakeG: 0.4, dMaxLow: 1.35, dRate: 0.9, dPathG: 0.6, dPathSteer: 1.6, dPathK: 1.0, dAngK: 3, dYawK: 7, dSpin: 1.25, dSpinV: 9, dOverSteer: 0.45, dSpinOverA: 0.95, dSpinOverRate: 1.4, dSnap: 0.55, dSnapRate0: 1.5, dSnapRate1: 3, dSpinGrip: 0.5, dSpinYaw: 2.6, dSpin360Steer: 0.3, dSpin360Yaw: 4, glideF: 0.6, glideR: 0.35, glideHold: 0.3, glideSpinA: 1.0,   // (Ultra glide, owners + wheel only: front / rear grip, drift-control strength)
-  dSpinHold: 1.5, dOverCap: 1.6, dOverMax: 4, dPathSlew: 6, dSwingAcc: 12,
+  dSpinHold: 1.5, dSpinOut: 0.02, dCatchA: 0.9, dCatchK: 15,
+  cTrickA: 1.15, cTrickIn: 1.3, cSpinYaw: 5, cSpinKeep: 0.7,   // (Controlled drift, keys: a 360 starts past ~66 deg with the turn key held; fastest spin rad/s; how much speed it keeps)
+  cSpinSteer: 0.4201, cSpinBase: 0.6, cCatchK: 12,
+  cWheelYaw: 2.6, cSpinGain: 8, cSpinAcc: 2.5, cSpinGripT: 0.35,   // (wheel spin: fastest ~150 deg/s (wheel straight ~90); the speed it's asked for changes at most 2.5 rad/s^2; the rear lets go / grips over ~0.35 s)
+ // (Controlled drift, wheel: past 300 deg of wheel (front wheels 24.1 deg) it spins; wheel straight = 60% of the fastest spin)
+  // (front-wheel rad, ~20 deg of wheel: steering the other way past this ends a spin; it then rotates back to ~52 deg, at up to 15 rad/s^2)
+dOverCap: 1.6, dOverMax: 4, dPathSlew: 6, dSwingAcc: 12,
   // keys = a pretend wheel: turning speed when a key goes down / after kbWheelRamp s (deg of wheel per s), self-centring
   // (deg/s, and how softly it settles), how hard it can turn while gripping (g), never less than kbWheelMin deg
   kbWheelRate0: 300, kbWheelRate: 800, kbWheelRamp: 0.3, kbWheelBack: 500, kbWheelBackK: 6, kbWheelG: 2.0, kbWheelMin: 40, kbWheelBrake: 110, kbWheelSlow: 2.5, kbLowBoost: 1.05, kbPathV: 10, kbWheelRoll: 220, kbDriftIn: 1.1, kbOverRate: 60, kbAngRate: 0.6, kbAngBack: 1.3, kbLiftFade: 0.5, kbAngMax: 1.8, kbLead: 0.35, kbLeadGrow: 1.0, kbKickT: 0.22, kbKickV: 8, kbHoldK: 0.7, kbFollow: 0.35, kbGripBoostK: 0.35, kbGripAidK: 0.5, kbKickA: 0.4, kbKickSnap: 0.6, kbSwingHold: 0.35,   // (keys: W is all or nothing, so the extra angle at low speed is smaller than the wheel's 1.45)
@@ -160,7 +166,9 @@ const driftCurve = s => (s < 1 ? Math.sin(s * Math.PI / 2) : 1 - (1 - DRIFT.slid
     // lets go (and if you keep it there, the car spins). Normal steering, brake entries and key taps are far below this
     const snapIn = U.smooth(D.dSnapRate0, D.dSnapRate1, c.stPeak || 0) * U.smooth(0.15, 0.35, Math.abs(c.steer)) * U.smooth(12, 20, spd);
     c.snap = Math.max((c.snap || 0) * Math.exp(-h / 0.45), snapIn);
-    const GF = axle(Fzf, dLf, D.muF) * gk * (c.glide ? D.glideF : 1),   /* (owners' Ultra glide: on ice) */ GR = axle(Fzr, dLr, D.muR) * gk * (1 - D.dSnap * c.snap) * (c.spinT > 0 ? 1 - D.dSpinGrip : 1);   // (spun out: the rear is gone for a moment)
+    // (Controlled drift: the rear lets go and grips again over a moment, not all at once - a smooth start and finish)
+    c.spinG = c.ctrl ? (c.spinG || 0) + ((c.spinT > 0 ? 1 : 0) - (c.spinG || 0)) * (1 - Math.exp(-h / D.cSpinGripT)) : c.spinT > 0 ? 1 : 0;
+    const GF = axle(Fzf, dLf, D.muF) * gk * (c.glide ? D.glideF : 1),   /* (owners' Ultra glide: on ice) */ GR = axle(Fzr, dLr, D.muR) * gk * (1 - D.dSnap * c.snap) * (1 - D.dSpinGrip * c.spinG);   // (spun out: the rear is gone for a moment)
 
     // ---- brakes ----
     // (drifting: most of the braking comes through the drift itself - see the drift control - so the front tyres keep
@@ -215,13 +223,52 @@ const driftCurve = s => (s < 1 ? Math.sin(s * Math.PI / 2) : 1 - (1 - DRIFT.slid
     if (c.spinT > 0) {
       const bf = Math.atan2(c.v, c.u); c.spinRot = (c.spinRot || 0) + Math.abs(U.wrap(bf - (c.spinB ?? bf))); c.spinB = bf;
       const into = throttle > 0.5 && (c.kbKeys ? Math.sign(inp.steer || 0) === c.spinDir : Math.sign(c.steer) === c.spinDir && Math.abs(c.steer) > D.dSpin360Steer);
-      // (keys only - the keys can't steer a spin. On the wheel nothing pushes it round: the spin is the car's own
-      //  momentum and your steering, and you start and stop it yourself)
-      if (c.kbKeys) {
+      // steer the other way (wheel against the spin / the other key): the spin is over the moment you ask - the rear grips
+      // again and, still going forwards, the drift control catches it at the angle it's at (keep at it and it swings over)
+      const out = c.kbKeys ? Math.sign(inp.steer || 0) === -c.spinDir : c.spinDir * c.steer < -D.dSpinOut;
+      const regrab = () => {
+        c.spinT = 0; c.caughtT = 0.8;
+        if (c.u > 0.5) { const b = Math.atan2(c.v, Math.max(Math.abs(c.u), 0.5)); c.dOn = true; c.dSide = c.spinDir; c.bT = Math.max(0, -c.dSide * b); c.bV = 0; c.carry = 0; c.bMem = c.bT; c.swingT = 0; c.swingTo = 0; c.entryT = 0; c.flipT = 0.5; c.kbAng = c.bT; c.dS = Math.max(c.dS || 0, 0.6); }
+      };
+      // (Controlled drift, wheel: steering out once it's at / past backwards finishes the turn round to the front - the short
+      //  way - instead of stopping it backwards; p: how far round it is, 0 = facing ahead, pi = backwards)
+      const p = U.wrap(-c.spinDir * bf);
+      if (out && c.ctrl && !c.kbKeys && !c.spinFin && (p < 0 || p > 2.75)) { c.spinFin = true; c.spinFinT = 0; }
+      if (c.spinFin) c.spinFinT += h;
+      if (c.spinFin && (p <= 0 && p > -0.9 || c.spinFinT > 3)) { c.spinFin = false; regrab(); }   // (round to the front - or never stuck turning)
+      else if (out && !c.spinFin) regrab();
+      else if (c.ctrl) {
+        // Controlled drift (owners' setting): the spin is all yours - how far you steer into it (on the throttle) sets how fast
+        // it turns round; ease off and it carries on with its own momentum; back round to a drift angle with nothing asked,
+        // or steer out at any moment, and the drift takes it again. It keeps its speed while it rotates.
+        const Vs = Math.hypot(c.u, c.v);
+        if (!c.kbKeys) {
+          // wheel: it keeps turning round - a 360, two, as many as you like - until you counter-steer (steering out is the
+          // only way out). Wheel straight: a steady turn; further into it: quicker
+          // (slow and smooth, for clips: it builds up its rotation gently and changes speed gently)
+          const rT = c.spinFin ? Math.max(c.spinW || 0, D.cWheelYaw * D.cSpinBase) : D.cWheelYaw * U.lerp(D.cSpinBase, 1, U.smooth(0, D.cSpinSteer, c.spinDir * c.steer));
+          c.spinT = Vs > 2 ? Math.max(c.spinT, 0.3) : 0;
+          // (the rate it's asked to turn at eases up / down at most cSpinAcc rad/s^2 from where it was; then it's held firmly to that)
+          if (c.spinW === undefined || c.spinNew) { c.spinW = c.spinDir * c.r; c.spinNew = false; }
+          c.spinW += U.clamp(rT - c.spinW, -D.cSpinAcc * h, D.cSpinAcc * h);
+          Mz += U.clamp(D.Iz * D.cSpinGain * (c.spinW - c.spinDir * c.r), -D.Iz * 14, D.Iz * 14) * c.spinDir;
+        } else {
+          const kIn = (Math.sign(inp.steer || 0) === c.spinDir ? 1 : 0) * U.smooth(0.3, 0.8, U.clamp(inp.throttle, 0, 1));
+          if (kIn > 0 || Math.abs(c.r) > 1.5) c.spinT = Math.max(c.spinT, 0.3);   // (no timer: it lasts while you keep it going)
+          if (kIn > 0) { const rT = D.cSpinYaw * kIn; if (c.spinDir * c.r < rT) Mz += D.Iz * Math.min(14, 8 * (rT - c.spinDir * c.r)) * c.spinDir; }
+          if (kIn <= 0 && c.spinRot > 1 && Math.abs(bf) < D.dSpinOverA && c.u > 0.5) regrab();   // (keys: landed it - back into the drift)
+        }
+        if (Vs > 3) { const Fv = (Fx * c.u + Fy * c.v) / Vs; if (Fv < 0) { Fx -= Fv * D.cSpinKeep * c.u / Vs; Fy -= Fv * D.cSpinKeep * c.v / Vs; } }
+        if (c.spinRot > 2 * Math.PI - 0.6 && Math.abs(bf) < 0.5 && c.u > 0) c.spun360 = true;
+      } else if (c.kbKeys) {
         if (into) { c.spinT = Math.max(c.spinT, 0.3); if (Math.abs(c.r) < D.dSpin360Yaw) Mz += D.Iz * 12 * c.spinDir; }
         else if (c.spinT > D.dSpinHold - 0.6 && Math.abs(c.r) < D.dSpinYaw) Mz += D.Iz * 9 * c.spinDir;
         if (c.spinRot > 2 * Math.PI - 0.6 && Math.abs(bf) < 0.5 && c.u > 0) { c.spinT = 0; c.r *= 0.35; c.spun360 = true; }   // (landed it)
       } else {
+        // wheel: turned into the spin on the throttle it whips round quicker - the further in, the faster; ease off the
+        // wheel or the throttle and it's only the car's own momentum (nothing turns it for you)
+        const kIn = U.smooth(D.dSpinOut, D.dSpin360Steer, c.spinDir * c.steer) * U.smooth(0.3, 0.8, U.clamp(inp.throttle, 0, 1));
+        if (kIn > 0) { c.spinT = Math.max(c.spinT, 0.3); const rT = D.dSpin360Yaw * kIn; if (c.spinDir * c.r < rT) Mz += D.Iz * Math.min(12, 8 * (rT - c.spinDir * c.r)) * c.spinDir; }
         if (c.spinRot > 2 * Math.PI - 0.6 && Math.abs(bf) < 0.5 && c.u > 0) c.spun360 = true;
         // wheel: once you've brought it back round to pointing roughly where it's going, the drift can take it again (no lock-out)
         if (c.spinT < D.dSpinHold - 0.25 && Math.abs(bf) < D.dSpinOverA && c.u > 0) c.spinT = 0;
@@ -254,7 +301,14 @@ const driftCurve = s => (s < 1 ? Math.sin(s * Math.PI / 2) : 1 - (1 - DRIFT.slid
       const bRate = (Math.abs(beta) - (c.betaWas ?? Math.abs(beta))) / h; c.betaWas = Math.abs(beta);
       const overRot = Math.abs(beta) > D.dSpinOverA && bRate > D.dSpinOverRate && c.u > 0 && !(c.dOn && (c.flipT || 0) > 0);   // (not while a switch to the other side is swinging across)
       const glideSpin = c.glide && Math.abs(beta) > D.glideSpinA && Math.sign(c.steer) === Math.sign(c.r) && Math.abs(c.steer) > D.dSpin360Steer && inp.throttle > 0.5 && c.u > 0;   // (Ultra glide: deep and cranked into it on the throttle - it whips on round, a 360)
-      if (V > D.dSpinV - 2 && !(c.spinT > 0) && (glideSpin || !c.glide && ((c.dOn && Math.abs(beta) > D.dSpin && Math.sign(beta) === -c.dSide) || overRot))) { c.dOn = false; c.dS = 0; c.spinT = D.dSpinHold; c.spinRot = 0; c.spinB = Math.atan2(c.v, c.u); c.spinDir = Math.sign(c.r || 1); c.spun360 = false; }
+      // (steering the other way - wheel against the rotation / the other key - never spins it out: that's you getting out)
+      c.caughtT = Math.max(0, (c.caughtT || 0) - h);
+      const counter = c.kbKeys ? (inp.steer || 0) * c.r < 0 && Math.abs(inp.steer || 0) > 0.5 : c.steer * Math.sign(c.r) < -D.dSpinOut;
+      // (Controlled drift: never by accident - only deep in a drift, still steering hard into it on the throttle)
+      const ctrlSpin = c.dOn && Math.abs(beta) > D.cTrickA && Math.sign(beta) === -c.dSide && inp.throttle > 0.5 && (c.kbKeys ? Math.sign(inp.steer || 0) === c.dSide : c.dSide * c.steer / D.dSteerSpan > D.cTrickIn);
+      // (Controlled drift, wheel: turn it past 300 deg either way and the rear lets go - it turns that way)
+      const wheelSpin = c.ctrl && !c.kbKeys && Math.abs(c.steer) > D.cSpinSteer;
+      if (V > D.dSpinV - 2 && !(c.spinT > 0) && !(c.caughtT > 0) && (wheelSpin || !counter && (c.ctrl ? c.kbKeys && ctrlSpin : glideSpin || !c.glide && ((c.dOn && Math.abs(beta) > D.dSpin && Math.sign(beta) === -c.dSide) || overRot)))) { c.dOn = false; c.dS = 0; c.spinT = D.dSpinHold; c.spinRot = 0; c.spinB = Math.atan2(c.v, c.u); c.spinDir = wheelSpin ? Math.sign(c.steer) : Math.sign(c.r || 1); c.spun360 = false; c.spinNew = true; c.spinFin = false; }
       if (!c.dOn && !(c.spinT > 0) && c.brkT > 0 && c.u > 8 && Math.abs(c.steer) > D.dBrakeEntry) {
         c.dOn = true; c.dSide = Math.sign(c.steer); c.bT = Math.max(0, -c.dSide * beta); c.bV = 0;
         c.carry = a0; c.bMem = a0; c.swingT = 0; c.swingTo = 0; c.flipT = 0.5; c.entryT = 0.8; c.kbAng = a0;   // (the carry is the angle it swings out to; throttle / steering take it from there)
@@ -275,6 +329,7 @@ const driftCurve = s => (s < 1 ? Math.sin(s * Math.PI / 2) : 1 - (1 - DRIFT.slid
       const swinging = c.dOn && (csRaw < swingAt || c.flipT > 0 || (c.swingT || 0) > 0);
       if (c.dOn && ((Math.abs(beta) < 0.05 && Math.abs(rearA) < 0.07 && Math.abs(c.bT || 0) < 0.06 && !swinging) || V < 2.5 || c.u < -0.5 ||
         (Math.abs(c.bT || 0) < 0.04 && inp.throttle < 0.1 && inp.brake < 0.05 && !swinging && (c.carry || 0) < 0.04))) c.dOn = false;   // (off both pedals and wound down: the drift is over)
+      if (c.dOn && c.caughtT > 0) { c.bT = Math.min(c.bT, D.dCatchA); c.bMem = Math.min(c.bMem || 0, D.dCatchA); if (c.kbAng !== undefined) c.kbAng = Math.min(c.kbAng, D.dCatchA); }   // (just caught: the drift it picks back up is a normal one, not the spin's angle)
       c.dS = U.clamp((c.dS || 0) + (c.dOn ? 2.5 : -1.5) * h, 0, 1);   // (fades in / out over ~0.4 / ~0.7 s: no snap when a drift starts or ends)
       if (c.dS > 0) {
         // the car has swung through to a drift the other way (a transition, or flicked across): that's the drift now
@@ -386,6 +441,16 @@ const driftCurve = s => (s < 1 ? Math.sin(s * Math.PI / 2) : 1 - (1 - DRIFT.slid
       {
         const kg = D.gripAid * (c.kbKeys ? D.kbGripAidK : 1) * (c.spinT > 0 || c.glide ? 0 : 1) * (1 - c.dS) * (1 - U.smooth(0.2, 0.55, U.clamp(inp.throttle, 0, 1))) * U.smooth(0.03, 0.09, Math.abs(beta)) * (c.u > 3 ? 1 : 0);
         if (kg > 0) Mz += U.clamp(D.Iz * D.dYawK * (wPathNow + D.dAngK * beta - c.r), -D.Iz * 20, D.Iz * 20) * kg;
+      }
+      // getting out of a spin / an over-deep slide (past where the drift control holds it, even past 90 deg): while you steer
+      // the other way the car rotates back toward a drift angle instead of carrying on round - then the drift takes it again
+      {
+        const bF = Math.atan2(c.v, c.u), back = c.kbKeys ? (inp.steer || 0) * Math.sign(bF) > 0.5 : c.steer * Math.sign(bF) > D.dSpinOut;
+        if (back && !c.dOn && !(c.spinT > 0) && V > 3 && Math.abs(bF) > D.dCatchA && Math.abs(bF) < (c.ctrl ? 3.05 : 2.8)) {
+          c.caughtT = Math.max(c.caughtT || 0, 0.8);
+          const rT = wPathNow + D.dAngK * (bF - Math.sign(bF) * D.dCatchA), cK = c.ctrl ? D.cCatchK : D.dCatchK;   // (Controlled drift: a firmer catch)
+          Mz += U.clamp(D.Iz * D.dYawK * (rT - c.r), -D.Iz * cK, D.Iz * cK);
+        }
       }
       if (c.dS <= 0) c.ffbDrift = 0;
       else c.ffbAlign = U.lerp(c.ffbAlign, c.ffbDrift / c.dS, c.dS);   // (force feedback: the drift spring takes over from the tyres while drifting)
@@ -504,17 +569,37 @@ const driftCurve = s => (s < 1 ? Math.sin(s * Math.PI / 2) : 1 - (1 - DRIFT.slid
 
 // ---------- tyre smoke + skid marks (the drift car only; drawn for your own car) ----------
 const DriftFx = (() => {
-  let scene = null, smoke = [], next = 0, marks = null, mPos = null, mCol = null, mIdx = 0, acc = [0, 0];
-  const MAXP = 140, MAXQ = 700, last = [null, null], _w = new THREE.Vector3();
+  let scene = null, smoke = [], next = 0, marks = null, mPos = null, mCol = null, mIdx = 0, acc = [0, 0], puffs = [];
+  const MAXP = 140, MAXQ = 700, last = [null, null], _w = new THREE.Vector3(), _o = new THREE.Object3D(), QI = [0, 1, 2, 0, 2, 3];
+  let dLo = Infinity, dHi = -1;   // (skid marks: the vertices written this frame - only those go to the graphics card)
+  let mAll = false;   // (the whole buffer is waiting to go: don't narrow it this frame)
+  function sendMarks() {
+    const P = marks.geometry.attributes.position, C = marks.geometry.attributes.color;
+    if (mAll) { mAll = false; dLo = Infinity; dHi = -1; P.updateRange.count = C.updateRange.count = -1; P.needsUpdate = C.needsUpdate = true; return; }
+    if (dHi < 0) return;
+    P.updateRange.offset = dLo * 3; P.updateRange.count = (dHi - dLo) * 3; C.updateRange.offset = dLo * 4; C.updateRange.count = (dHi - dLo) * 4;
+    P.needsUpdate = C.needsUpdate = true; dLo = Infinity; dHi = -1;
+  }
   function init(sc) {
     scene = sc;
     // low-poly puffs like the sky's clouds (same shapes, flat shaded), very see-through
+    // (all of them drawn in two batches - one per shape - with their own see-through-ness each: 140 separate puffs cost
+    //  ~3 ms a frame and a hitch the first time each one showed up)
     const geos = [new THREE.IcosahedronGeometry(0.5, 0), new THREE.DodecahedronGeometry(0.5, 0)];
-    for (let i = 0; i < MAXP; i++) {
-      const s = new THREE.Mesh(geos[i % 2], new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0xb8c8d8, emissiveIntensity: 0.55, flatShading: true, transparent: true, depthWrite: false, opacity: 0 }));
-      s.visible = false; s.renderOrder = 2; s.frustumCulled = false; scene.add(s);
-      smoke.push({ s, life: 0, max: 1, vx: 0, vy: 0, vz: 0, size: 1, sq: 1, spin: 0 });
-    }
+    const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, emissive: 0xb8c8d8, emissiveIntensity: 0.55, flatShading: true, transparent: true, depthWrite: false });
+    mat.onBeforeCompile = sh => {
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float iAlpha;\nvarying float vAlpha;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvAlpha = iAlpha;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vAlpha;').replace('vec4 diffuseColor = vec4( diffuse, opacity );', 'vec4 diffuseColor = vec4( diffuse, opacity * vAlpha );');
+    };
+    puffs = geos.map(g => {
+      const m = new THREE.InstancedMesh(g, mat, MAXP / 2);
+      m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      const a = new THREE.InstancedBufferAttribute(new Float32Array(MAXP / 2), 1); a.setUsage(THREE.DynamicDrawUsage); g.setAttribute('iAlpha', a);
+      _o.scale.setScalar(0); _o.updateMatrix(); for (let i = 0; i < MAXP / 2; i++) m.setMatrixAt(i, _o.matrix);
+      m.renderOrder = 2; m.frustumCulled = false; scene.add(m);   // (always there, so it's set up at the start, not mid-drift)
+      return m;
+    });
+    for (let i = 0; i < MAXP; i++) smoke.push({ m: puffs[i % 2], j: i >> 1, on: false, x: 0, y: 0, z: 0, rx: 0, ry: 0, rz: 0, life: 0, max: 1, vx: 0, vy: 0, vz: 0, size: 1, sq: 1, spin: 0, k: 1 });
     // skid marks: one ring buffer of quads on the road (alpha per vertex, so old marks can be faint)
     const geo = new THREE.BufferGeometry();
     mPos = new Float32Array(MAXQ * 6 * 3); mCol = new Float32Array(MAXQ * 6 * 4);
@@ -528,9 +613,15 @@ const DriftFx = (() => {
     const p = smoke[next]; next = (next + 1) % MAXP;
     p.life = 0; p.max = 2.2 + Math.random() * 1.4; p.size = 0.6 + Math.random() * 0.4;   // (big, slow, lingering clouds)
     p.vx = vx * 0.18 + (Math.random() - 0.5) * 1.2; p.vz = vz * 0.18 + (Math.random() - 0.5) * 1.2; p.vy = 0.35 + Math.random() * 0.4;
-    p.k = k; p.s.position.set(x + (Math.random() - 0.5) * 0.2, 0.25, z + (Math.random() - 0.5) * 0.2); p.s.visible = true;
-    p.s.rotation.set(Math.random() * 3, Math.random() * 3, Math.random() * 3); p.sq = 0.6 + Math.random() * 0.25; p.spin = (Math.random() - 0.5) * 0.8;
+    p.k = k; p.x = x + (Math.random() - 0.5) * 0.2; p.y = 0.25; p.z = z + (Math.random() - 0.5) * 0.2; p.on = true;
+    p.rx = Math.random() * 3; p.ry = Math.random() * 3; p.rz = Math.random() * 3; p.sq = 0.6 + Math.random() * 0.25; p.spin = (Math.random() - 0.5) * 0.8;
   }
+  // write one puff into its batch (gone: scaled to nothing, fully see-through)
+  function put(p, sz, alpha) {
+    _o.position.set(p.x, p.y, p.z); _o.rotation.set(p.rx, p.ry, p.rz); _o.scale.set(sz, sz * p.sq, sz); _o.updateMatrix();
+    p.m.setMatrixAt(p.j, _o.matrix); p.m.geometry.attributes.iAlpha.array[p.j] = alpha;
+  }
+  function flush() { for (const m of puffs) { m.instanceMatrix.needsUpdate = true; m.geometry.attributes.iAlpha.needsUpdate = true; } }
   function mark(i, x, z, k) {
     const l = last[i];
     if (!l || k <= 0) { last[i] = k > 0 ? { x, z, k } : null; return; }
@@ -540,26 +631,30 @@ const DriftFx = (() => {
     const nx = -dz / d * 0.11, nz = dx / d * 0.11, y = 0.056;   // (just above the road and its lane lines)
     const q = [[l.x - nx, l.z - nz, l.k], [l.x + nx, l.z + nz, l.k], [x + nx, z + nz, k], [x - nx, z - nz, k]];
     const o = mIdx * 6;
-    [0, 1, 2, 0, 2, 3].forEach((c, j) => {
-      mPos.set([q[c][0], y, q[c][1]], (o + j) * 3);
-      mCol.set([1, 1, 1, Math.min(0.6, q[c][2] * 0.6)], (o + j) * 4);
-    });
+    for (let j = 0; j < 6; j++) {
+      const c = QI[j], v = (o + j) * 3, w = (o + j) * 4;
+      mPos[v] = q[c][0]; mPos[v + 1] = y; mPos[v + 2] = q[c][1];
+      mCol[w] = mCol[w + 1] = mCol[w + 2] = 1; mCol[w + 3] = Math.min(0.6, q[c][2] * 0.6);
+    }
+    dLo = Math.min(dLo, o); dHi = Math.max(dHi, o + 6);
     mIdx = (mIdx + 1) % MAXQ;
-    marks.geometry.attributes.position.needsUpdate = true; marks.geometry.attributes.color.needsUpdate = true;
     last[i] = { x, z, k };
   }
   function update(dt, car, vis) {
     if (!scene) return;
+    let any = false;
     for (const p of smoke) {
-      if (!p.s.visible) continue;
+      if (!p.on) continue;
+      any = true;
       p.life += dt;
-      if (p.life >= p.max) { p.s.visible = false; continue; }
+      if (p.life >= p.max) { p.on = false; put(p, 0, 0); continue; }
       const t = p.life / p.max;
-      p.s.position.x += p.vx * dt; p.s.position.y += p.vy * dt; p.s.position.z += p.vz * dt;
+      p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt;
       p.vx *= Math.exp(-1.5 * dt); p.vz *= Math.exp(-1.5 * dt);
-      const sz = p.size + Math.sqrt(t) * 3; p.s.scale.set(sz, sz * p.sq, sz); p.s.rotation.y += p.spin * dt;
-      p.s.material.opacity = 0.065 * p.k * Math.min(1, t / 0.1) * Math.pow(1 - t, 1.6);   // (faint: you can always see through it)
+      p.ry += p.spin * dt;
+      put(p, p.size + Math.sqrt(t) * 3, 0.065 * p.k * Math.min(1, t / 0.1) * Math.pow(1 - t, 1.6));   // (faint: you can always see through it)
     }
+    if (any) flush();
     if (!car.drift || dt <= 0) { last[0] = last[1] = null; return; }
     // the rear tyres: how hard they're scrubbing (m/s of slip) -> smoke and black marks
     const k = U.clamp(((car.slipR || 0) - 2.5) / 7, 0, 1), km = U.clamp(((car.slipR || 0) - 1.8) / 4, 0, 1);
@@ -574,14 +669,25 @@ const DriftFx = (() => {
       while (acc[i] >= 1) { acc[i] -= 1; puff(_w.x, _w.z, vx, vz, 0.5 + k * 0.5); }
       i++;
     }
+    sendMarks();
   }
+  // (the whole buffer changed: send all of it)
+  function sendAll(attr) { mAll = true; dLo = Infinity; dHi = -1; attr.updateRange.offset = 0; attr.updateRange.count = -1; attr.needsUpdate = true; }
   // floating origin (main.js): everything moves with the world
   function shift(dz) {
     if (!scene) return;
-    for (const p of smoke) p.s.position.z += dz;
+    for (const p of smoke) p.z += dz;   // (written into the batch on the next update)
     for (let i = 2; i < mPos.length; i += 3) mPos[i] += dz;
-    marks.geometry.attributes.position.needsUpdate = true;
+    sendAll(marks.geometry.attributes.position); sendAll(marks.geometry.attributes.color);
     for (const l of last) if (l) l.z += dz;
   }
-  return { init, update, shift };
+  // wipe all smoke and marks (the video recorder: its replay draws its own)
+  function clear() {
+    if (!scene) return;
+    for (const p of smoke) { p.on = false; p.life = 0; put(p, 0, 0); }
+    flush();
+    mCol.fill(0); sendAll(marks.geometry.attributes.position); sendAll(marks.geometry.attributes.color);
+    last[0] = last[1] = null; acc[0] = acc[1] = 0;
+  }
+  return { init, update, shift, clear };
 })();

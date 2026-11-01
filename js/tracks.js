@@ -42,6 +42,11 @@ const DRIFT_TRACKS = [
     path: [[-11, -11], [-63, 4], [-107, 15], [-120, 14], [-136, 10], [-171, -5], [-174, -11], [-175, -17], [-170, -39], [-172, -50], [-175, -56], [-184, -59], [-189, -57], [-204, -34], [-211, -33],
       [-219, -37], [-224, -48], [-224, -58], [-216, -79], [-216, -89], [-225, -117], [-227, -133], [-226, -145], [-229, -161], [-237, -172], [-256, -182], [-270, -186], [-284, -187], [-300, -180],
       [-306, -166], [-306, -159], [-303, -151], [-302, -147], [-262, -66], [-246, -34], [-239, -20], [-220, -1], [-193, 15], [-167, 26], [-131, 30], [-99, 29], [-80, 26], [-43, 14], [-5, 3], [0, 0], [0, -5], [-2, -9]] },
+  // the Green Screen Room (Film area, js/drifttrack.js buildStage): a round studio, all chroma green. Driven as a circle
+  // (r 32 m) with the walls set far out: the floor runs from a green post in the middle (6 m) out to the wall (58 m).
+  { id: 'greenscreen', name: 'Green Screen Room', short: 'GREEN SCREEN', stage: { inner: 26, outer: 26 }, scale: 1, rmin: 10, look: ['grass', 'day'],
+    desc: 'A round studio, floor and walls all chroma green: key it out and put your car anywhere.',
+    path: Array.from({ length: 24 }, (_, i) => { const a = -i / 24 * 2 * Math.PI; return [32 * Math.cos(a), 32 * Math.sin(a)]; }) },
 ];
 // barriers: tarmac strips on the straights, and on the outside of every corner a gravel trap (sand) that runs from
 // the braking zone to the exit, with the wall set back behind it, like a real circuit
@@ -183,6 +188,11 @@ function buildTrack(t, STEP = 2) {
       const k = K[i], inner = Math.max(RUNOFF.half + RUNOFF.kerb + 0.6, 1 / Math.max(Math.abs(k), 1e-6) - 2.5);
       if (k > 0) WR[i] = Math.min(WR[i], inner); else if (k < 0) WL[i] = Math.min(WL[i], inner);
     }
+  }
+  // a studio (the green screen room): its own walls - toward the middle of the circle (the inside of the turn) and out
+  if (t.stage) {
+    let k = 0; for (let i = 0; i < N; i++) k += K[i];
+    for (let i = 0; i < N; i++) { WR[i] = k > 0 ? t.stage.inner : t.stage.outer; WL[i] = k > 0 ? t.stage.outer : t.stage.inner; }
   }
   return { L, STEP, N, X, Z, TH, K, TOT, grid, CELL, race: true, track: t, corners, WL, WR };
 }

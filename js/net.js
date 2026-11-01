@@ -13,6 +13,7 @@
 // the game always uses that same server.
 const NET_ONLINE = '';
 const NET_RATE = 1 / 20;                    // state updates per second
+const NET_SPIN = 0.5;                       // how much a bump between two players turns the cars (1 = as hard as a traffic car does)
 
 const Net = {
   ws: null, base: null, myId: '', room: null,   // room: { id, name, pub, code }
@@ -120,7 +121,8 @@ const Net = {
   // opts.scored: leaderboard server (60% traffic); otherwise free drive with opts.density traffic
   host(name, color, opts = {}) {
     return this.request({ t: 'create', name, color, ext: this.ext, bin: 1, veh: this.veh, model: this.model, scored: !!opts.scored, density: opts.density,
-      listed: !!opts.listed, roomName: opts.roomName, theme: opts.theme, tod: opts.tod, vehicles: opts.vehicles === 'cars' ? 'cars' : 'all' }, opts.listed ? 'Creating your public server…' : 'Creating your private server…');
+      listed: !!opts.listed, roomName: opts.roomName, theme: opts.theme, tod: opts.tod, vehicles: opts.vehicles === 'cars' ? 'cars' : 'all', creator: !!opts.creator },
+      opts.creator ? 'Creating your creator server…' : opts.listed ? 'Creating your public server…' : 'Creating your private server…');
   },
   // racing: queue for a track (its public lobby) / host a race (opts: track, listed, roomName, theme, tod)
   raceQueue(track, name, color) { return this.request({ t: 'raceq', track, name, color, ext: this.ext, bin: 1, veh: this.veh, model: this.model }, 'Joining the queue…'); },
@@ -176,13 +178,15 @@ const Net = {
         scored: !!m.scored, density: Number.isFinite(m.density) ? m.density : 0.6, theme: m.theme || 'grass', tod: m.tod || 'day',
         bin: !!m.bin,                                  // (this server reads binary positions; one from before the update doesn't)
         race: m.race && typeof Tracks !== 'undefined' && Tracks.TRACK_BY_ID[m.race.track] ? m.race : null,   // (a race room: track, laps)
-        carsOnly: !!m.carsOnly };                      // (the host allowed cars only: no motorcycle, no Bang Bus)
+        carsOnly: !!m.carsOnly,                        // (the host allowed cars only: no motorcycle, no Bang Bus)
+        creator: !!m.creator };                        // (a creator server: Film area, owners + Content Creators only)
       this.myBest = m.best || 0;
       this.status(this.room.official ? `Connected to ${m.name}` : `Connected to ${m.name} · code ${m.code}`, 'ok');
       this.changed();
       if (this.onJoined) this.onJoined(this.room, m.slot || 0);
     } else if (m.t === 'race') { if (this.room && this.room.race && this.onRace) this.onRace(m); }   // (racing: lobby / countdown / grid / racing / results)
     else if (m.t === 'rfinish') { if (this.room && this.room.race && this.onRaceFinish) this.onRaceFinish(m); }
+    else if (m.t === 'cchat') { if (this.onCreatorChat) this.onCreatorChat(m); }   // (the creators' chat: js/film.js)
     else if (m.t === 'error') this.status(m.msg, 'err');
     else if (m.t === 'runtoken') this.runToken = typeof m.token === 'string' ? m.token : null;   // (lets my next scored run count)
     else if (m.t === 'presence' || m.t === 'msg' || m.t === 'social' || m.t === 'inbox') { if (this.onSocial) this.onSocial(m); }   // (friends: social.js)
@@ -307,7 +311,7 @@ const Net = {
     p.vanMesh = null; p.vanModel = null;
     this.scene.remove(p.g);
     p.g.traverse(o => { if (o.isSprite) { o.material.map.dispose(); o.material.dispose(); } });   // (the name tag; car meshes are shared)
-    p.g = null; p.vis = p.visFull = p.visLite = null; p.sm = null;
+    p.g = null; p.vis = p.visFull = p.visLite = null; p.sm = null; p.kicks = null;
   },
 
   // The clock friends are drawn on: it moves on by exactly one frame each frame and is nudged gently onto the real
@@ -394,6 +398,30 @@ const Net = {
     m.es *= k; m.ed *= k; m.er *= k;
     st.s += m.es; st.d += m.ed; st.ry += m.er;
   },
+  // A bump I gave them (collide()): their car takes it on my screen straight away, like it does on theirs, instead of
+  // driving on into me until their own updates show it. It carries on with the push (their tyres scrub the sideways
+  // part off quickly; along the road it lasts) until those updates arrive - about `lag` after the hit - then hands
+  // back to them, easing out over the same ~0.1 s the updates' corrections ease in over. Each bump hands back on its
+  // own time (grinding along a car's side is one bump after another: held as one, the first ones were counted
+  // twice once their updates had them). Only where it goes: which way it points stays theirs (a guessed spin, held
+  // for a fifth of a second, poked its corners into me and spun us both out).
+  kick(p, st, dt) {
+    const K = p.kicks; if (!K) return;
+    let s = 0, d = 0;
+    for (let i = K.length - 1; i >= 0; i--) {
+      const k = K[i];
+      k.t += dt;
+      if (k.t < k.T) { k.vs *= Math.exp(-0.5 * dt); k.vd *= Math.exp(-5 * dt); k.s += k.vs * dt; k.d += k.vd * dt; }
+      else {
+        k.vs = k.vd = 0;
+        const e = Math.exp(-dt / 0.1); k.s *= e; k.d *= e;
+        if (Math.abs(k.s) + Math.abs(k.d) < 0.005) { K.splice(i, 1); continue; }
+      }
+      s += k.s; d += k.d;
+    }
+    if (!K.length) { p.kicks = null; return; }
+    st.s += U.clamp(s, -1.5, 1.5); st.d += U.clamp(d, -1.5, 1.5);
+  },
   // Never draw a friend inside a traffic car. On their screen they squeezed past it (or hit it and stopped);
   // here they're predicted a moment ahead and can be drawn a little into it until the next update shows what
   // happened. Pushed out of it instead, through the same easing (so they slide back, not jump).
@@ -440,8 +468,9 @@ const Net = {
     for (const p of this.players.values()) {
       const s = p.now = this.sample(p, dt);
       if (!p.g) continue;
-      if (!s) { p.g.visible = false; p.sm = null; continue; }
+      if (!s) { p.g.visible = false; p.sm = null; p.kicks = null; continue; }
       this.smooth(p, s, dt);
+      this.kick(p, s, dt);
       const pos = ROAD.pos(s.s, s.d), yaw = ROAD.yaw(s.s) + (s.ry || 0);
       p.x = pos.x; p.z = pos.z; p.yaw = yaw;
       p.g.visible = true;
@@ -477,20 +506,61 @@ const Net = {
     let impact = 0;
     this.lastBumpId = null;
     for (const p of this.players.values()) {
-      if (!p.now || p.x === undefined) continue;
+      const st = p.now;
+      if (!st || p.x === undefined) continue;
       const dx = p.x - player.x, dz = p.z - player.z;
       if (dx * dx + dz * dz > 64) continue;
       const pb = player.toBody();
       const A = SAT.toWorld(hull, pb.x, pb.z, player.visYaw, this._a), B = SAT.toWorld(p.hull || hull, p.x, p.z, p.yaw, this._b);
       const col = SAT.test(A, B);
       if (!col) continue;
-      const v = p.now.v || 0;
-      const other = { x: p.x, z: p.z, vx: v * Math.sin(p.yaw), vz: -v * Math.cos(p.yaw), w: 0, im: 1 / M4.mass, ii: 1 / M4.Iz };
+      this.contactMid(col, A, B);
+      pb.ii *= NET_SPIN;
+      col.depth = Math.min(col.depth, 0.1);   // (deep in - their car jumping in on an update - comes apart over a few frames, not in one jump)
+      // how their car is moving as drawn: along the road, sideways (a slide, a lane change - or a bump still being
+      // taken, see kick()) and turning (the road's bend + their own)
+      const K = p.kicks || (p.kicks = []);
+      let kvs = 0, kvd = 0; for (const k of K) { kvs += k.vs; kvd += k.vd; }
+      const ry = ROAD.yaw(st.s), sy = Math.sin(ry), cy = Math.cos(ry), vs = (st.v || 0) + kvs, vd = (st.dd || 0) + kvd;
+      const other = { x: p.x, z: p.z, vx: vs * sy + vd * cy, vz: -vs * cy + vd * sy, w: (p.rrS || 0) + U.wrap(ROAD.yaw(st.s + 1) - ry) * vs, im: 1 / M4.mass, ii: NET_SPIN / M4.Iz };
+      const x0 = other.x, z0 = other.z, vx0 = other.vx, vz0 = other.vz;
       const hit = resolveImpulse(pb, other, col, 0.15, 0.35);
       if (hit > impact) { impact = hit; this.lastBumpId = p.id; }
       player.fromBody(pb);
+      // ...and their half of it, on my screen from now on: moved apart now, carried on until their updates show it
+      // (kick()). Before, their car only reacted once those came back: until then it drove on into me like a wall,
+      // shoving my car along for a fifth of a second and giving it the whole bump instead of half.
+      // (A bump that's only just happened takes this one too; past 24 the oldest two are merged, never dropped: no jump.)
+      let k = K[K.length - 1];
+      if (!k || k.t > 0.05) { k = { vs: 0, vd: 0, s: 0, d: 0, t: 0, T: U.clamp((p.lag || 0.15) + 0.03, 0.05, 0.35) }; K.push(k); }
+      if (K.length > 24) { const a = K.shift(), b = K[0]; b.vs += a.vs; b.vd += a.vd; b.s += a.s; b.d += a.d; }
+      const ds = (other.x - x0) * sy - (other.z - z0) * cy, dd = (other.x - x0) * cy + (other.z - z0) * sy;
+      k.vs += (other.vx - vx0) * sy - (other.vz - vz0) * cy; k.vd += (other.vx - vx0) * cy + (other.vz - vz0) * sy;
+      k.s += ds; k.d += dd;
+      st.s += ds; st.d += dd;
+      p.x = other.x; p.z = other.z;
+      if (p.g) p.g.position.set(p.x, 0, p.z);
     }
     return impact;
+  },
+  // Where two cars touch: the middle of every corner of either car that's inside the other. (SAT.test takes the deepest
+  // corner of each, and two cars meeting face to face - a tap from behind, side by side - have two equally deep ones:
+  // it took either, so the same straight tap spun the car hard one time and not at all the next.) A corner going into
+  // the other car's side is still that corner.
+  contactMid(col, A, B) {
+    const inside = (q, P) => {
+      let pos = false, neg = false;
+      for (let i = 0; i < P.length; i++) {
+        const a = P[i], b = P[(i + 1) % P.length], c = (b[0] - a[0]) * (q[1] - a[1]) - (b[1] - a[1]) * (q[0] - a[0]);
+        if (c > 1e-4) pos = true; else if (c < -1e-4) neg = true;
+        if (pos && neg) return false;
+      }
+      return true;
+    };
+    let x = 0, z = 0, n = 0;
+    for (const q of A) if (inside(q, B)) { x += q[0]; z += q[1]; n++; }
+    for (const q of B) if (inside(q, A)) { x += q[0]; z += q[1]; n++; }
+    if (n) { col.px = x / n; col.pz = z / n; }
   },
 
   // rows for the player lists: current score + best score on this server

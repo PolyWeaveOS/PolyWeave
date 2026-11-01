@@ -40,7 +40,7 @@ db.exec(`
     verified INTEGER NOT NULL,            -- 1 = passed the checks, 0 = imported from before checks existed, -1 = rejected
     removed INTEGER NOT NULL DEFAULT 0,   -- 1 = doesn't count (rejected, or removed by an admin)
     note TEXT, log BLOB);
-  CREATE INDEX IF NOT EXISTS runs_board ON runs (mode, season, removed, uid, score);
+  CREATE INDEX IF NOT EXISTS runs_lb ON runs (mode, season, removed, uid, score, t, dur, server);
   CREATE INDEX IF NOT EXISTS runs_uid ON runs (uid, t);
   CREATE TABLE IF NOT EXISTS user_titles (uid TEXT NOT NULL, title TEXT NOT NULL, t INTEGER, PRIMARY KEY (uid, title));
   CREATE TABLE IF NOT EXISTS used_tokens (n TEXT PRIMARY KEY, t INTEGER);
@@ -88,9 +88,29 @@ db.exec(`
   const haveR = new Set(db.prepare('PRAGMA table_info(runs)').all().map(c => c.name));
   if (!haveR.has('dist')) db.exec('ALTER TABLE runs ADD COLUMN dist REAL');
   if (!haveR.has('room')) db.exec('ALTER TABLE runs ADD COLUMN room TEXT');   // (multiplayer: which server, for team runs)
+  // what saving a run looks up (a run is saved at every crash, and the server can do nothing else meanwhile: these
+  // were whole-table scans that held up every server for a third of a second by 100k runs). runs_lb: the
+  // leaderboards (replaces runs_board, with everything they show); runs_stats: a player's totals; runs_room: team runs.
+  db.exec(`DROP INDEX IF EXISTS runs_board;
+    CREATE INDEX IF NOT EXISTS runs_stats ON runs (uid, removed, verified, mode, score, near, dist, peak);
+    CREATE INDEX IF NOT EXISTS runs_room ON runs (room, t) WHERE room IS NOT NULL;`);
   const haveI = new Set(db.prepare('PRAGMA table_info(inbox)').all().map(c => c.name));
   if (!haveI.has('note')) db.exec('ALTER TABLE inbox ADD COLUMN note TEXT');  // (an optional message with an inbox item)
 }
+// Writes go to the write-ahead log first; copying them into the database file (a checkpoint) waits for the disk. SQLite
+// does that inside whichever write happens to fill the log - a run being saved, say - and the whole server (every room's
+// traffic and players) waited with it. A background thread does it every few seconds instead; SQLite's own only steps
+// in if the log ever gets 10x longer than usual (the thread can't keep up), so it can't grow without end.
+try {
+  const { Worker } = require('worker_threads');
+  const ck = new Worker(`const { DatabaseSync } = require('node:sqlite'), { workerData } = require('worker_threads');
+    const db = new DatabaseSync(workerData);
+    setInterval(() => { try { db.exec('PRAGMA wal_checkpoint(PASSIVE)'); } catch (e) { /* busy: next time */ } }, 3000);`, { eval: true, workerData: FILE });
+  ck.unref();
+  const back = () => { try { db.exec('PRAGMA wal_autocheckpoint = 1000'); } catch (e) { /* closing */ } };   // (the thread stopped: SQLite does it again)
+  ck.on('error', back); ck.on('exit', back);
+  db.exec('PRAGMA wal_autocheckpoint = 10000');
+} catch (e) { /* no worker threads: SQLite keeps doing it itself */ }
 
 const getMeta = k => { const r = db.prepare('SELECT v FROM meta WHERE k = ?').get(k); return r ? r.v : null; };
 const setMeta = (k, v) => db.prepare('INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v').run(k, String(v));
@@ -337,7 +357,7 @@ function addRun(r) {
       r.verified, ok ? 0 : 1, r.note || null, log);
   if (!ok) return { rank: null, best: before, improved: false, newTitles: [], team: null, autoBanned: autoBan(r.uid) };
   const newTitles = Titles.titlesForRun(r.score).filter(id => gift(r.uid, id)).concat(statTitles(r.uid));
-  cache.delete(r.mode + ':' + SEASON);
+  if (improved) cache.delete(r.mode + ':' + SEASON);   // (a run that isn't their best doesn't change the board)
   const rank = improved ? rankOf(r.mode, r.uid) : null;
   if (rank) noteRank(r.mode, r.uid, rank);
   const team = r.mode === 'mp' && r.room ? teamRun(r.room, now - (r.dur || 0) * 1000, now) : null;
@@ -429,6 +449,9 @@ const referredBy = uid => { const r = db.prepare('SELECT by_uid FROM referrals W
 // far count). Distance and score come from verified runs that are still on the boards.
 if (!getMeta('bus_event_start')) setMeta('bus_event_start', Date.now());
 const BUS_EVENT_START = +getMeta('bus_event_start');
+// the event ends (a 7-day timer, from 2026-11-01): 2026-11-08 4 PM US Eastern. After that nobody new unlocks the bus
+// (whoever did keeps it), and the game takes the event away (server clock: /api/clock)
+const BUS_EVENT_END = Date.UTC(2026, 10, 8, 21, 0, 0);
 const BUS_QUESTS = { play: 3600, drive: 75 * 1609.344, score: 100000, refer: 3, referAlt: 5 };
 // (or, instead of all five quests: refer 5 players. Admins (the Admin title, not banned) and Content Creators get it anyway)
 const busPerk = uid => (owns(uid, 'admin') && !isBanned(uid)) || owns(uid, 'creator');
@@ -446,9 +469,10 @@ function busProgress(uid) {
   ];
   const alt = { id: 'refer5', have: ref.counted, need: BUS_QUESTS.referAlt, pending: ref.pending };
   let unlocked = !!u.bus;
-  if (!unlocked && (quests.every(q => q.have >= q.need) || alt.have >= alt.need)) { db.prepare('UPDATE users SET bus = 1 WHERE uid = ?').run(uid); unlocked = true; }
+  const over = Date.now() >= BUS_EVENT_END;            // (the event's over: no more unlocking)
+  if (!unlocked && !over && (quests.every(q => q.have >= q.need) || alt.have >= alt.need)) { db.prepare('UPDATE users SET bus = 1 WHERE uid = ?').run(uid); unlocked = true; }
   const perk = busPerk(uid);   // (not saved: it goes with the title)
-  return { start: BUS_EVENT_START, quests, alt, unlocked: unlocked || perk, perk };
+  return { start: BUS_EVENT_START, end: BUS_EVENT_END, over, quests, alt, unlocked: unlocked || perk, perk };
 }
 // the Bang Bus is theirs (finished the quests or referred 5, an owner, an admin or a Content Creator): checks the quests too, so it unlocks the moment they're done
 const hasBus = (uid, name) => !!(name && BIKE_NAMES.includes(String(name).toLowerCase())) || busProgress(uid).unlocked;
@@ -752,5 +776,5 @@ module.exports = {
   db, SEASON, SEASONS, SECRET, lapTop, lapAround, addLap, addRace, raceTop, raceAround, seasonRewards, ensureUser, grant, gift, inboxOf, unclaimed, claim, top, around, rankOf, bestOf, addRun, spendToken, profile, addPlayTime,
   titlesOf, ownerCounts, alphaOpen, setAlphaOpen, betaOpen, setBetaOpen, resetTitles, statTitles, statsOf, pendingOf, equipped, equip, isBanned, banUntil, setBanned, sweepBans, flagRacing, adminUid, adminLog, adminLogList, owns, addRequest, getRequest, decideRequest, requestList, waitingRequests, sendNote, adminRuns, adminLaps, adminRaces, setLapStatus, adminOverview, userRow, readAccounts, setRemoved, removeAbove, runsOf, runLog, recentRejected,
   areFriends, friendsOf, requestsIn, requestsOut, socialSettings, setSocialSettings, sendRequest, respond, cancelRequest, unfriend,
-  sendMessage, chatWith, markRead, unreadBy, GROUP_MAX, groupOf, groupMembers, inGroup, groupSay, createGroup, addToGroup, removeFromGroup, renameGroup, groupMessages, markGroupRead, groupsOf, OWNER_NAMES, BIKE_NAMES, addReferral, referralStats, referredBy, busProgress, hasBus,
+  sendMessage, chatWith, markRead, unreadBy, GROUP_MAX, groupOf, groupMembers, inGroup, groupSay, createGroup, addToGroup, removeFromGroup, renameGroup, groupMessages, markGroupRead, groupsOf, OWNER_NAMES, BIKE_NAMES, addReferral, referralStats, referredBy, busProgress, hasBus, BUS_EVENT_END,
 };

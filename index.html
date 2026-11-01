@@ -65,6 +65,10 @@
     </button>
     <!-- bottom right: friends + inbox -->
     <div class="cornerBtns">
+      <!-- Film: the content creators' place (owners + Content Creators only: js/film.js) -->
+      <button id="filmBtn" class="roundBtn hidden" title="Film: for content creators">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6.5" width="13" height="11" rx="2"/><path d="M16 10.5l5-3v9l-5-3z"/><circle cx="7" cy="4" r="1.6"/><circle cx="12" cy="4" r="1.6"/></svg>
+      </button>
       <button id="friendsBtn" class="roundBtn" title="Friends">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8.5" r="3.5"/><path d="M2.5 19.5c.6-3.3 3.2-5.2 6.5-5.2s5.9 1.9 6.5 5.2"/><circle cx="17" cy="9" r="2.6"/><path d="M16.2 14.4c2.6-.2 4.7 1.4 5.3 4.4"/></svg>
         <span class="badge hidden" id="friendsBadge"></span>
@@ -107,12 +111,12 @@
     <div class="ltmRow">
       <button class="ltmCard" id="ltmRace" data-go="scrRaceHub">
         <span class="ltmFlag"><svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><g transform="rotate(-12 32 32)"><rect class="fg" x="18" y="13" width="3.6" height="40" rx="1.6"/><path class="fg" d="M21.6 15c5-3 10 3 15 0s9-3 12-1v18c-3-2-7-2-12 1s-10-3-15 0z"/></g></svg></span>
-        <span class="ltmText"><span class="ltmTag">LIMITED-TIME MODE · SEASON 1</span><b>RACING</b><span class="ltmSub">Three circuits · 2–10 player races · best-lap leaderboards</span></span>
+        <span class="ltmText"><span class="ltmTag">LIMITED-TIME MODE · SEASON 1</span><b>RACING</b><span class="ltmSub">Three circuits · 2–10 player races · best-lap leaderboards</span><span class="ltmTimer hidden" id="ltmRaceT"></span></span>
         <span class="ltmGo">PLAY ›</span>
       </button>
       <button class="ltmCard evCard" id="ltmEvent">
         <span class="ltmFlag"><svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><path class="fg" d="M32 49C20 40.5 13.5 34 13.5 26.2c0-5.6 4.3-9.7 9.4-9.7 3.8 0 6.9 2.1 9.1 5.6 2.2-3.5 5.3-5.6 9.1-5.6 5.1 0 9.4 4.1 9.4 9.7C50.5 34 44 40.5 32 49z"/></svg></span>
-        <span class="ltmText"><span class="ltmTag">LIMITED-TIME EVENT</span><b>BANG BUS</b><span class="ltmSub">Finish 5 quests to unlock the Bang Bus</span></span>
+        <span class="ltmText"><span class="ltmTag">LIMITED-TIME EVENT</span><b>BANG BUS</b><span class="ltmSub">Finish 5 quests to unlock the Bang Bus</span><span class="ltmTimer hidden" id="ltmBusT"></span></span>
         <span class="ltmGo">QUESTS ›</span>
       </button>
     </div>
@@ -164,7 +168,7 @@
 
   <!-- racing (Season 1 LTM): pick a track to queue for a race or set lap times; host a public / private race -->
   <div id="scrRace" class="screen panel wide hidden">
-    <div class="hdr"><button class="back" data-go="scrRaceHub">← BACK</button><h1>RACING <span class="ltmPill">SEASON 1 · LIMITED TIME</span></h1></div>
+    <div class="hdr"><button class="back" data-go="scrRaceHub">← BACK</button><h1>RACING <span class="ltmPill">SEASON 1 · LIMITED TIME</span> <span class="ltmPill ltmTimerPill hidden" id="raceT"></span></h1></div>
     <label class="mpField"><span class="mpLabel">Driver Name</span><input type="text" class="nameIn" maxlength="16" placeholder="Driver" spellcheck="false" autocomplete="off"></label>
     <div class="acctNote"></div>
     <div class="raceGrid">
@@ -223,6 +227,89 @@
       </button>
       -->
     </div>
+  </div>
+
+  <!-- Film (home, bottom right): the content creators' place - owners + Content Creators only (js/film.js). The film cars,
+       free drive, creator servers, the green screen room and Clip Studio. Nothing here counts but time played. -->
+  <div id="scrFilm" class="screen title hidden">
+    <button class="back playBack" id="filmBack">← BACK</button>
+    <h1 class="logo small">FI<span>LM</span></h1>
+    <p class="tagline">For content creators · no score, no stats · just time played</p>
+    <div class="cards filmCards">
+      <button class="card" data-go="scrGarage">
+        <svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><g transform="translate(-2 -4)"><path class="fg" d="M12 38c0-3 1.6-4.6 4.4-5.2l6-1.4 5.6-5.3c1.4-1.3 3.2-2.1 5.1-2.1h6.4c2 0 3.8.8 5.1 2.3l3.6 4.4 3.3.7c2.6.6 4.5 2.8 4.5 5.5V41c0 1.1-.9 2-2 2H14c-1.1 0-2-.9-2-2z"/><circle class="bg" cx="21.5" cy="42.5" r="5.5"/><circle class="fg" cx="21.5" cy="42.5" r="3"/><circle class="bg" cx="43.5" cy="42.5" r="5.5"/><circle class="fg" cx="43.5" cy="42.5" r="3"/></g></svg>
+        <b>FILM GARAGE</b>
+      </button>
+      <button class="card" data-go="scrFilmSP">
+        <svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><path class="fg" d="M27 15h10l9 34H18z"/><rect class="bg" x="30.5" y="20" width="3" height="5" rx="1"/><rect class="bg" x="30.5" y="29" width="3" height="6" rx="1"/><rect class="bg" x="30.5" y="39" width="3" height="7" rx="1"/></svg>
+        <b>FREE DRIVE</b>
+      </button>
+      <button class="card" data-go="scrFilmMP">
+        <svg viewBox="0 0 96 64"><g transform="translate(30 0)"><circle class="bg" cx="32" cy="32" r="31"/><circle class="fg" cx="32" cy="25" r="11"/><path class="fg" d="M13 53C15 43 23 39 32 39S49 43 51 53C46 59 39 63 32 63S18 59 13 53Z"/></g><g><circle class="bg2" cx="32" cy="32" r="31"/><circle class="fg" cx="32" cy="25" r="11"/><path class="fg" d="M13 53C15 43 23 39 32 39S49 43 51 53C46 59 39 63 32 63S18 59 13 53Z"/></g></svg>
+        <b>CREATOR SERVERS</b>
+      </button>
+      <button class="card" id="filmGreen">
+        <svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><path class="st" d="M19 42l-4 9M45 42l4 9"/><rect class="fg" x="12" y="14" width="40" height="29" rx="3.5"/><g transform="translate(-3 -5.5)"><path class="bg" d="M22 40c0-2 1-3 3-3.4l4-1 3.6-3.4c1-.9 2-1.4 3.3-1.4h4c1.3 0 2.5.5 3.3 1.5l2.3 2.8 2 .5c1.7.4 2.9 1.8 2.9 3.6v1.6H22z"/><circle class="fg" cx="28" cy="41.5" r="3.4"/><circle class="bg" cx="28" cy="41.5" r="2.4"/><circle class="fg" cx="42.5" cy="41.5" r="3.4"/><circle class="bg" cx="42.5" cy="41.5" r="2.4"/></g></svg>
+        <b>GREEN SCREEN</b>
+      </button>
+      <button class="card hidden" id="filmStudio">
+        <svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><rect class="fg" x="12" y="21" width="28" height="22" rx="5"/><path class="fg" d="M42 28.5l11-6.5v20l-11-6.5z"/></svg>
+        <b>CLIP STUDIO</b>
+      </button>
+    </div>
+    <!-- the creators' chat: always on, everyone in it who's online (server.js creatorLog) -->
+    <div class="filmChat">
+      <div class="fcMain">
+        <div class="fcHead">CREATOR CHAT</div>
+        <div class="fcLog" id="fcLog"><div class="fcEmpty">Loading…</div></div>
+        <div class="fcRow"><input type="text" id="fcIn" maxlength="200" placeholder="Message the creators…" spellcheck="false" autocomplete="off"><button id="fcSend">SEND</button></div>
+      </div>
+      <div class="fcSide"><div class="fcHead">ONLINE <span id="fcCount"></span></div><div class="fcOnline" id="fcOnline"></div></div>
+    </div>
+  </div>
+
+  <!-- Film > Free drive: your film car on the highway, your own traffic, no score -->
+  <div id="scrFilmSP" class="screen panel hidden">
+    <div class="hdr"><button class="back" data-go="scrFilm">← BACK</button><h1>FREE DRIVE <span class="ltmPill filmPill">FILM</span></h1></div>
+    <p class="sub">The endless highway in your film car. No score, no stats - just time played.</p>
+    <div class="picks">
+      <div class="pickRow"><span>World</span><div class="seg" id="fsWorld"><button data-v="grass">Grassy</button><button data-v="desert">Desert</button><button data-v="snow">Snowy</button></div></div>
+      <div class="pickRow"><span>Time of day</span><div class="seg" id="fsTod"><button data-v="day">Day</button><button data-v="sunset">Evening</button><button data-v="night">Night</button></div></div>
+    </div>
+    <div class="mode blue">
+      <h3>TRAFFIC</h3>
+      <label>Traffic <b id="fsDensV"></b><input type="range" id="fsDens" min="0" max="100"></label>
+      <button id="fsGo" class="go alt">DRIVE</button>
+    </div>
+  </div>
+
+  <!-- Film > Creator servers: servers only owners + Content Creators can join; the host picks the traffic -->
+  <div id="scrFilmMP" class="screen panel hidden">
+    <div class="hdr"><button class="back" data-go="scrFilm">← BACK</button><h1>CREATOR SERVERS <span class="ltmPill filmPill">FILM</span></h1></div>
+    <div class="grid mpGrid">
+      <div>
+        <div class="mpHead">Open creator servers <button id="fmRefresh" class="fmRefresh" title="Refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.34-5.66"/><path d="M20 4v5h-5"/></svg></button></div>
+        <div id="fmServers"><div class="mpEmpty">Loading…</div></div>
+        <div class="mpHead" style="margin-top:16px">Join with a code</div>
+        <div class="mpRow">
+          <input type="text" id="fmCode" maxlength="7" placeholder="K7P-2QX" spellcheck="false" autocomplete="off">
+          <button id="fmJoin">JOIN WITH CODE</button>
+        </div>
+      </div>
+      <div>
+        <div class="mpHead">Host a creator server</div>
+        <div class="mode small hostOpts">
+          <label class="hostName">Server name <input type="text" id="fmName" maxlength="24" placeholder="My creator server" spellcheck="false" autocomplete="off"></label>
+          <div class="pickRow"><span>Visibility</span><div class="seg" id="fmVis"><button data-v="public">Listed</button><button data-v="private">Code only</button></div></div>
+          <div class="pickRow"><span>World</span><div class="seg" id="fmWorld"><button data-v="grass">Grassy</button><button data-v="desert">Desert</button><button data-v="snow">Snowy</button></div></div>
+          <div class="pickRow"><span>Time of day</span><div class="seg" id="fmTod"><button data-v="day">Day</button><button data-v="sunset">Evening</button><button data-v="night">Night</button></div></div>
+          <label>Traffic <b id="fmDensV"></b><input type="range" id="fmDens" min="0" max="100"></label>
+          <button id="fmHost" class="go alt">HOST CREATOR SERVER</button>
+        </div>
+        <p class="sub">Only owners and Content Creators can join. No score, no stats, no AFK kick.</p>
+      </div>
+    </div>
+    <div id="fmStatus"></div>
   </div>
 
   <!-- garage: pick your car, paint it, wheels, calipers, tint (js/garage.js) -->
@@ -381,6 +468,7 @@
         <label class="chk"><input type="checkbox" id="manual"> Manual gearbox</label>
         <label class="row hidden" id="vehRow">Vehicle <select id="vehSel"><option value="car">Car</option><option value="bike">Motorcycle</option><option value="van">Bang Bus</option></select></label>
         <label class="chk hidden" id="glideRow"><input type="checkbox" id="glideOn"> Ultra glide (S15, steering wheel only)</label>
+        <label class="chk hidden" id="ctrlRow"><input type="checkbox" id="ctrlOn"> Controlled drift (S15: 360s only when you ask)</label>
       </section>
       <section>
         <h2>Multiplayer</h2>
@@ -635,7 +723,7 @@
   // Remove names from this list to take a vehicle out of traffic; with none loaded the old traffic returns.
   const VEHICLES = ['camry', 'civic', 'model3', 'golf', 'mini', 'mustang', 'p911', 'prius', 'charger', 'gtr',
     'rav4', 'wrangler', 'tahoe', 'f150', 'transit', 'odyssey', 'vwbus', 'boxtruck', 'cascadia'];
-  const files = ['js/platform', 'js/core','js/zones', 'js/models', 'js/playercars', 'js/bike', 'js/lowpoly', 'js/toykit', ...VEHICLES.map(k => 'js/vehicles/' + k), 'js/world', 'js/physics', 'js/drift', 'js/traffic', 'js/input', 'js/titles', 'js/hud', 'js/netcodec', 'js/net', 'js/account', 'js/tracks', 'js/f1', 'js/race', 'js/main', 'js/drifttrack', 'js/ffb', 'js/garage', 'js/social', 'js/event', 'js/updates', 'js/dropdown', 'js/touch', 'js/crazygames'];
+  const files = ['js/platform', 'js/core','js/zones', 'js/models', 'js/playercars', 'js/bike', 'js/lowpoly', 'js/toykit', ...VEHICLES.map(k => 'js/vehicles/' + k), 'js/world', 'js/physics', 'js/drift', 'js/traffic', 'js/input', 'js/titles', 'js/hud', 'js/netcodec', 'js/net', 'js/account', 'js/tracks', 'js/f1', 'js/race', 'js/main', 'js/drifttrack', 'js/ffb', 'js/garage', 'js/film','js/social', 'js/event', 'js/updates', 'js/dropdown', 'js/touch', 'js/crazygames'];
   for (const f of files) {
     const s = document.createElement('script');
     s.src = `${f}.js?v=${v}`; s.async = false;
