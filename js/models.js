@@ -859,23 +859,56 @@ function loadBigModel(key, cb) {
   const B = bigOf(key); if (!B || window[B.global]) { if (cb) cb(); return; }
   if (cb) B.cbs.push(cb);
   if (B.loading) return; B.loading = true;
+  const done = () => { const cbs = B.cbs; B.cbs = []; for (const f of cbs) f(); };
+  const fail = () => { B.loading = false; console.warn('car model file', B.file); };
+  if (/\.bin(\?|$)/.test(B.file)) {                    // (tools/convert-car.js files: binary, read here)
+    // (big ones are split into <key>.1.bin, .2.bin ... (playercars.js parts: n) - GitHub's upload page refuses big files)
+    const n = PLAYER_CARS[key].parts, files = n ? Array.from({ length: n }, (_, i) => B.file.replace('.bin', '.' + (i + 1) + '.bin')) : [B.file];
+    Promise.all(files.map(f => fetch(f).then(r => { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); }))).then(abs => {
+      const all = new Uint8Array(abs.reduce((s, a) => s + a.byteLength, 0)); let o = 0;
+      for (const a of abs) { all.set(new Uint8Array(a), o); o += a.byteLength; }
+      window[B.global] = parsePWC2(all.buffer); done();
+    }).catch(fail);
+    return;
+  }
   const s = document.createElement('script'); s.src = B.file;
-  s.onload = () => { const cbs = B.cbs; B.cbs = []; for (const f of cbs) f(); };
-  s.onerror = () => { B.loading = false; console.warn('car model file', B.file); };
+  s.onload = done; s.onerror = fail;
   document.head.appendChild(s);
+}
+// PWC2 car files (tools/convert-car.js): "PWC2", header length, JSON header, then per slot the shared corners -
+// positions Int16 (x 1/q m), normals Int8 (the model's own), indices Uint32 - at offsets from the end of the header
+function parsePWC2(ab) {
+  const hl = new DataView(ab).getUint32(4, true);
+  return Object.assign(JSON.parse(new TextDecoder().decode(new Uint8Array(ab, 8, hl))), { ab, base: 8 + hl });
+}
+function geoPWC2(D, parts, only) {
+  const keys = Object.keys(parts).filter(k => !only || only.includes(k)).sort((a, b) => (SLOT[a] ?? SLOT.TRIM) - (SLOT[b] ?? SLOT.TRIM));
+  let nv = 0, ni = 0; for (const k of keys) { nv += parts[k].n; ni += parts[k].tris * 3; }
+  const P = new Float32Array(nv * 3), N = new Float32Array(nv * 3), I = new Uint32Array(ni), g = new THREE.BufferGeometry();
+  let v0 = 0, i0 = 0;
+  for (const k of keys) {
+    const s = parts[k], p = new Int16Array(D.ab, D.base + s.pos, s.n * 3), n = new Int8Array(D.ab, D.base + s.nrm, s.n * 3), ix = new Uint32Array(D.ab, D.base + s.idx, s.tris * 3);
+    for (let i = 0; i < s.n * 3; i++) { P[v0 * 3 + i] = p[i] / D.q; N[v0 * 3 + i] = n[i] / 127; }
+    for (let i = 0; i < ix.length; i++) I[i0 + i] = ix[i] + v0;
+    g.addGroup(i0, ix.length, only ? 0 : SLOT[k] ?? SLOT.TRIM);
+    v0 += s.n; i0 += ix.length;
+  }
+  g.setAttribute('position', new THREE.BufferAttribute(P, 3)); g.setAttribute('normal', new THREE.BufferAttribute(N, 3)); g.setIndex(new THREE.BufferAttribute(I, 1));
+  const out = g.toNonIndexed(); out.computeBoundingSphere();   // (one corner per triangle, like every other car: the lite / overlay code expects it)
+  return out;
 }
 // a content car's model (a car whose file isn't in yet, or is still loading, is shown as an M4)
 const bigCar = key => () => {
   const B = bigOf(key), D = B && window[B.global];
   if (!D) { if (B) loadBigModel(key); return Object.assign({}, getModel('m4'), { placeholder: true }); }
-  const front = -D.bounds.min[2], rear = -D.bounds.max[2];
+  const front = -D.bounds.min[2], rear = -D.bounds.max[2], v2 = D.v === 2;   // (v2: the model's own normals, kept as they are)
   return {
-    key, body: creaseNormals(gbFromImport(D.body), 38),
+    key, body: v2 ? geoPWC2(D, D.body) : creaseNormals(gbFromImport(D.body), 38),
     interior: new THREE.BufferGeometry(), wheelSW: getModel('s15').wheelSW,
-    wheelGeoms: D.wheels.map(w => creaseNormals(gbFromImport(w.parts), 38)),
+    wheelGeoms: D.wheels.map(w => (v2 ? geoPWC2(D, w.parts) : creaseNormals(gbFromImport(w.parts), 38))),
     wheels: D.wheels.map(w => ({ x: w.center[0], y: w.center[1], f: -w.center[2], side: w.center[0] > 0 ? 1 : -1, front: -w.center[2] > 0 })),
     r: D.wheels[0].radius, tw: D.wheels[0].width, L: front - rear, W: 0.95, front, rear,
-    brake: gbFromImport(D.body, ['TAIL']), indL: new THREE.BufferGeometry(), indR: new THREE.BufferGeometry(),
+    brake: v2 ? geoPWC2(D, D.body, ['TAIL']) : gbFromImport(D.body, ['TAIL']), indL: new THREE.BufferGeometry(), indR: new THREE.BufferGeometry(),
     hull: SAT.hull(0.95, front - 0.03, rear + 0.03, 0.32, 0.26),
   };
 };

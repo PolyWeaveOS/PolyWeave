@@ -20,12 +20,13 @@ const CONTENT = (name, short, color, file, credit) => Object.assign({ name, shor
 Object.assign(PLAYER_CARS, {
   koenigsegg: CONTENT('Koenigsegg', 'KOENIGSEGG', '#121214', 'assets/koenigsegg.js?v=1'),   // (the owner's own model, from their .blend)
   // (the owner's model files, converted by tools/convert-car.js - configs in tools/cars/; credit: shown in the Film Garage)
-  mclaren720s: CONTENT('McLaren 720S LB Works', '720S', '#e0561c', 'assets/mclaren720s.js?v=1', '"2017 McLaren 720s LB★WORKS" by Ddiaz Design · CC BY 4.0'),
-  gt3: CONTENT('Porsche 911 GT3', '911 GT3', '#eef0ee', 'assets/gt3.js?v=1', '"2022 Porsche 911 GT3 (992)" by Ddiaz Design · CC BY 4.0'),
-  imola: CONTENT('Pagani Imola Roadster', 'IMOLA', '#1d2a4b', 'assets/imola.js?v=1', '"2024 Pagani Imola Roadster" by Ddiaz Design · CC BY-NC-SA 4.0'),
-  aventador: CONTENT('Lamborghini Aventador', 'AVENTADOR', '#4fbf3a', 'assets/aventador.js?v=1', '"Lamborghini Aventador" by BlackCube · CC BY 4.0'),
-  laferrari: CONTENT('Ferrari LaFerrari', 'LAFERRARI', '#c4141c', 'assets/laferrari.js?v=1'),
-  tourbillon: CONTENT('Bugatti Tourbillon', 'TOURBILLON', '#1f3d8a', 'assets/tourbillon.js?v=1', '"2026 Bugatti Tourbillon" by Ddiaz Design · CC BY-NC-SA 4.0'),
+  mclaren720s: CONTENT('McLaren 720S LB Works', '720S', '#e0561c', 'assets/mclaren720s.bin?v=2', '"2017 McLaren 720s LB★WORKS" by Ddiaz Design · CC BY 4.0'),
+  gt3: CONTENT('Porsche 911 GT3', '911 GT3', '#eef0ee', 'assets/gt3.bin?v=2', '"2022 Porsche 911 GT3 (992)" by Ddiaz Design · CC BY 4.0'),
+  imola: Object.assign(CONTENT('Pagani Imola Roadster', 'IMOLA', '#1d2a4b', 'assets/imola.bin?v=2', '"2024 Pagani Imola Roadster" by Ddiaz Design · CC BY-NC-SA 4.0'), { parts: 2 }),
+  aventador: Object.assign(CONTENT('Lamborghini Aventador', 'AVENTADOR', '#4fbf3a', 'assets/aventador.bin?v=2', '"Lamborghini Aventador" by BlackCube · CC BY 4.0'), { parts: 4 }),
+  // (its own wheels are see-through texture spokes the game can't show: the game's five-spoke wheel instead)
+  laferrari: Object.assign(CONTENT('Ferrari LaFerrari', 'LAFERRARI', '#c4141c', 'assets/laferrari.bin?v=2'), { rim: 'five', rimColor: '#2b2d31' }),
+  tourbillon: Object.assign(CONTENT('Bugatti Tourbillon', 'TOURBILLON', '#1f3d8a', 'assets/tourbillon.bin?v=2', '"2026 Bugatti Tourbillon" by Ddiaz Design · CC BY-NC-SA 4.0'), { parts: 2 }),
 });
 const PLAYER_CAR_KEYS = Object.keys(PLAYER_CARS);
 const ROAD_CAR_KEYS = PLAYER_CAR_KEYS.filter(k => !PLAYER_CARS[k].content), CONTENT_CAR_KEYS = PLAYER_CAR_KEYS.filter(k => PLAYER_CARS[k].content);
