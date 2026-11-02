@@ -268,17 +268,14 @@ button:disabled { opacity: .45; cursor: default; }
 .pod .pname { align-items: center; }
 .acct .who .ttl { margin-left: 10px; font-size: 11px; }
 /* titles: one colour per rarity, lowest first: Common grey, Uncommon light green, Rare light blue, Super Rare blue,
-   Epic purple-pink, then glowing Mythic red, Exotic crimson, Legendary gold, Divine pearl */
+   Epic purple, then glowing Mythic red, Exotic crimson, Legendary gold, Divine pearl */
 .ttl { font-weight: 800; letter-spacing: 1px; text-transform: uppercase; white-space: nowrap; }
 .ttl.none { color: rgba(255,255,255,.55); }
 .r-common { color: #a7adb6; }
 .r-uncommon { color: #a9eea2; }
 .r-rare { color: #9fd8ff; }
 .r-srare { color: #5b95ff; }
-.r-epic { background: linear-gradient(90deg, #c08cff, #ff8cd2); -webkit-background-clip: text; background-clip: text; color: transparent; }
-/* Epic: a faint purple-pink glow - just a hint of the glowing rarities above it (drop-shadow works with the gradient) */
-.ttl.r-epic { filter: drop-shadow(0 0 2.5px rgba(208, 140, 255, .55)) drop-shadow(0 0 6px rgba(255, 140, 210, .22)); }
-.titleOpt.locked .ttl.r-epic, .achReward.locked .ttl.r-epic { filter: grayscale(.4) drop-shadow(0 0 2.5px rgba(208, 140, 255, .3)); }
+.r-epic { color: #d98cff; }   /* (plain purple, crisp like the colours below it: no gradient or glow) */
 /* glowing: a bright, readable core with one soft halo in the title's colour (crimson keeps more of its own deep
    colour in the core, so it stays clearly darker than Mythic red) */
 .r-mythic { --c: #ff4a42; } .r-exotic { --c: #c8143c; --mix: 88%; } .r-legendary { --c: #ffd84a; }
@@ -306,7 +303,9 @@ button:disabled { opacity: .45; cursor: default; }
 .titleOpt.locked .ttl { filter: grayscale(.4); opacity: .62; }
 /* locked neon: still visibly glowing, under the same grey tint */
 .titleOpt.locked .ttl.neon { filter: none; opacity: .9; color: color-mix(in srgb, var(--c) 45%, #8a9099); text-shadow: 0 0 8px color-mix(in srgb, var(--c) 55%, transparent); }
-.titleOpt.locked .ttl.r-divine { color: transparent; opacity: .55; filter: drop-shadow(0 0 4px rgba(255, 255, 255, .3)); }
+/* locked divine: still glowing pearl under the dim, like locked legendary (the grey tint above would drop its glow) */
+.titleOpt.locked .ttl.neon.r-divine, .achReward.locked .ttl.neon.r-divine { color: transparent; opacity: .9; text-shadow: none;
+  filter: drop-shadow(0 0 2px rgba(255, 255, 255, .6)) drop-shadow(0 0 8px rgba(235, 220, 255, .65)) drop-shadow(0 0 16px rgba(200, 225, 255, .35)); }
 /* locked Mythic / Exotic: the grey tint turned both into similar pinks. Mythic stays a warm red, Exotic a deep
    wine crimson with its crimson glow, so they're easy to tell apart */
 .titleOpt.locked .ttl.neon.r-mythic, .achReward.locked .ttl.neon.r-mythic { color: color-mix(in srgb, #ff4a42 58%, #8c7f76); text-shadow: 0 0 8px rgba(255, 74, 66, .45); }
@@ -354,8 +353,13 @@ button:disabled { opacity: .45; cursor: default; }
   background: #1b212c; border: 1px solid rgba(255,255,255,.1); box-shadow: 0 16px 40px rgba(0,0,0,.45); animation: popIn .18s ease-out; }
 @keyframes popIn { from { opacity: 0; transform: translateY(-4px); } }
 .rpHead { font-size: 10.5px; letter-spacing: 1.8px; text-transform: uppercase; opacity: .55; margin-bottom: 8px; }
-#rarityList { display: flex; flex-direction: column; gap: 7px; }
-#rarityList .ttl { font-size: 14px; }
+#rarityList, .rarityList { display: flex; flex-direction: column; gap: 7px; }
+#rarityList .ttl, .rarityList .ttl { font-size: 14px; }
+#scrAch .rarityPop { text-align: left; }
+/* home screen: a yellow "!" on Achievements while there are new ones you haven't looked at (social.js) */
+#achCard { position: relative; }
+.newDot { position: absolute; top: 8px; right: 8px; width: 20px; height: 20px; border-radius: 50%; background: #ffd84a; color: #1a1d24;
+  font-size: 13px; font-weight: 900; line-height: 20px; text-align: center; box-shadow: 0 0 0 2px rgba(0,0,0,.35); }
 #scrTitles #titleList { max-height: 58vh; overflow-y: auto; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,.22) transparent; }
 .profStats { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; align-content: start; }
 .stat { display: flex; flex-direction: column; gap: 3px; padding: 11px 13px; border-radius: 10px; background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.06); }
@@ -431,7 +435,6 @@ button:disabled { opacity: .45; cursor: default; }
 .achReward.locked [class^="ico-"] { color: #8a919c; }
 .achReward.locked .ttl { filter: grayscale(.4); opacity: .62; }
 .achReward.locked .ttl.neon { filter: none; opacity: .9; color: color-mix(in srgb, var(--c) 45%, #8a9099); text-shadow: 0 0 8px color-mix(in srgb, var(--c) 55%, transparent); }
-.achReward.locked .ttl.r-divine { color: transparent; opacity: .55; }
 /* ---------- friends ---------- */
 .frGrid { display: grid; grid-template-columns: 1fr 1.1fr; gap: 18px; align-items: start; }
 .frAdd { display: flex; gap: 8px; }
@@ -816,6 +819,7 @@ button.big:hover { background: #ffe37a; }
 .updItems li { display: grid; grid-template-columns: 58px minmax(0, 1fr); gap: 8px; font-size: 13.5px; line-height: 1.45; }
 .updItems li i { font-style: normal; font-size: 9.5px; font-weight: 900; letter-spacing: 1.5px; padding: 3px 0; border-radius: 5px; text-align: center; align-self: start; margin-top: 1px; background: rgba(91,212,122,.18); color: #8de0a4; }
 .updItems li.upd-fix i { background: rgba(60,160,255,.18); color: #9fd2ff; }
+.updItems li.upd-change i { background: rgba(217,140,255,.16); color: #e2b3ff; }
 .updItems li.upd-thanks i { background: rgba(255,216,74,.16); color: var(--accent); }
 /* the two limited-time cards side by side (racing + the Bang Bus event), as wide as the buttons above together */
 .ltmRow { margin-top: clamp(14px, 1.8vw, 22px); width: min(100%, calc(6 * clamp(118px, 13vw, 184px) + 5 * clamp(10px, 1.4vw, 18px))); display: flex; gap: clamp(10px, 1.4vw, 18px); }

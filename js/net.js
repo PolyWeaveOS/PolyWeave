@@ -272,25 +272,22 @@ const Net = {
     }
     // floating name tag (with their title underneath, in its rarity colour; neon ones glow)
     const t = p.title && Titles.TITLE_BY_ID[p.title], rar = t && Titles.RARITIES[t.rarity];
-    const c = document.createElement('canvas'); c.width = 256; c.height = t ? 96 : 64;
-    const g = c.getContext('2d');
+    const c = document.createElement('canvas'); c.width = 512; c.height = t ? 192 : 128;   // (drawn at 2x: crisp up close)
+    const g = c.getContext('2d'); g.scale(2, 2);
     g.textAlign = 'center'; g.textBaseline = 'middle';
     g.font = '800 30px Segoe UI, Arial';
     let w = g.measureText(p.name).width;
-    if (t) { g.font = '800 19px Segoe UI, Arial'; w = Math.max(w, g.measureText(t.name.toUpperCase()).width); }
+    // (a long title, e.g. S1 Multiplayer Champion, gets a smaller font so it fits on the tag)
+    let tf = 19; if (t) { g.font = `800 ${tf}px Segoe UI, Arial`; const m = g.measureText(t.name.toUpperCase()).width; if (m > 216) tf = Math.floor(tf * 216 / m); g.font = `800 ${tf}px Segoe UI, Arial`; w = Math.max(w, g.measureText(t.name.toUpperCase()).width); }
     w = Math.min(250, w + 34);
     const h = t ? 74 : 44;
     g.fillStyle = 'rgba(14,18,26,0.6)'; g.fillRect(128 - w / 2, 10, w, h);
     g.font = '800 30px Segoe UI, Arial'; g.fillStyle = '#fff'; g.fillText(p.name, 128, 33);
     if (t) {
-      g.font = '800 19px Segoe UI, Arial'; g.fillStyle = rar.color;
+      g.font = `800 ${tf}px Segoe UI, Arial`; g.fillStyle = rar.color;   // (Epic: plain purple, crisp - no blurred glow under it)
       const tw = g.measureText(t.name.toUpperCase()).width, grad = stops => {
         const gr = g.createLinearGradient(128 - tw / 2, 0, 128 + tw / 2, 0); stops.forEach((c, i) => gr.addColorStop(i / (stops.length - 1), c)); return gr;
       };
-      if (t.rarity === 'epic') {                    // (the purple-pink mix, like in the menus, with its faint glow)
-        g.fillStyle = grad(['#c08cff', '#ff8cd2']);
-        g.save(); g.shadowColor = 'rgba(208,140,255,.8)'; g.shadowBlur = 6; g.globalAlpha = 0.6; g.fillText(t.name.toUpperCase(), 128, 64); g.restore();
-      }
       if (rar.neon) {                               // glowing: a soft halo, then a crisp bright core on top (readable)
         const exotic = t.rarity === 'exotic';         // (deep crimson: a brighter, wider halo so it glows like the rest)
         g.save(); g.shadowColor = exotic ? '#ff2350' : rar.color; g.shadowBlur = exotic ? 16 : 12; g.globalAlpha = rar.pearl ? 0.6 : exotic ? 0.9 : 0.75; g.fillText(t.name.toUpperCase(), 128, 64); g.restore();

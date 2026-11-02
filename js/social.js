@@ -460,7 +460,14 @@ const Achievements = {
     return card;
   },
 };
-$id('achCard').onclick = () => Achievements.open();
+// the yellow "!" on the home screen's Achievements: there are new achievements (bump ACH_NEW when more are added);
+// gone for good once Achievements is opened on this device
+const ACH_NEW = 'v6';
+try { if (localStorage.getItem('pw_achSeen') !== ACH_NEW) $id('achNew').classList.remove('hidden'); } catch (e) {}
+$id('achCard').onclick = () => {
+  $id('achNew').classList.add('hidden'); try { localStorage.setItem('pw_achSeen', ACH_NEW); } catch (e) {}
+  Achievements.open();
+};
 
 // ---------------------------------------------------------------- server chat (multiplayer)
 // "Name[Title] joined the server" / "Name [Title] : message" (your exact format). Enter opens the box, Enter sends, Esc cancels.

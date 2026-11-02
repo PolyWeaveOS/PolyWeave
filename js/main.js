@@ -1218,7 +1218,7 @@ scEl.addEventListener('change', () => { Settings.smoothCam = scEl.checked; saveS
 const ghEl = $id('ghostOn');                            // (racing: a see-through car on your best lap in time trials - race.js ghostShow)
 ghEl.checked = Settings.ghost !== false;               // (on by default)
 ghEl.addEventListener('change', () => { Settings.ghost = ghEl.checked; saveSettings(); });
-const upEl = $id('updatePopupOn');                      // (the "Version 1.2 is here" popup on every launch - Welcome; not the sign-in one)
+const upEl = $id('updatePopupOn');                      // (the "Version 1.3 is here" popup on every launch - Welcome; not the sign-in one)
 upEl.checked = Settings.updatePopup !== false;
 upEl.addEventListener('change', () => { Settings.updatePopup = upEl.checked; saveSettings(); });
 // (paint, wheels and the rest of the car's looks are in the Garage: js/garage.js)
@@ -1315,7 +1315,7 @@ Account.onChange = () => {
 };
 Account.onMsg = t => { acctMsg = t; renderAccount(); };
 // ---------- launch popup (index.html #welcome): "Sign in with Google" every launch while you're not signed in
-// (where sign-in exists: not on CrazyGames), then "Version 1.2 is here" every launch unless switched off in
+// (where sign-in exists: not on CrazyGames), then "Version 1.3 is here" every launch unless switched off in
 // Settings > Gameplay (Settings.updatePopup; that setting doesn't touch the sign-in slide). Signing in from the
 // popup moves on to the next slide.
 const Welcome = {
@@ -1539,7 +1539,7 @@ async function loadLeaderboard() {
   const what = (mode === 'sp' ? 'Best scored singleplayer drive of each driver (60% traffic).' : 'Best drive of each driver on public and scored servers.') + ` ${sName}${season === LB_CURRENT ? '' : ' (final standings)'}.`;
   if (view === 'me') note.textContent = j.rank ? `You're #${j.rank} of ${j.total} drivers. ${what}` : `You're not on this leaderboard yet: finish a scored run of at least 100 points. ${what}`;
   else note.textContent = what + (season !== LB_CURRENT ? '' : j.accounts ? (Account.signedIn ? '' : ' Sign in with Google to get on it.') : ' (Sign-in isn\'t set up on this server yet, so no drives can be saved.)');
-  drawBoard(list, rows, view, { fmt: v => U.fmt(v), head: 'SCORE', reward: season === LB_CURRENT, empty: 'No drives yet. Be the first on the podium!' });
+  drawBoard(list, rows, view, { fmt: v => U.fmt(v), head: 'SCORE', reward: season === LB_CURRENT && (mode === 'mp' ? 'mp' : true), empty: 'No drives yet. Be the first on the podium!' });
 }
 // the racing leaderboard: fastest time-trial lap / fastest 3-lap race of each driver on a track (Season 1)
 async function loadRaceBoard() {
@@ -1702,14 +1702,18 @@ const titleSort = $id('titleSort'), titleOwned = $id('titleOwned');
 titleSort.value = ['rarityAsc', 'rarityDesc', 'az', 'za'].includes(Settings.titleSort) ? Settings.titleSort : 'rarityAsc';
 titleOwned.checked = Settings.titleOwned !== false;
 titleSort.onchange = () => { Settings.titleSort = titleSort.value; saveSettings(); renderTitles(); };
-// "?": every rarity name in its own colour, highest first
-{
-  const pop = $id('rarityPop'), btn = $id('rarityBtn'), list = $id('rarityList');
+// "?": every rarity name in its own colour, highest first (Select Title, and the same on Achievements)
+for (const [p, b, l] of [['rarityPop', 'rarityBtn', 'rarityList'], ['achRarityPop', 'achRarityBtn', 'achRarityList']]) {
+  const pop = $id(p), btn = $id(b), list = $id(l);
   for (const id of Titles.RARITY_ORDER.slice().reverse()) {
     const r = Titles.RARITIES[id];
     list.append(el('span', 'ttl r-' + id + (r.neon ? ' neon' : ''), r.name));
   }
-  const toggle = on => { pop.classList.toggle('hidden', !on); btn.classList.toggle('sel', on); };
+  const toggle = on => {
+    pop.classList.toggle('hidden', !on); btn.classList.toggle('sel', on);
+    // (Achievements scrolls: the list floats over the page there, so the panel doesn't cut it off)
+    if (on && p === 'achRarityPop') { const r = btn.getBoundingClientRect(); Object.assign(pop.style, { position: 'fixed', top: r.bottom + 8 + 'px', left: Math.max(8, r.right - 230) + 'px', right: 'auto' }); }
+  };
   btn.onclick = e => { e.stopPropagation(); toggle(pop.classList.contains('hidden')); };
   document.addEventListener('click', e => { if (!pop.contains(e.target)) toggle(false); });
 }

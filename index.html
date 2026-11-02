@@ -101,6 +101,7 @@
       <button class="card" id="achCard">
         <svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><path class="fg" d="M21 14h22v10c0 8-5 14-11 14S21 32 21 24z"/><path class="st" d="M21 18h-5v3c0 5 3 8 7 9M43 18h5v3c0 5-3 8-7 9"/><rect class="fg" x="29" y="37" width="6" height="7"/><rect class="fg" x="22" y="44" width="20" height="5" rx="1.5"/></svg>
         <b>ACHIEVEMENTS</b>
+        <span id="achNew" class="newDot hidden">!</span>
       </button>
       <button class="card" data-go="scrSettings">
         <svg viewBox="0 0 64 64"><circle class="bg" cx="32" cy="32" r="31"/><path class="fg" fill-rule="evenodd" d="M29 12h6l1.2 5.4 4.1 1.7 4.7-3 4.2 4.2-3 4.7 1.7 4.1L53 30v6l-5.4 1.2-1.7 4.1 3 4.7-4.2 4.2-4.7-3-4.1 1.7L35 54h-6l-1.2-5.4-4.1-1.7-4.7 3-4.2-4.2 3-4.7-1.7-4.1L11 36v-6l5.4-1.2 1.7-4.1-3-4.7 4.2-4.2 4.7 3 4.1-1.7zM32 25a8 8 0 1 0 0 16 8 8 0 1 0 0-16z"/></svg>
@@ -571,7 +572,12 @@
 
   <!-- achievements: tracks with tiers (1/3, 2/3, 3/3), each tier rewards a title -->
   <div id="scrAch" class="screen panel wide hidden">
-    <div class="hdr"><button class="back" data-go="scrTitle">← BACK</button><h1>ACHIEVEMENTS</h1></div>
+    <div class="hdr"><button class="back" data-go="scrTitle">← BACK</button><h1>ACHIEVEMENTS</h1>
+      <div class="rarityHelp">
+        <button id="achRarityBtn" class="helpBtn" title="What the colours mean">?</button>
+        <div id="achRarityPop" class="rarityPop hidden"><div class="rpHead">Rarities</div><div id="achRarityList" class="rarityList"></div></div>
+      </div>
+    </div>
     <div id="achNote" class="sub"></div>
     <div id="achList"></div>
   </div>
@@ -673,7 +679,7 @@
     <div class="cfBtns"><button id="cfEquip" class="go">EQUIP</button><button id="cfOk">LATER</button></div>
   </div>
 </div>
-<!-- launch popup (main.js Welcome): "sign in with Google" when not signed in, then "Version 1.2 is here" -->
+<!-- launch popup (main.js Welcome): "sign in with Google" when not signed in, then "Version 1.3 is here" -->
 <div id="welcome" class="hidden">
   <div class="wcCard">
     <div class="wcSlide" data-wc="banned">
@@ -690,21 +696,22 @@
     </div>
     <div class="wcSlide" data-wc="update">
       <div class="wcTag">UPDATE</div>
-      <h2>Version 1.2 is here</h2>
+      <h2>Version 1.3 is here</h2>
       <p class="wcSub">New</p>
+      <ul class="wcList">
+        <li><b>Referral titles:</b> refer 1, 5, 10, 50 and 100 friends for Wingman, Recruiter, Talent Scout, Ringleader and Ambassador.</li>
+        <li><b>New achievements:</b> Double Digits, Untouchable and Around the World.</li>
+        <li><b>Multiplayer season titles</b> for the top 5 on the multiplayer leaderboard.</li>
+        <li><b>Rarity guide</b> on the Achievements page, and countdowns for the new racing tracks and the Bang Bus event.</li>
+      </ul>
       <div class="wcNew" id="wcEventBox">
         <b>The Bang Bus event:</b> finish 5 quests to unlock the <b>Bang Bus</b> for good - sign in with Google, play for 1 hour, drive 75 miles, score over 100,000 in one run and refer 3 friends.
         <button id="wcEvent">SEE THE QUESTS</button>
       </div>
+      <p class="wcSub">Changes</p>
       <ul class="wcList">
-        <li><b>Invite friends</b> with your own link, on your Profile or in Friends.</li>
-        <li><b>Cars-only servers:</b> when hosting, pick Vehicles → Cars only.</li>
-        <li><b>Updates board</b> at the top right of the menu: everything that's changed, every update.</li>
-      </ul>
-      <p class="wcSub">Bug fixes</p>
-      <ul class="wcList">
-        <li><b>Chat:</b> messages arrive without reloading, and reading one clears its notification.</li>
-        <li><b>Friends and Inbox buttons</b> are bigger and no longer shrink on small screens.</li>
+        <li><b>Rarities:</b> Six Figures is now Epic, Millionaire Mythic, Multi-Millionaire Exotic and Billionaire Divine. Long Run titles are one rarity higher.</li>
+        <li><b>Name tags</b> are sharper, and Epic titles are a clean purple.</li>
       </ul>
     </div>
     <div class="wcFoot"><span class="wcDots"></span><button id="wcNext" class="go">NEXT</button></div>

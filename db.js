@@ -364,7 +364,7 @@ function addRun(r) {
   return { rank, best: Math.max(before, Math.round(r.score)), improved, newTitles, team };
 }
 // A player's achievement stats: near misses and distance (totals), farthest single run, multiplayer runs, best
-// multiplier, friends, best single-run score (any counted run) and best team run.
+// multiplier, friends, referrals (counted ones), best single-run score (any counted run) and best team run.
 function statsOf(uid) {
   const s = db.prepare(`SELECT SUM(near) AS near, SUM(dist) AS dist, MAX(dist) AS runDist, MAX(peak) AS peak,
                         SUM(CASE WHEN mode = 'mp' THEN 1 ELSE 0 END) AS mpRuns FROM runs WHERE uid = ? AND removed = 0 AND verified = 1`).get(uid) || {};
@@ -372,7 +372,7 @@ function statsOf(uid) {
   const u = db.prepare('SELECT best_team FROM users WHERE uid = ?').get(uid);
   return {
     near: s.near || 0, dist: s.dist || 0, runDist: s.runDist || 0, peak: s.peak || 0, mpRuns: s.mpRuns || 0,
-    friends: db.prepare('SELECT COUNT(*) AS n FROM friends WHERE uid = ?').get(uid).n,
+    friends: db.prepare('SELECT COUNT(*) AS n FROM friends WHERE uid = ?').get(uid).n, refer: referralStats(uid).counted,
     score: (best && best.s) || 0, team: (u && u.best_team) || 0,
   };
 }
@@ -408,7 +408,13 @@ function addPlayTime(uid, s) {
   const now = Date.now(), last = lastBeat.get(uid);
   const add = Math.min(s, 75, last ? (now - last) / 1000 + 2 : 60);
   lastBeat.set(uid, now);
-  if (add > 0) { ensureUser(uid); db.prepare('UPDATE users SET play_s = play_s + ?, ev_play_s = ev_play_s + ? WHERE uid = ?').run(add, add, uid); }   // (ev_play_s: the Bang Bus event's play time)
+  if (add > 0) {
+    ensureUser(uid);
+    const before = db.prepare('SELECT play_s FROM users WHERE uid = ?').get(uid).play_s || 0;
+    db.prepare('UPDATE users SET play_s = play_s + ?, ev_play_s = ev_play_s + ? WHERE uid = ?').run(add, add, uid);   // (ev_play_s: the Bang Bus event's play time)
+    // a referred player just reached 10 minutes: they now count for whoever invited them (referral titles)
+    if (before < REF_PLAY_S && before + add >= REF_PLAY_S) { const by = referredBy(uid); if (by) statTitles(by); }
+  }
 }
 setInterval(() => { const t = Date.now(); for (const [k, v] of lastBeat) if (t - v > 600e3) lastBeat.delete(k); }, 600e3).unref();
 function profile(uid) {
@@ -700,6 +706,13 @@ function removeAbove(uid, mode, max) {
 
 // titles v5 (once): achievements + new titles - every title wiped and sent back (after everything above is defined)
 if (!getMeta('titles_v5')) { for (const k of ['titles_v3', 'titles_v4', 'titles_v5']) setMeta(k, Date.now()); resetTitles(); }
+// titles v6 (once, 2026-11-01): new tiers (Double Digits, Untouchable, Around the World, referrals) - anyone
+// already past one gets it in their inbox (nothing is wiped; rarity changes need nothing here)
+if (!getMeta('titles_v6')) {
+  setMeta('titles_v6', Date.now());
+  let n = 0; for (const r of db.prepare('SELECT uid FROM users').all()) n += statTitles(r.uid).length;
+  console.log(`database: titles v6 - ${n} new achievement titles sent`);
+}
 
 // edge-line exploit (once, 2026-10-11): Codester found that sitting exactly on the white line between the road and
 // the shoulder gave endless near misses with no risk of crashing (fixed in the game). His runs above 82k
@@ -756,12 +769,12 @@ if (!getMeta('season1_v1')) {
 }
 
 // End of a season: the top 5 of its singleplayer and multiplayer leaderboards get the season's title
-// (1st Champion, 2nd-3rd Finalist, 4th-5th Podium: Titles.SEASON_REWARDS) in their inbox, and the racing boards'
+// (1st Champion, 2nd-3rd Finalist, 4th-5th Podium: Titles.SEASON_REWARDS; multiplayer: S1 Multiplayer ... MP_REWARDS) in their inbox, and the racing boards'
 // 1st / 2nd / 3rd on every track (Track / Race Champion, Finalist, Podium: Titles.RACE_REWARDS). node admin.js season-rewards 1
 function seasonRewards(season) {
   const sent = [];
   for (const mode of MODES) for (const e of top(mode, 5, season)) {
-    const id = Titles.seasonReward(season, e.rank);
+    const id = Titles.seasonReward(season, e.rank, mode === 'mp' ? 'mp' : undefined);   // (multiplayer: its own titles)
     if (id && gift(e.uid, id, `Season ${season} · ${mode === 'mp' ? 'multiplayer' : 'singleplayer'} leaderboard · #${e.rank}`)) sent.push({ uid: e.uid, mode, rank: e.rank, title: id });
   }
   // racing: 1st / 2nd / 3rd on every track's time-trial and races boards (a title won on two tracks comes once)

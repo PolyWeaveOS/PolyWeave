@@ -5,6 +5,18 @@
 //  To add an update: put it at the top of UPDATES (the first one is shown as the current update).
 // =====================================================================
 const UPDATES = [
+  { v: '1.3', name: 'Titles & Referrals', when: 'November 2026', items: [
+    ['new', 'Referrals achievement: titles for referring 1, 5, 10, 50 and 100 friends - Wingman, Recruiter, Talent Scout, Ringleader and Ambassador.'],
+    ['new', 'New achievement titles: Double Digits (reach x10), Untouchable (100,000 near misses) and Around the World (40,000 km / 25,000 miles).'],
+    ['new', 'Multiplayer season titles: the top 5 on the multiplayer leaderboard get S1 Multiplayer Champion, Finalist or Podium.'],
+    ['new', 'Rarity guide on the Achievements page (the ? button), and a ! on Achievements when there are new ones.'],
+    ['new', 'Countdowns: new racing tracks on November 17, and the time left in the Bang Bus event.'],
+    ['new', 'Film area for Content Creators: realistic cars, free drive, creator servers, a green screen room and Clip Studio.'],
+    ['change', 'Rarities: Six Figures is now Epic, Millionaire Mythic, Multi-Millionaire Exotic, Billionaire Divine, Team Billionaire Legendary and Thread the Needle Super Rare. Long Run titles are one rarity higher.'],
+    ['change', 'Epic titles are a clean purple.'],
+    ['fix', 'Name tags over other players are sharp, and Epic titles on them are no longer blurry.'],
+    ['fix', 'Locked Divine titles glow on the Achievements page.'],
+  ] },
   { v: '1.2', name: 'The Bang Bus', when: 'October 2026', items: [
     ['new', 'Bang Bus event: finish 5 quests - sign in with Google, play for 1 hour, drive 75 miles, score over 100,000 in one run and refer 3 friends - to unlock the Bang Bus for good. It\'s just for fun: no leaderboard points and no proxy bonus.'],
     ['new', 'Invite friends: your own invite link on your profile and in Friends. Players who join from it and play 10 minutes count as your referrals.'],
@@ -46,7 +58,7 @@ const UpdatesBoard = {
       head.append(el('span', 'updV', u.v === 'Beta' ? u.v : 'v' + u.v), el('b', '', u.name), el('span', 'updWhen', u.when));
       if (i === 0) head.append(el('span', 'updNow', 'CURRENT UPDATE'));
       const list = el('ul', 'updItems');
-      for (const [kind, text] of u.items) { const li = el('li', 'upd-' + kind); li.append(el('i', '', kind === 'fix' ? 'FIX' : kind === 'thanks' ? 'THANKS' : 'NEW'), el('span', '', text)); list.appendChild(li); }
+      for (const [kind, text] of u.items) { const li = el('li', 'upd-' + kind); li.append(el('i', '', kind === 'fix' ? 'FIX' : kind === 'thanks' ? 'THANKS' : kind === 'change' ? 'CHANGE' : 'NEW'), el('span', '', text)); list.appendChild(li); }
       card.append(head, list); box.appendChild(card);
     });
     show('scrUpdates');

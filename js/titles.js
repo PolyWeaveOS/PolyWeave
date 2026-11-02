@@ -3,7 +3,7 @@
 //  Titles (Rocket League / Brawl Stars style): each player equips one, shown under their name.
 //  Shared by the game (browser) and the server (require), so both agree on names and rarities.
 //  Rarities, lowest first (one colour each): Common grey, Uncommon light green, Rare light blue, Super Rare blue,
-//  Epic purple-pink, then the glowing ones: Mythic red, Exotic crimson, Legendary gold, Divine pearl
+//  Epic purple, then the glowing ones: Mythic red, Exotic crimson, Legendary gold, Divine pearl
 //  (clean pearl white with soft colours drifting across it).
 // =====================================================================
 const RARITIES = {
@@ -41,10 +41,14 @@ const TITLES = [
   { id: 'beta',        name: 'Beta Tester',            rarity: 'epic',      how: 'grant', desc: 'Played PolyWeave during the beta' },
   { id: 'verified',    name: 'Verified',               rarity: 'common',    how: 'grant', desc: 'Signed in with Google' },
   // Season 1 rewards: sent at the end of the season to the top 5 of the singleplayer and multiplayer leaderboards
-  { id: 's1champ',     name: 'S1 Champion',            rarity: 'divine',    how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 1st place on a leaderboard' },
+  { id: 's1champ',     name: 'S1 Champion',            rarity: 'divine',    how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 1st place on the singleplayer leaderboard' },
   // (named like the racing ones: 2nd-3rd Finalist, 4th-5th Podium; the ids stay as they were)
-  { id: 's1podium',    name: 'S1 Finalist',            rarity: 'legendary', how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 2nd or 3rd place on a leaderboard' },
-  { id: 's1contender', name: 'S1 Podium',              rarity: 'mythic',    how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 4th or 5th place on a leaderboard' },
+  { id: 's1podium',    name: 'S1 Finalist',            rarity: 'legendary', how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 2nd or 3rd place on the singleplayer leaderboard' },
+  { id: 's1contender', name: 'S1 Podium',              rarity: 'mythic',    how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 4th or 5th place on the singleplayer leaderboard' },
+  // ...and the multiplayer leaderboard's top 5 (same places)
+  { id: 's1mpchamp',   name: 'S1 Multiplayer Champion', rarity: 'divine',   how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 1st place on the multiplayer leaderboard' },
+  { id: 's1mpfinal',   name: 'S1 Multiplayer Finalist', rarity: 'legendary', how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 2nd or 3rd place on the multiplayer leaderboard' },
+  { id: 's1mppodium',  name: 'S1 Multiplayer Podium',  rarity: 'mythic',    how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 4th or 5th place on the multiplayer leaderboard' },
   // ...and the racing leaderboards (1st / 2nd / 3rd on every track's board): time trials (Track) and races (Race)
   { id: 's1trackchamp',  name: 'S1 Track Champion',    rarity: 'divine',    how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 1st place on a time-trial leaderboard' },
   { id: 's1trackfinal',  name: 'S1 Track Finalist',    rarity: 'legendary', how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 2nd place on a time-trial leaderboard' },
@@ -53,47 +57,57 @@ const TITLES = [
   { id: 's1racefinal',   name: 'S1 Race Finalist',     rarity: 'legendary', how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 2nd place on a races leaderboard' },
   { id: 's1racepodium',  name: 'S1 Race Podium',       rarity: 'mythic',    how: 'grant', show: true, season: 1, desc: 'Finish Season 1 in 3rd place on a races leaderboard' },
   // best single run (either mode)
-  { id: 'sixfig',      name: 'Six Figures',            rarity: 'rare',      how: 'run',  score: 1e5, stat: 'score', value: 1e5, desc: '100,000 points in one run' },
-  { id: 'millionaire', name: 'Millionaire',            rarity: 'epic',      how: 'run',  score: 1e6, stat: 'score', value: 1e6, desc: '1,000,000 points in one run' },
-  { id: 'multimil',    name: 'Multi-Millionaire',      rarity: 'mythic',    how: 'run',  score: 1e7, stat: 'score', value: 1e7, desc: '10,000,000 points in one run' },
-  { id: 'billionaire', name: 'Billionaire',            rarity: 'legendary', how: 'run',  score: 1e9, stat: 'score', value: 1e9, desc: '1,000,000,000 points in one run' },
+  { id: 'sixfig',      name: 'Six Figures',            rarity: 'epic',      how: 'run',  score: 1e5, stat: 'score', value: 1e5, desc: '100,000 points in one run' },
+  { id: 'millionaire', name: 'Millionaire',            rarity: 'mythic',    how: 'run',  score: 1e6, stat: 'score', value: 1e6, desc: '1,000,000 points in one run' },
+  { id: 'multimil',    name: 'Multi-Millionaire',      rarity: 'exotic',   how: 'run',  score: 1e7, stat: 'score', value: 1e7, desc: '10,000,000 points in one run' },
+  { id: 'billionaire', name: 'Billionaire',            rarity: 'divine', how: 'run',  score: 1e9, stat: 'score', value: 1e9, desc: '1,000,000,000 points in one run' },
   // team runs
   { id: 'teammil',     name: 'Team Millionaire',       rarity: 'srare',     how: 'team', score: 1e6, stat: 'team', value: 1e6, desc: '1,000,000 points together on one server' },
   { id: 'teammulti',   name: 'Team Multi-Millionaire', rarity: 'epic',      how: 'team', score: 1e7, stat: 'team', value: 1e7, desc: '10,000,000 points together on one server' },
-  { id: 'teambil',     name: 'Team Billionaire',       rarity: 'exotic',    how: 'team', score: 1e9, stat: 'team', value: 1e9, desc: '1,000,000,000 points together on one server' },
+  { id: 'teambil',     name: 'Team Billionaire',       rarity: 'legendary', how: 'team', score: 1e9, stat: 'team', value: 1e9, desc: '1,000,000,000 points together on one server' },
   // multiplier
+  { id: 'doubledig',   name: 'Double Digits',          rarity: 'rare',      how: 'stat', stat: 'peak', value: 10, desc: 'Reach the x10 multiplier' },
   { id: 'halfcent',    name: 'Half Century',           rarity: 'epic',      how: 'stat', stat: 'peak', value: 50, desc: 'Reach the x50 multiplier' },
   { id: 'maxed',       name: 'Maxed Out',              rarity: 'mythic',    how: 'stat', stat: 'peak', value: 100, desc: 'Reach the x100 multiplier' },
   // near misses (total)
   { id: 'closecall',   name: 'Close Call',             rarity: 'rare',      how: 'stat', stat: 'near', value: 1000, desc: '1,000 near misses in total' },
-  { id: 'needle',      name: 'Thread the Needle',      rarity: 'epic',      how: 'stat', stat: 'near', value: 10000, desc: '10,000 near misses in total' },
+  { id: 'needle',      name: 'Thread the Needle',      rarity: 'srare',     how: 'stat', stat: 'near', value: 10000, desc: '10,000 near misses in total' },
+  { id: 'untouchable', name: 'Untouchable',            rarity: 'epic',      how: 'stat', stat: 'near', value: 100000, desc: '100,000 near misses in total' },
   // distance (total, in scored runs)
   { id: 'roadtrip',    name: 'Road Tripper',           rarity: 'uncommon',  how: 'stat', stat: 'dist', value: distGoal(1000, 600), km: 1000, mi: 600 },
   { id: 'longhaul',    name: 'Long Hauler',            rarity: 'epic',      how: 'stat', stat: 'dist', value: distGoal(10000, 6000), km: 10000, mi: 6000 },
+  { id: 'aroundworld', name: 'Around the World',       rarity: 'mythic',    how: 'stat', stat: 'dist', value: distGoal(40000, 25000), km: 40000, mi: 25000 },
   // distance in a single run (without crashing)
-  { id: 'cruise',      name: 'Cruise Control',         rarity: 'uncommon',  how: 'stat', stat: 'runDist', value: distGoal(15, 10), km: 15, mi: 10 },
-  { id: 'endurance',   name: 'Endurance',              rarity: 'rare',      how: 'stat', stat: 'runDist', value: distGoal(80, 50), km: 80, mi: 50 },
-  { id: 'irondriver',  name: 'Iron Driver',            rarity: 'epic',      how: 'stat', stat: 'runDist', value: distGoal(160, 100), km: 160, mi: 100 },
+  { id: 'cruise',      name: 'Cruise Control',         rarity: 'rare',      how: 'stat', stat: 'runDist', value: distGoal(15, 10), km: 15, mi: 10 },
+  { id: 'endurance',   name: 'Endurance',              rarity: 'srare',     how: 'stat', stat: 'runDist', value: distGoal(80, 50), km: 80, mi: 50 },
+  { id: 'irondriver',  name: 'Iron Driver',            rarity: 'mythic',    how: 'stat', stat: 'runDist', value: distGoal(160, 100), km: 160, mi: 100 },
   // friends
   { id: 'plusone',     name: 'Plus One',               rarity: 'common',    how: 'stat', stat: 'friends', value: 1, desc: 'Have a friend' },
   { id: 'social',      name: 'Social Butterfly',       rarity: 'uncommon',  how: 'stat', stat: 'friends', value: 10, desc: 'Have 10 friends' },
   { id: 'crowdfav',    name: 'Crowd Favorite',         rarity: 'epic',      how: 'stat', stat: 'friends', value: 50, desc: 'Have 50 friends' },
+  // referrals (players you invited: brand-new accounts that played 10 minutes - db.js referralStats)
+  { id: 'wingman',     name: 'Wingman',                rarity: 'uncommon',  how: 'stat', stat: 'refer', value: 1, desc: 'Refer 1 friend' },
+  { id: 'recruiter',   name: 'Recruiter',              rarity: 'srare',     how: 'stat', stat: 'refer', value: 5, desc: 'Refer 5 friends' },
+  { id: 'scout',       name: 'Talent Scout',           rarity: 'epic',      how: 'stat', stat: 'refer', value: 10, desc: 'Refer 10 friends' },
+  { id: 'ringleader',  name: 'Ringleader',             rarity: 'legendary', how: 'stat', stat: 'refer', value: 50, desc: 'Refer 50 friends' },
+  { id: 'ambassador',  name: 'Ambassador',             rarity: 'divine',   how: 'stat', stat: 'refer', value: 100, desc: 'Refer 100 friends' },
 ];
 const TITLE_BY_ID = Object.fromEntries(TITLES.map(t => [t.id, t]));
 // Achievements (Brawl Stars "records" style): each track is a stat with tiers; each tier's reward is a title
 const ACHIEVEMENTS = [
   { id: 'score',   name: 'High Scorer',    stat: 'score',   unit: 'pts',     desc: 'Best score in a single run',            tiers: ['sixfig', 'millionaire', 'multimil', 'billionaire'] },
   { id: 'team',    name: 'Team Player',    stat: 'team',    unit: 'pts',     desc: 'Best team run (together on one server)', tiers: ['teammil', 'teammulti', 'teambil'] },
-  { id: 'peak',    name: 'Multiplier',     stat: 'peak',    unit: 'x',       desc: 'Highest multiplier reached in a run',   tiers: ['halfcent', 'maxed'] },
-  { id: 'near',    name: 'Close Calls',    stat: 'near',    unit: 'count',   desc: 'Near misses in total',                  tiers: ['closecall', 'needle'] },
-  { id: 'dist',    name: 'Distance',       stat: 'dist',    unit: 'dist',    desc: 'Distance driven in scored runs',        tiers: ['roadtrip', 'longhaul'] },
+  { id: 'peak',    name: 'Multiplier',     stat: 'peak',    unit: 'x',       desc: 'Highest multiplier reached in a run',   tiers: ['doubledig', 'halfcent', 'maxed'] },
+  { id: 'near',    name: 'Close Calls',    stat: 'near',    unit: 'count',   desc: 'Near misses in total',                  tiers: ['closecall', 'needle', 'untouchable'] },
+  { id: 'dist',    name: 'Distance',       stat: 'dist',    unit: 'dist',    desc: 'Distance driven in scored runs',        tiers: ['roadtrip', 'longhaul', 'aroundworld'] },
   { id: 'runDist', name: 'Long Run',       stat: 'runDist', unit: 'dist',    desc: 'Farthest in a single run',              tiers: ['cruise', 'endurance', 'irondriver'] },
   { id: 'friends', name: 'Friends',        stat: 'friends', unit: 'count',   desc: 'Friends added',                         tiers: ['plusone', 'social', 'crowdfav'] },
+  { id: 'refer',   name: 'Referrals',      stat: 'refer',   unit: 'count',   desc: 'Friends you invited (new accounts that played 10 minutes)', tiers: ['wingman', 'recruiter', 'scout', 'ringleader', 'ambassador'] },
 ];
 // titles one run of `score` points unlocks / a team run adding up to `score` unlocks
 const titlesForRun = score => TITLES.filter(t => t.how === 'run' && score >= t.score).map(t => t.id);
 const titlesForTeam = score => TITLES.filter(t => t.how === 'team' && score >= t.score).map(t => t.id);
-// titles stats unlock: stats = { near, dist, runDist, mpRuns, friends, peak }
+// titles stats unlock: stats = { near, dist, runDist, mpRuns, friends, peak, refer }
 const titlesForStats = s => TITLES.filter(t => t.how === 'stat' && (s[t.stat] || 0) >= t.value).map(t => t.id);
 // a title's description in the player's units (distance titles: miles when the game is set to MPH)
 const desc = (t, units) => {
@@ -104,16 +118,17 @@ const desc = (t, units) => {
 // a tier goal in the player's units, for the Achievements screen (distance: the round number shown)
 const goalText = (t, units) => (t.km ? (units === 'kmh' ? t.km : t.mi).toLocaleString('en-US') : t.value.toLocaleString('en-US'));
 
-// season rewards by final leaderboard place (1-based): the title id, or null
+// season rewards by final leaderboard place (1-based): the title id, or null (singleplayer; multiplayer: board 'mp')
 const SEASON_REWARDS = { 1: [[1, 1, 's1champ'], [2, 3, 's1podium'], [4, 5, 's1contender']] };
+const MP_REWARDS = { 1: [[1, 1, 's1mpchamp'], [2, 3, 's1mpfinal'], [4, 5, 's1mppodium']] };
 // racing leaderboards (each track's time-trial and races boards): board 'tt' | 'races'
 const RACE_REWARDS = {
   1: { tt: [[1, 1, 's1trackchamp'], [2, 2, 's1trackfinal'], [3, 3, 's1trackpodium']], races: [[1, 1, 's1racechamp'], [2, 2, 's1racefinal'], [3, 3, 's1racepodium']] },
 };
 const seasonReward = (season, rank, board) => {
-  const list = board ? (RACE_REWARDS[season] || {})[board] : SEASON_REWARDS[season];
+  const list = board === 'mp' ? MP_REWARDS[season] : board ? (RACE_REWARDS[season] || {})[board] : SEASON_REWARDS[season];
   const r = (list || []).find(([a, b]) => rank >= a && rank <= b); return r ? r[2] : null;
 };
 
-const Titles = { RARITIES, RARITY_ORDER, TITLES, TITLE_BY_ID, ACHIEVEMENTS, MILE, SEASON_REWARDS, RACE_REWARDS, titlesForRun, titlesForTeam, titlesForStats, seasonReward, desc, goalText };
+const Titles = { RARITIES, RARITY_ORDER, TITLES, TITLE_BY_ID, ACHIEVEMENTS, MILE, SEASON_REWARDS, MP_REWARDS, RACE_REWARDS, titlesForRun, titlesForTeam, titlesForStats, seasonReward, desc, goalText };
 if (typeof module !== 'undefined' && module.exports) module.exports = Titles;
