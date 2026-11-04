@@ -1,0 +1,11 @@
+{
+    "global":  "JESKO_IMPORT",
+    "title":  "Koenigsegg Jesko",
+    "credit":  "Model: \"2020 Koenigsegg Jesko\" by Ddiaz Design (https://sketchfab.com/3d-models/2020-koenigsegg-jesko-c657f51fb0db43e38fea172dfa385287), CC-BY-4.0",
+    "front":  "+z",
+    "length":  4.61,
+    "rules":  [
+                  ["mm_ext1$", "PAINT"],
+                  ["^Int$|Tela_Int", "INT"]
+              ]
+}

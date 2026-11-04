@@ -1,0 +1,17 @@
+{
+    "global":  "CHIRON_IMPORT",
+    "title":  "Bugatti Chiron",
+    "credit":  "Model: \"Free Bugatti Chiron\" by ALIEEEN (https://sketchfab.com/3d-models/free-bugatti-chiron-374890e62c5a44e9a739ca638b6e0a18), free for personal and commercial use",
+    "length":  4.544,
+    "front":  "+z",
+    "rules":  [
+                  ["^Headlight_glass$|^Tail-light-glass-turning$", "HEADLENS"],
+                  ["^Silver$", "CHROME"],
+                  ["^Windshield$", "GLASS"],
+                  ["Tail-light-insides|Tail-light_holder", "DARK"],
+                  ["Tail-light-LIGHT|Brake-lights|^Tail-light-glass$", "TAIL"],
+                  ["Reverse-light", "WHITE"],
+                  ["Turning_lights", "AMBER"],
+                  ["Interior-light", "INT"]
+              ]
+}

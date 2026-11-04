@@ -912,7 +912,7 @@ const bigCar = key => () => {
     hull: SAT.hull(0.95, front - 0.03, rear + 0.03, 0.32, 0.26),
   };
 };
-for (const k of ['koenigsegg', 'mclaren720s', 'gt3', 'imola', 'aventador', 'laferrari', 'tourbillon']) CATALOG[k] = bigCar(k);
+for (const k of ['koenigsegg', 'mclaren720s', 'gt3', 'imola', 'aventador', 'laferrari', 'tourbillon', 'm4comp', 'jesko', 'chiron']) CATALOG[k] = bigCar(k);
 
 function getModel(key) {
   if (_geoCache[key]) return _geoCache[key];

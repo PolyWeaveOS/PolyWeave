@@ -1,0 +1,12 @@
+{
+    "global":  "M4COMP_IMPORT",
+    "title":  "BMW M4 Competition",
+    "credit":  "Model: \"2025 BMW M4 Competition\" by Ddiaz Design (https://sketchfab.com/3d-models/2025-bmw-m4-competition-f8141ecd755547989c9209784b71ad43), CC-BY-NC-SA-4.0",
+    "front":  "+z",
+    "lens":  1.75,
+    "length":  4.794,
+    "rules":  [
+                  ["car_body1$|car_hood1$|car_bodykit1$", "PAINT"],
+                  ["Capiler", "CALIPER"]
+              ]
+}

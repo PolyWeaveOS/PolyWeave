@@ -27,6 +27,9 @@ Object.assign(PLAYER_CARS, {
   // (its own wheels are see-through texture spokes the game can't show: the game's five-spoke wheel instead)
   laferrari: Object.assign(CONTENT('Ferrari LaFerrari', 'LAFERRARI', '#c4141c', 'assets/laferrari.bin?v=2'), { rim: 'five', rimColor: '#2b2d31' }),
   tourbillon: Object.assign(CONTENT('Bugatti Tourbillon', 'TOURBILLON', '#1f3d8a', 'assets/tourbillon.bin?v=2', '"2026 Bugatti Tourbillon" by Ddiaz Design · CC BY-NC-SA 4.0'), { parts: 2 }),
+  m4comp: CONTENT('BMW M4 Competition', 'M4 COMP', '#1b4f9c', 'assets/m4comp.bin?v=1', '"2025 BMW M4 Competition" by Ddiaz Design · CC BY-NC-SA 4.0'),
+  jesko: CONTENT('Koenigsegg Jesko', 'JESKO', '#eef0ee', 'assets/jesko.bin?v=1', '"2020 Koenigsegg Jesko" by Ddiaz Design · CC BY 4.0'),
+  chiron: CONTENT('Bugatti Chiron', 'CHIRON', '#1f3d8a', 'assets/chiron.bin?v=1', '"Free Bugatti Chiron" by ALIEEEN'),
 });
 const PLAYER_CAR_KEYS = Object.keys(PLAYER_CARS);
 const ROAD_CAR_KEYS = PLAYER_CAR_KEYS.filter(k => !PLAYER_CARS[k].content), CONTENT_CAR_KEYS = PLAYER_CAR_KEYS.filter(k => PLAYER_CARS[k].content);

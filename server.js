@@ -477,7 +477,7 @@ const CAR_MODELS = ['m4'];
 // the owners' special cars (the S15 drift car): the owners and Content Creators only - anyone else asking stays an M4
 const SPECIAL_CARS = ['s15'];
 // the content cars (Film area, js/playercars.js): the same accounts, and only on a creator server - anywhere else they show as an M4
-const CONTENT_CARS = ['koenigsegg', 'mclaren720s', 'gt3', 'imola', 'aventador', 'laferrari', 'tourbillon'];
+const CONTENT_CARS = ['koenigsegg', 'mclaren720s', 'gt3', 'imola', 'aventador', 'laferrari', 'tourbillon', 'm4comp', 'jesko', 'chiron'];
 const mayCar = p => !!p && (mayBike(p) || !!(p.account && p.account.id && DB.owns(p.account.id, 'creator')));
 const modelIn = (p, room) => (CONTENT_CARS.includes(p.model) && !(room && room.creator) ? 'm4' : p.model);
 const cleanModel = (m, p) => (((SPECIAL_CARS.includes(m) || CONTENT_CARS.includes(m)) && mayCar(p)) || CAR_MODELS.includes(m) || /^f1:[a-z]{2,10}:#[0-9a-f]{6}(:[a-z]{2,8}:#[0-9a-f]{6})?(:[smh][01][lsh]?)?$/.test(m) ? m : 'm4');   // (racing: 'f1:<pattern>:<colour 2>[:<rim style>:<rim colour>][:<tyre s|m|h><rear wing 1|0><front wing l|s|h>]', the F1 paint pattern, rims, parts)
