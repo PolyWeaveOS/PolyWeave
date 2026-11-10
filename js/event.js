@@ -115,7 +115,8 @@ const LtmClock = {
     const now = this.now(); if (now === null) return;
     const race = this.race - now, bus = this.bus - now;
     for (const id of ['ltmRaceT', 'raceT']) { const e = $id(id); if (e) { e.textContent = this.race ? (race > 0 ? 'NEW TRACKS IN ' + this.fmt(race) : 'NEW TRACKS COMING SOON') : ''; e.classList.toggle('hidden', !this.race); } }
-    const be = $id('ltmBusT'); if (be) { be.textContent = bus > 0 ? 'ENDS IN ' + this.fmt(bus) : ''; be.classList.toggle('hidden', !(this.bus && bus > 0)); }
+    // (no end date: it runs for the rest of Season 1)
+    const be = $id('ltmBusT'); if (be) { be.textContent = !this.bus ? 'ALL SEASON 1' : bus > 0 ? 'ENDS IN ' + this.fmt(bus) : ''; be.classList.toggle('hidden', !!this.bus && bus <= 0); }
     if (this.bus && bus <= 0 && !this.busOver) {      // the event's over: it goes
       this.busOver = true;
       $id('ltmEvent').classList.add('hidden'); $id('wcEventBox').classList.add('hidden');

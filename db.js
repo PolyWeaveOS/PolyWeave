@@ -455,9 +455,10 @@ const referredBy = uid => { const r = db.prepare('SELECT by_uid FROM referrals W
 // far count). Distance and score come from verified runs that are still on the boards.
 if (!getMeta('bus_event_start')) setMeta('bus_event_start', Date.now());
 const BUS_EVENT_START = +getMeta('bus_event_start');
-// the event ends (a 7-day timer, from 2026-11-01): 2026-11-08 4 PM US Eastern. After that nobody new unlocks the bus
-// (whoever did keeps it), and the game takes the event away (server clock: /api/clock)
-const BUS_EVENT_END = Date.UTC(2026, 10, 8, 21, 0, 0);
+// the event's end (server clock: /api/clock; 0 = no end). It first ended 2026-11-08 4 PM US Eastern; on 2026-11-09 it
+// came back for the rest of Season 1, so there's no end date. Set one to end it: after that nobody new unlocks the
+// bus (whoever did keeps it), and the game takes the event away
+const BUS_EVENT_END = 0;
 const BUS_QUESTS = { play: 3600, drive: 75 * 1609.344, score: 100000, refer: 3, referAlt: 5 };
 // (or, instead of all five quests: refer 5 players. Admins (the Admin title, not banned) and Content Creators get it anyway)
 const busPerk = uid => (owns(uid, 'admin') && !isBanned(uid)) || owns(uid, 'creator');
@@ -475,7 +476,7 @@ function busProgress(uid) {
   ];
   const alt = { id: 'refer5', have: ref.counted, need: BUS_QUESTS.referAlt, pending: ref.pending };
   let unlocked = !!u.bus;
-  const over = Date.now() >= BUS_EVENT_END;            // (the event's over: no more unlocking)
+  const over = !!BUS_EVENT_END && Date.now() >= BUS_EVENT_END;   // (the event's over: no more unlocking)
   if (!unlocked && !over && (quests.every(q => q.have >= q.need) || alt.have >= alt.need)) { db.prepare('UPDATE users SET bus = 1 WHERE uid = ?').run(uid); unlocked = true; }
   const perk = busPerk(uid);   // (not saved: it goes with the title)
   return { start: BUS_EVENT_START, end: BUS_EVENT_END, over, quests, alt, unlocked: unlocked || perk, perk };
@@ -746,6 +747,16 @@ for (const name of ['beachrat', 'ttnomanchas']) {
   setMeta(key, Date.now());
   const sent = gift(u.id, 'bughunter', 'Thank you for helping improve the game\n-PolyWeave');
   console.log(`Bug Hunter for ${u.name}: ${sent ? 'sent' : 'already had / waiting'}`);
+}
+
+// The Bang Bus for Chse01 and BigtoeEnthusiast (once each, 2026-11-09), a gift from the owner. (Each waits for the account.)
+for (const name of ['chse01', 'bigtoeenthusiast']) {
+  const key = 'bus_' + name + '_v1'; if (getMeta(key)) continue;
+  const u = Object.values(readAccounts()).find(a => a && a.name && a.name.toLowerCase() === name);
+  if (!u) continue;
+  setMeta(key, Date.now());
+  ensureUser(u.id); db.prepare('UPDATE users SET bus = 1 WHERE uid = ?').run(u.id);
+  console.log(`Bang Bus for ${u.name}`);
 }
 
 // Leaderboard bans (once each, 2026-10-22): lmaoooo permanently (faked runs: made-up near misses, every run kept
